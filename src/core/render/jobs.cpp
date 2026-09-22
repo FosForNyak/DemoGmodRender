@@ -12,6 +12,7 @@
 #include "../util/strings.hpp"
 #include "../util/thread_pool.hpp"
 #include "encode_session.hpp"
+#include "markers.hpp"
 #include "subtitles.hpp"
 
 #include <algorithm>
@@ -212,14 +213,45 @@ void write_speaker_subtitles(const RenderSettings& s, const std::vector<const vo
     else log_warn("Не вдалося записати субтитри: {}", err);
 }
 
-// Після рендеру: фрагментований MP4 -> звичайний (якщо просили faststart) і перевірка результату.
-void finalize_output(const RenderSettings& s, bool fragmented, int64_t frames, double seconds) {
+void write_chat_subtitles(const RenderSettings& s, const demo::DemoAnalysis& a, int32_t start_tick, double duration) {
+    if (s.output_path.find('%') != std::string::npos || a.tick_interval <= 0) return;
+    const int32_t end_tick = start_tick + static_cast<int32_t>(std::ceil(duration / a.tick_interval));
+    const std::string srt = make_chat_srt(a.events, start_tick, end_tick, a.tick_interval, duration);
+    if (srt.empty()) {
+        log_info("Субтитри чату: у фрагменті немає повідомлень");
+        return;
+    }
+    fs::path path = path_from_utf8(s.output_path);
+    path.replace_extension(s.subtitles_srt ? ".chat.srt" : ".srt");
+    std::string err;
+    if (write_file_text(path, srt, &err)) log_info("Субтитри чату: {}", path_to_utf8(path));
+    else log_warn("Не вдалося записати субтитри чату: {}", err);
+}
+
+// Після рендеру: фрагментований MP4 -> звичайний (якщо просили faststart), розділи з позначок
+// і перевірка результату.
+void finalize_output(const RenderSettings& s, bool fragmented, int64_t frames, double seconds,
+                     const std::vector<Chapter>& chapters = {}) {
     if (s.output_path.find('%') != std::string::npos) return;   // послідовність зображень
-    if (fragmented && s.faststart) {
-        log_info("Переупаковую у звичайний MP4 (без перекодування)...");
+    std::vector<media::ChapterMark> marks;
+    for (const auto& c : chapters) marks.push_back({c.start, c.end, c.title});
+    const bool with_chapters = !marks.empty() && media::container_supports_chapters(s.output_path);
+    if (!marks.empty() && !with_chapters)
+        log_warn("Розділи не записано: формат {} їх не підтримує (потрібен MP4, MOV або MKV)",
+                 path_to_utf8(path_from_utf8(s.output_path).extension()));
+    if ((fragmented && s.faststart) || with_chapters) {
+        if (fragmented && s.faststart) log_info("Переупаковую у звичайний MP4 (без перекодування)...");
+        else log_info("Додаю розділи у файл (без перекодування)...");
         std::string err;
-        if (!media::remux_file(s.output_path, true, &err))
-            log_warn("Не вдалося переупакувати ({}), файл лишився фрагментованим — він теж відтворюється", err);
+        const bool faststart = s.faststart && is_mov_family(s.output_path, s.container);
+        if (!media::remux_file(s.output_path, faststart, &err, with_chapters ? &marks : nullptr))
+            log_warn("Не вдалося переупакувати ({}), файл лишився як був — він теж відтворюється", err);
+    }
+    if (with_chapters) {
+        // Таймкоди для опису на YouTube — поруч із відео
+        fs::path txt = path_from_utf8(s.output_path);
+        txt.replace_extension(".chapters.txt");
+        write_file_text(txt, chapters_as_text(chapters), nullptr);
     }
     // Перевірка: тривалість відео і звуку, кількість кадрів
     media::MediaFileInfo info;
@@ -237,9 +269,12 @@ void finalize_output(const RenderSettings& s, bool fragmented, int64_t frames, d
     if (s.audio && info.audio_streams > 0 && info.video_seconds > 1 && info.audio_seconds + 0.5 < info.video_seconds)
         problems += std::format(" звук коротший за відео ({} проти {});", format_duration(info.audio_seconds),
                                 format_duration(info.video_seconds));
+    if (with_chapters && info.chapters != static_cast<int>(marks.size()))
+        problems += std::format(" розділів {} замість {};", info.chapters, marks.size());
     if (problems.empty())
-        log_info("Перевірка файлу: відео {}{}, усе гаразд", format_duration(info.video_seconds),
-                 info.audio_streams > 0 ? std::format(", звук {} ({} дор.)", format_duration(info.audio_seconds), info.audio_streams) : "");
+        log_info("Перевірка файлу: відео {}{}{}, усе гаразд", format_duration(info.video_seconds),
+                 info.audio_streams > 0 ? std::format(", звук {} ({} дор.)", format_duration(info.audio_seconds), info.audio_streams) : "",
+                 info.chapters > 0 ? std::format(", розділів {}", info.chapters) : "");
     else
         log_warn("Перевірка файлу:{}", problems);
 }
@@ -283,6 +318,30 @@ static bool safe_console_path(const std::string& p) {
     for (unsigned char c : p)
         if (!(std::isalnum(c) || c == '_' || c == '-' || c == '.' || c == '/') || c >= 128) return false;
     return p.find("..") == std::string::npos;
+}
+
+// Гра відкриває демо лише з власної папки (шлях відносно garrysmod/). Якщо демо
+// вже там (наприклад, garrysmod/demos) і шлях простий — граємо його на місці;
+// інакше — жорстке посилання в tmp_dir (миттєво, без зайвого місця) або копія.
+static std::optional<std::string> demo_path_for_game(const game::GModInstall& g, const std::string& demo_path,
+                                                     const fs::path& tmp_dir, const std::string& id, std::string* error) {
+    if (auto rel = relative_inside(path_from_utf8(demo_path), g.garrysmod); rel && safe_console_path(*rel)) {
+        log_info("Демо вже в папці гри — відтворюю на місці: {}", *rel);
+        return *rel;
+    }
+    const fs::path dst = tmp_dir / "demo.dem";
+    std::error_code lec;
+    fs::create_hard_link(path_from_utf8(demo_path), dst, lec);
+    if (lec) {
+        const uint64_t sz = file_size_or_zero(path_from_utf8(demo_path));
+        if (sz > (64ull << 20)) log_info("Копіюю демо ({}) у папку гри...", format_bytes(sz));
+        std::string copy_err;
+        if (!copy_file_overwrite(path_from_utf8(demo_path), dst, &copy_err)) {
+            if (error) *error = "Не вдалося скопіювати демо в папку гри: " + copy_err;
+            return std::nullopt;
+        }
+    }
+    return "gmdr_tmp/" + id + "/demo";
 }
 
 std::vector<const voice::SpeakerTrack*> select_speakers(const RenderSettings& s, const voice::VoiceDecodeResult& v) {
@@ -560,42 +619,53 @@ void RenderJob::set_check(int index, CheckItem::State state, const std::string& 
         log_debug("Перевірка: {} — так{}", kCheckNames[index], detail.empty() ? "" : " (" + detail + ")");
 }
 
-bool RenderJob::prepare(std::string* error) {
-    // Папка гри
-    if (!s_.game_dir.empty()) gmod_ = game::gmod_from_dir(path_from_utf8(s_.game_dir));
-    else if (!s_.rtx) {
+namespace {
+const std::vector<std::string> kGameProcessNames = {"gmod.exe", "hl2.exe", "gmod", "hl2_linux"};
+
+// Папка гри за налаштуваннями. RTX: потрібна копія від RTXLauncher — якщо вказано звичайну
+// гру, береться RTX-копія (s.game_exe тоді скидається: exe звичайної гри там не підходить).
+// Також: відновлення після збою, перевірка, що гра не запущена, і встановлення драйвера.
+std::optional<game::GModInstall> resolve_game(RenderSettings& s, bool need_driver, std::string* error) {
+    std::optional<game::GModInstall> g;
+    if (!s.game_dir.empty()) g = game::gmod_from_dir(path_from_utf8(s.game_dir));
+    else if (!s.rtx) {
         std::vector<std::string> log;
-        gmod_ = game::detect_gmod(&log);
+        g = game::detect_gmod(&log);
         for (const auto& l : log) log_debug("{}", l);
     }
-    // RTX: потрібна копія від RTXLauncher. Якщо вказано звичайну гру — беремо RTX-копію автоматично.
-    if (s_.rtx && (!gmod_ || !game::is_rtx_install(*gmod_))) {
+    if (s.rtx && (!g || !game::is_rtx_install(*g))) {
         std::vector<std::string> log;
         if (auto rtx = game::detect_rtx_install(&log)) {
-            if (gmod_) log_info("RTX: замість звичайної гри використовую копію від RTXLauncher");
-            gmod_ = rtx;
-            s_.game_exe.clear();   // exe звичайної гри тут не підходить
+            if (g) log_info("RTX: замість звичайної гри використовую копію від RTXLauncher");
+            g = rtx;
+            s.game_exe.clear();
             for (const auto& l : log) log_info("{}", l);
-        } else if (!gmod_) {
+        } else if (!g) {
             if (error) *error = "Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на вкладці «Гра».";
-            return false;
+            return std::nullopt;
         }
     }
-    if (!gmod_ || !gmod_->valid()) {
+    if (!g || !g->valid()) {
         if (error) *error = "Не знайдено Garry's Mod. Вкажіть папку гри (…\\steamapps\\common\\GarrysMod) у налаштуваннях.";
-        return false;
+        return std::nullopt;
     }
-    log_info("Garry's Mod: {}", path_to_utf8(gmod_->root));
-    recover_leftovers(*gmod_);
-
-    if (!game::GameProcess::find_by_name({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}).empty()) {
+    log_info("Garry's Mod: {}", path_to_utf8(g->root));
+    recover_leftovers(*g);
+    if (!game::GameProcess::find_by_name(kGameProcessNames).empty()) {
         if (error) *error = "Garry's Mod уже запущено. Закрийте гру — програма запустить її сама з потрібними параметрами.";
-        return false;
+        return std::nullopt;
     }
-    if (!s_.manual_mode && game::driver_state(*gmod_) != game::DriverState::Installed) {
+    if (need_driver && game::driver_state(*g) != game::DriverState::Installed) {
         log_info("Встановлюю драйвер рендеру в меню GMod (один рядок у lua/menu/menu.lua)...");
-        if (!game::install_driver(*gmod_, error)) return false;
+        if (!game::install_driver(*g, error)) return std::nullopt;
     }
+    return g;
+}
+} // namespace
+
+bool RenderJob::prepare(std::string* error) {
+    gmod_ = resolve_game(s_, !s_.manual_mode, error);
+    if (!gmod_) return false;
 
     id_ = make_unique_id();
     tmp_dir_ = gmod_->garrysmod / "gmdr_tmp" / id_;
@@ -620,28 +690,8 @@ bool RenderJob::prepare(std::string* error) {
     if (free_space > 0 && free_space < (3ull << 30))
         log_warn("На диску з грою мало місця — зменште «Черга кадрів на диску» або звільніть місце");
 
-    // Гра відкриває демо лише з власної папки (шлях відносно garrysmod/). Якщо демо
-    // вже там (наприклад, garrysmod/demos) і шлях простий — граємо його на місці;
-    // інакше — жорстке посилання (миттєво, без зайвого місця) або копія.
-    std::string demo_for_game;
-    if (auto rel = relative_inside(path_from_utf8(s_.demo_path), gmod_->garrysmod); rel && safe_console_path(*rel)) {
-        demo_for_game = *rel;
-        log_info("Демо вже в папці гри — відтворюю на місці: {}", demo_for_game);
-    } else {
-        const fs::path dst = tmp_dir_ / "demo.dem";
-        std::error_code lec;
-        fs::create_hard_link(path_from_utf8(s_.demo_path), dst, lec);
-        if (lec) {
-            const uint64_t sz = file_size_or_zero(path_from_utf8(s_.demo_path));
-            if (sz > (64ull << 20)) log_info("Копіюю демо ({}) у папку гри...", format_bytes(sz));
-            std::string copy_err;
-            if (!copy_file_overwrite(path_from_utf8(s_.demo_path), dst, &copy_err)) {
-                if (error) *error = "Не вдалося скопіювати демо в папку гри: " + copy_err;
-                return false;
-            }
-        }
-        demo_for_game = "gmdr_tmp/" + id_ + "/demo";
-    }
+    const auto demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, error);
+    if (!demo_for_game) return false;
 
     // Налаштування, які ми змінимо, — щоб потім повернути
     const std::vector<std::string> touched = {"host_framerate", "snd_fixed_rate", "fps_max", "mat_vsync",
@@ -655,7 +705,7 @@ bool RenderJob::prepare(std::string* error) {
     auto fps = parse_rational(s_.fps);
     game::DriverJob job;
     job.id = id_;
-    job.demo = demo_for_game;
+    job.demo = *demo_for_game;
     job.movie = "gmdr_tmp/" + id_ + "/" + movie_prefix();
     if (s_.capture_format == "jpg" || s_.capture_format == "jpeg")
         job.movie_flags = {"jpeg", "jpeg_quality", std::to_string(std::clamp(s_.jpeg_quality, 1, 100)), "wav"};
@@ -746,6 +796,8 @@ void RenderJob::run() {
         s_.manual_mode = false;
         s_.quit_game_when_done = true;
         s_.subtitles_srt = false;
+        s_.chat_srt = false;
+        s_.markers.clear();
         s_.keep_temp_files = false;
         // Тимчасовий файл у папці програми (послідовність зображень — у MKV)
         std::string ext = to_lower(path_to_utf8(path_from_utf8(s_.output_path).extension()));
@@ -932,6 +984,7 @@ void RenderJob::run() {
     bool producer_done = false, cancel_sent = false, recording_seen = false, wav_warned = false;
     bool attached_after_relaunch = false, disk_low = false, disk_warned = false, window_fallback = false;
     bool rtx_checked = false;
+    int32_t video_start_tick = range_start;   // тік першого кадру відео (для розділів і субтитрів чату)
     int64_t last_frames = 0;
     auto last_speed_t = Clock::now();
     auto last_frame_t = Clock::now();
@@ -1115,6 +1168,7 @@ void RenderJob::run() {
                     else log_warn("Не вдалося дізнатися тік початку запису — голос може бути трохи зсунутий");
                 }
                 log_info("Запис почався: тік {}, кадри гри {}x{}", first_tick, img.width, img.height);
+                video_start_tick = first_tick;
                 set_check(kCheckDemo, CheckItem::Ok, std::format("тік {}", first_tick));
                 set_check(kCheckFrames, CheckItem::Ok, std::format("{}×{}, {}", img.width, img.height,
                                                                    frames::is_yuv(img.layout) ? "JPEG" : "TGA"));
@@ -1342,7 +1396,13 @@ void RenderJob::run() {
     session_ptr.reset();
     cleanup(s_.quit_game_when_done);
     if (rp->skipped() > 0) log_warn("Пропущено кадрів: {}", rp->skipped());
-    finalize_output(s_, fragmented, frames_done, secs);
+    const auto chapters =
+        s_.chapters ? chapters_for_range(parse_markers(s_.markers), video_start_tick,
+                                         video_start_tick + static_cast<int32_t>(std::llround(secs / A.tick_interval)),
+                                         A.tick_interval)
+                    : std::vector<Chapter>{};
+    finalize_output(s_, fragmented, frames_done, secs, chapters);
+    if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
         const auto eff = game::read_remix_effective_options(*gmod_);
@@ -1399,6 +1459,150 @@ void RenderJob::run() {
 }
 
 // ============================= EncodeFramesJob =====================================
+// ============================== Перегляд у грі ==============================
+WatchJob::WatchJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis, int32_t from_tick)
+    : s_(std::move(s)), analysis_(std::move(analysis)), from_tick_(std::max(0, from_tick)) {}
+
+std::vector<game::DriverMark> WatchJob::take_marks() {
+    std::lock_guard lock(marks_mutex_);
+    return std::exchange(marks_, {});
+}
+
+void WatchJob::run() {
+    std::string err;
+    set_stage("Підготовка гри", -1);
+    auto g = resolve_game(s_, true, &err);
+    if (!g) {
+        fail(err);
+        return;
+    }
+    const std::string id = make_unique_id();
+    const fs::path tmp = g->garrysmod / "gmdr_tmp" / id;
+    std::error_code ec;
+    fs::create_directories(tmp, ec);
+    auto cleanup = [&]() {
+        game::remove_job_files(*g, id);
+        std::error_code e2;
+        fs::remove_all(tmp, e2);
+        if (fs::is_empty(tmp.parent_path(), e2)) fs::remove(tmp.parent_path(), e2);
+    };
+    const auto demo = demo_path_for_game(*g, s_.demo_path, tmp, id, &err);
+    if (!demo) {
+        cleanup();
+        fail(err);
+        return;
+    }
+    const double ti = analysis_ && analysis_->tick_interval > 0 ? analysis_->tick_interval : 1.0 / 66.0;
+    game::DriverJob job;
+    job.id = id;
+    job.demo = *demo;
+    job.mode = "watch";
+    job.host_framerate = 0;
+    job.start_tick = from_tick_;
+    // Перемотуємо трохи раніше вибраного місця, щоб сцена встигла з'явитися
+    const int32_t seek = from_tick_ - static_cast<int32_t>(std::llround(2.0 / ti));
+    if (seek > 0) job.seek_tick = seek;
+    job.quit_when_done = false;
+    job.menu_delay = s_.menu_delay;
+    job.tick_interval = ti;
+    if (!game::write_job_files(*g, job, game::make_job_cfg(job, false, {}, {}), true, &err)) {
+        cleanup();
+        fail(err);
+        return;
+    }
+
+    set_stage("Запуск Garry's Mod", -1);
+    const fs::path exe = s_.game_exe.empty() ? g->default_exe() : path_from_utf8(s_.game_exe);
+    std::vector<std::string> args;
+    if (to_lower(path_to_utf8(exe.filename())).rfind("hl2", 0) == 0) args.insert(args.end(), {"-game", "garrysmod"});
+    args.push_back("-novid");
+    if (s_.rtx)
+        for (const char* a : {"-dxlevel", "90", "-nod3d9ex", "+mat_disable_d3d9ex", "1", "-insecure"}) args.push_back(a);
+    args.insert(args.end(), {"-condebug", "+exec", "gmdr/job_" + id + ".cfg"});
+    for (const auto& a : split(s_.extra_launch_args, ' ')) args.push_back(trim(a));
+    log_info("Команда запуску: {}", game::format_command_line(exe, args));
+    auto proc = game::GameProcess::launch(exe, args, g->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err);
+    if (!proc) {
+        cleanup();
+        fail(err);
+        return;
+    }
+    log_info("Перегляд у грі з {}. Клавіші в грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка. "
+             "Закрийте гру, коли закінчите.", format_duration(from_tick_ * ti));
+
+    const auto t_launch = Clock::now();
+    Clock::time_point cancel_at{};
+    bool cancel_sent = false, relaunched = false;
+    size_t marks_seen = 0;
+    std::string last_state;
+    auto poll_marks = [&]() {
+        const auto marks = game::read_marks(*g, id);
+        if (marks.size() <= marks_seen) return;
+        std::lock_guard lock(marks_mutex_);
+        for (size_t i = marks_seen; i < marks.size(); ++i) {
+            marks_.push_back(marks[i]);
+            const char* what = marks[i].kind == "start" ? "початок фрагмента" : marks[i].kind == "end" ? "кінець фрагмента" : "позначка";
+            log_info("У грі позначено {}: {} (тік {})", what, format_duration(marks[i].tick * ti), marks[i].tick);
+        }
+        marks_seen = marks.size();
+    };
+    for (;;) {
+        if (kill_) {
+            proc->terminate();
+            break;
+        }
+        if (cancel_ && !cancel_sent) {
+            cancel_sent = true;
+            cancel_at = Clock::now();
+            log_info("Закриваю гру...");
+            game::request_cancel(*g, id);
+        }
+        if (cancel_sent && Clock::now() - cancel_at > std::chrono::seconds(15) && proc->running()) proc->terminate();
+        if (!proc->running()) {
+            // Гра могла перезапуститися через Steam
+            if (!relaunched && !cancel_sent && Clock::now() - t_launch < std::chrono::seconds(90)) {
+                auto pids = game::GameProcess::find_by_name(kGameProcessNames, true);
+                if (!pids.empty()) {
+                    if (auto p2 = game::GameProcess::attach(pids.front(), &err)) {
+                        proc = std::move(p2);
+                        relaunched = true;
+                        continue;
+                    }
+                }
+                if (Clock::now() - t_launch < std::chrono::seconds(15)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    continue;
+                }
+            }
+            break;
+        }
+        if (auto st = game::read_status(*g, id)) {
+            if (st->state != last_state) {
+                last_state = st->state;
+                if (st->state == "watching") log_info("Демо грає. Коли закінчите, просто закрийте гру.");
+                else if (st->state == "done") log_info("Демо закінчилось — можна закривати гру");
+                else if (st->state == "error") log_warn("Гра: {}", st->message);
+            }
+            update([&](Progress& p) {
+                p.demo_tick = st->tick;
+                p.demo_total = st->total;
+                p.game_running = true;
+                p.fraction = st->total > 0 ? std::clamp(static_cast<double>(st->tick) / st->total, 0.0, 1.0) : -1.0;
+                p.stage = st->state == "watching" ? std::format("Перегляд у грі: {}", format_duration(st->tick * ti))
+                          : st->state == "done"   ? std::string("Демо закінчилось — закрийте гру")
+                                                  : std::string("Гра завантажує демо");
+            });
+        }
+        poll_marks();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    poll_marks();
+    update([](Progress& p) { p.game_running = false; });
+    game::GameProcess::wait_all_exited(kGameProcessNames, 15000);
+    cleanup();
+    succeed("Перегляд завершено");
+}
+
 EncodeFramesJob::EncodeFramesJob(RenderSettings s, fs::path frames_dir, std::string prefix, fs::path wav_path,
                                  std::shared_ptr<const demo::DemoAnalysis> analysis,
                                  std::shared_ptr<const voice::VoiceDecodeResult> voices)

@@ -7,6 +7,8 @@
 #include "core/audio/wav.hpp"
 #include "core/demo/analysis.hpp"
 #include "core/demo/bitreader.hpp"
+#include "core/demo/chat.hpp"
+#include "core/demo/game_events.hpp"
 #include "core/demo/string_tables.hpp"
 #include "core/frames/blender.hpp"
 #include "core/frames/image_decode.hpp"
@@ -16,6 +18,7 @@
 #include "core/game/process.hpp"
 #include "core/game/rtx.hpp"
 #include "core/render/jobs.hpp"
+#include "core/render/markers.hpp"
 #include "core/render/subtitles.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -182,6 +185,30 @@ static void test_demo(const std::filesystem::path& demo_path, int expect_pe_bits
     CHECK(a.players.count(2) && a.players.at(2).fake_player);
     CHECK(a.last_tick == 825);
     CHECK_NEAR(a.duration_seconds, 12.5, 0.02);
+    // Чат і події: SayText/TextMsg визначено за формою, player_say не дублює чат
+    CHECK(a.user_message_types.say_text == 3);
+    CHECK(a.user_message_types.text_msg == 4);
+    CHECK(a.count_events(demo::DemoEventKind::Chat) == 3);
+    CHECK(a.count_events(demo::DemoEventKind::Server) == 1);
+    CHECK(a.count_events(demo::DemoEventKind::Join) == 1);
+    CHECK(a.count_events(demo::DemoEventKind::Leave) == 1);
+    {
+        std::vector<const demo::DemoEvent*> chat;
+        for (const auto& e : a.events)
+            if (e.kind == demo::DemoEventKind::Chat) chat.push_back(&e);
+        CHECK(chat.size() == 3 && chat[0]->tick == 100 && chat[0]->who == "Friend" && chat[0]->text == "Привіт усім");
+        CHECK(chat.size() == 3 && chat[1]->who == "Recorder Юзер" && chat[1]->text == "gg 100%");
+        CHECK(chat.size() == 3 && chat[2]->who == "LateJoiner" && chat[2]->slot == 5);
+        for (const auto& e : a.events) {
+            if (e.kind == demo::DemoEventKind::Join) CHECK(e.tick == 330 && e.who == "LateJoiner" && e.slot == 5);
+            if (e.kind == demo::DemoEventKind::Leave) CHECK(e.who == "Friend" && e.slot == 1 && e.text == "Disconnect by user.");
+            if (e.kind == demo::DemoEventKind::Server) CHECK(e.text == "Server restart in 5 minutes");
+        }
+        CHECK(a.players.count(5) && a.players.at(5).userid == 9);
+        const std::string log = demo::format_chat_log(a.events, a.tick_interval);
+        CHECK(log.find("[00:01] Friend: Привіт усім") != std::string::npos);
+        CHECK(log.find("← Friend вийшов (Disconnect by user.)") != std::string::npos);
+    }
     std::printf("  пакетів %d, голосових %zu, гравців %zu, попереджень %zu\n", a.packets_total, a.voice_packets.size(),
                 a.players.size(), a.warnings.size());
     for (auto& w : a.warnings) std::printf("  попередження: %s\n", w.c_str());
@@ -698,6 +725,155 @@ static void test_driver_cfg() {
     fs::remove_all(root.parent_path());
 }
 
+static demo::RawBitsMsg raw_bytes(int type, const std::string& bytes) {
+    demo::RawBitsMsg m;
+    m.type = type;
+    m.data.assign(bytes.begin(), bytes.end());
+    m.data_bits = m.data.size() * 8;
+    return m;
+}
+
+static void test_chat_and_markers() {
+    std::printf("[chat, markers]\n");
+    using namespace std::string_literals;
+    // ---- SayText / TextMsg ----
+    int ent = 0, dest = 0;
+    std::string text;
+    bool team = false, dead = false;
+    CHECK(demo::parse_say_text(raw_bytes(3, "\x07" "Don Gordon\0\x01\x00\x00"s), ent, text, team, dead));
+    CHECK(ent == 7 && text == "Don Gordon" && !team && !dead);
+    CHECK(demo::parse_say_text(raw_bytes(3, "\x13\xd0\xbc\xd0\xb4\0\x01\x00\x01"s), ent, text, team, dead));
+    CHECK(ent == 19 && text == "\xd0\xbc\xd0\xb4" && dead);
+    CHECK(!demo::parse_say_text(raw_bytes(3, "\x07" "Don\0\x01\x00"s), ent, text, team, dead));        // 2 байти прапорців
+    CHECK(!demo::parse_say_text(raw_bytes(3, "\x07\xff\xfe\0\x01\x00\x00"s), ent, text, team, dead));  // не UTF-8
+    CHECK(demo::parse_text_msg(raw_bytes(4, "\x03Vote: %s1 wins\n\0Bob\0\0\0\0"s), dest, text));
+    CHECK(dest == 3 && text == "Vote: Bob wins");
+    CHECK(!demo::parse_text_msg(raw_bytes(4, "\x09text\0\0\0\0\0"s), dest, text));
+    // Класифікатор: SayText — там, де так виглядає більшість повідомлень
+    demo::UserMessageClassifier cls;
+    for (int i = 0; i < 10; ++i) cls.add(raw_bytes(5, "\x02hello\0\x01\x00\x00"s));
+    cls.add(raw_bytes(5, "\x02\x01\x02"s));
+    for (int i = 0; i < 4; ++i) cls.add(raw_bytes(9, "\x03Server says\0\0\0\0\0"s));
+    for (int i = 0; i < 3; ++i) cls.add(raw_bytes(3, "\x02hi\0\x01\x00\x00"s));
+    for (int i = 0; i < 5; ++i) cls.add(raw_bytes(3, "\x99\x98\x97"s));   // 3 з 8 — не SayText
+    const auto types = cls.decide();
+    CHECK(types.say_text == 5 && types.text_msg == 9);
+    // net-повідомлення аддона чату: JSON + номер сутності в 13 бітах
+    CHECK(demo::is_chat_net_message("customchat.say") && !demo::is_chat_net_message("customchat.player_spawned"));
+    CHECK(!demo::is_chat_net_message("ash.player::network"));
+    {
+        const std::string json = R"({"text":"hi there","channel":"team"})";
+        std::string b = "\x00\x1c\x00"s + json + "\0"s;
+        b.push_back(0x0b);   // сутність 11 (13 біт: 0x0b, 0x00)
+        b.push_back(0x00);
+        auto m = raw_bytes(0, b);
+        m.data_bits -= 3;   // 13 біт, а не 16
+        std::string channel;
+        CHECK(demo::parse_chat_net_message(m, ent, text, channel));
+        CHECK(ent == 11 && text == "hi there" && channel == "team");
+    }
+    CHECK(demo::clean_text("  a\n\tb  c \r\n") == "a b c");
+
+    // ---- ігрові події: опис і декодування ----
+    {
+        struct BW {
+            std::vector<uint8_t> d;
+            size_t n = 0;
+            void bits(uint32_t v, int k) {
+                for (int i = 0; i < k; ++i, ++n) {
+                    if (n % 8 == 0) d.push_back(0);
+                    if ((v >> i) & 1) d.back() |= static_cast<uint8_t>(1u << (n % 8));
+                }
+            }
+            void str(const std::string& s) {
+                for (char c : s) bits(static_cast<uint8_t>(c), 8);
+                bits(0, 8);
+            }
+        } list, ev;
+        list.bits(7, 9); list.str("player_hurt");
+        list.bits(4, 3); list.str("userid");
+        list.bits(5, 3); list.str("health");
+        list.bits(2, 3); list.str("dmg");
+        list.bits(6, 3); list.str("crit");
+        list.bits(1, 3); list.str("weapon");
+        list.bits(0, 3);
+        demo::RawBitsMsg lm;
+        lm.type = 1;
+        lm.data = list.d;
+        lm.data_bits = list.n;
+        demo::GameEventDecoder dec;
+        CHECK(dec.load_list(lm));
+        ev.bits(7, 9);
+        ev.bits(static_cast<uint16_t>(-5), 16);
+        ev.bits(42, 8);
+        float f = 12.5f;
+        uint32_t fb;
+        std::memcpy(&fb, &f, 4);
+        ev.bits(fb, 32);
+        ev.bits(1, 1);
+        ev.str("pistol");
+        demo::RawBitsMsg em;
+        em.data = ev.d;
+        em.data_bits = ev.n;
+        auto e = dec.decode(em);
+        CHECK(e && e->name == "player_hurt");
+        CHECK(e && e->get_int("userid") == -5 && e->get_int("health") == 42 && e->get_int("crit") == 1);
+        CHECK(e && e->get_str("weapon") == "pistol" && e->find("dmg") && std::abs(e->find("dmg")->num - 12.5) < 1e-9);
+        em.data_bits -= 20;   // обрізана подія — не розбирається
+        CHECK(!dec.decode(em));
+    }
+
+    // ---- позначки і розділи ----
+    auto ms = render::parse_markers("300\tБій\n100\tВступ\nсміття\n100\tВступ 2\n");
+    CHECK(ms.size() == 2 && ms[0].tick == 100 && ms[0].title == "Вступ 2" && ms[1].title == "Бій");
+    CHECK(render::parse_markers(render::format_markers(ms)) == ms);
+    render::add_marker(ms, {200, "Сере\tдина"});
+    CHECK(ms.size() == 3 && ms[1].tick == 200 && ms[1].title == "Сере дина");
+    const double ti = 0.1;
+    auto ch = render::chapters_for_range(ms, 50, 400, ti);   // позначки на 5, 15, 25 с від початку відео
+    CHECK(ch.size() == 4 && ch[0].title == "Початок" && std::abs(ch[1].start - 5.0) < 1e-9);
+    CHECK(ch.size() == 4 && std::abs(ch[3].end - 35.0) < 1e-9 && std::abs(ch[2].end - ch[3].start) < 1e-9);
+    ch = render::chapters_for_range(ms, 100, 250, ti);        // перша позначка на самому початку
+    CHECK(ch.size() == 2 && ch[0].title == "Вступ 2" && ch[0].start == 0 && std::abs(ch[1].end - 15.0) < 1e-9);
+    CHECK(render::chapters_for_range(ms, 310, 400, ti).empty());
+    CHECK(render::chapters_as_text({{0, 5, "Початок"}, {65, 90, "Бій"}, {3700, 3800, "Кінець"}}) ==
+          "0:00 Початок\n1:05 Бій\n1:01:40 Кінець\n");
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / "gmdr_test_markers";
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        write_file_text(dir / "a.dem", "demo-a");
+        write_file_text(dir / "b.dem", "demo-bb");
+        const fs::path store = dir / "markers.json";
+        CHECK(render::save_demo_markers(store, path_to_utf8(dir / "a.dem"), ms));
+        CHECK(render::save_demo_markers(store, path_to_utf8(dir / "b.dem"), {{7, "b"}}));
+        CHECK(render::load_demo_markers(store, path_to_utf8(dir / "a.dem")) == ms);
+        // Переміщене демо (те саме ім'я і розмір) — позначки ті самі
+        fs::create_directories(dir / "moved");
+        fs::rename(dir / "a.dem", dir / "moved" / "a.dem");
+        CHECK(render::load_demo_markers(store, path_to_utf8(dir / "moved" / "a.dem")) == ms);
+        CHECK(render::save_demo_markers(store, path_to_utf8(dir / "b.dem"), {}));
+        CHECK(render::load_demo_markers(store, path_to_utf8(dir / "b.dem")).empty());
+        CHECK(read_file_text(store).value_or("").find("b.dem") == std::string::npos);   // порожні не зберігаються
+        fs::remove_all(dir);
+    }
+
+    // ---- субтитри чату ----
+    std::vector<demo::DemoEvent> evs = {
+        {10, demo::DemoEventKind::Chat, 1, "Ann", "hi", ""},
+        {30, demo::DemoEventKind::Join, 2, "Bob", "", ""},
+        {500, demo::DemoEventKind::Chat, 1, "Ann", "later", ""},
+        {5, demo::DemoEventKind::Chat, 1, "Ann", "before", ""},
+    };
+    const std::string srt = render::make_chat_srt(evs, 10, 400, ti, 39.0);
+    CHECK(srt.find("before") == std::string::npos && srt.find("later") == std::string::npos);
+    CHECK(srt.find("1\n00:00:00,000 --> 00:00:02,000\nAnn: hi\n") != std::string::npos);
+    CHECK(srt.find("00:00:02,000 --> 00:00:07,000\nAnn: hi\n→ Bob зайшов на сервер\n") != std::string::npos);
+    CHECK(srt.find("00:00:07,000 --> 00:00:09,000\n→ Bob зайшов на сервер\n") != std::string::npos);
+    CHECK(render::make_chat_srt(evs, 600, 700, ti, 10.0).empty());
+}
+
 static void test_rtx_profile() {
     std::printf("[rtx profile]\n");
     namespace fs = std::filesystem;
@@ -761,6 +937,7 @@ int main(int argc, char** argv) {
     test_job_elapsed();
     test_driver_cfg();
     test_rtx_profile();
+    test_chat_and_markers();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

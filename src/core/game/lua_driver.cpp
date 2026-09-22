@@ -85,6 +85,16 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
     c += "// GMod Demo Render — тимчасовий конфіг завдання " + job.id + "\n";
     c += "// Створено автоматично, можна видалити.\n";
     c += "sv_cheats 1\n";
+    if (job.mode == "watch") {
+        // Перегляд: звичайне відтворення, налаштування гравця не чіпаємо
+        c += "host_framerate 0\n";
+        c += "alias gmdr_play " + q("playdemo " + job.demo) + "\n";
+        if (job.seek_tick > 0) c += std::format("alias gmdr_seek \"demo_gototick {} 0 0\"\n", job.seek_tick);
+        c += "alias gmdr_quit \"quit\"\n";
+        c += "alias gmdr_restore \"\"\n";
+        c += "echo \"[GMDR] конфіг перегляду завантажено\"\n";
+        return c;
+    }
     c += std::format("host_framerate {}\n", job.host_framerate);
     c += "snd_fixed_rate 1\n";
     c += "fps_max 0\n";
@@ -132,6 +142,8 @@ bool write_job_files(const GModInstall& g, const DriverJob& job, const std::stri
     j.set("quit", json::Value::boolean(job.quit_when_done));
     j.set("menu_delay", json::Value::number(job.menu_delay));
     j.set("load_timeout", json::Value::number(job.load_timeout));
+    j.set("mode", json::Value::string(job.mode));
+    j.set("tick_interval", json::Value::number(job.tick_interval));
     std::error_code ec;
     fs::create_directories(data_dir(g), ec);
     remove_file_quiet(data_dir(g) / ("status_" + job.id + ".txt"));
@@ -144,8 +156,23 @@ bool write_job_files(const GModInstall& g, const DriverJob& job, const std::stri
     return write_file_atomic(data_dir(g) / "job.txt", j.dump(), error);
 }
 
+std::vector<DriverMark> read_marks(const GModInstall& g, const std::string& id) {
+    std::vector<DriverMark> out;
+    auto text = read_file_text(data_dir(g) / ("marks_" + id + ".txt"));
+    if (!text) return out;
+    for (const auto& line : split(replace_all(*text, "\r", ""), '\n')) {
+        const auto parts = split(trim(line), ' ');
+        if (parts.size() != 2) continue;
+        const auto tick = parse_int(parts[1]);
+        if (!tick || (parts[0] != "start" && parts[0] != "end" && parts[0] != "mark")) continue;
+        out.push_back({parts[0], static_cast<int32_t>(*tick)});
+    }
+    return out;
+}
+
 void remove_job_files(const GModInstall& g, const std::string& id) {
     remove_file_quiet(data_dir(g) / "job.txt");
+    remove_file_quiet(data_dir(g) / ("marks_" + id + ".txt"));
     remove_file_quiet(data_dir(g) / ("status_" + id + ".txt"));
     remove_file_quiet(data_dir(g) / ("cancel_" + id + ".txt"));
     remove_file_quiet(g.garrysmod / "cfg" / "gmdr" / ("job_" + id + ".cfg"));

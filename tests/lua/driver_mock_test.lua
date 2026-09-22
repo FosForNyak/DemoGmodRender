@@ -102,7 +102,9 @@ local function run_scenario(name, opts)
 	local job = { id = "abc", created = os.time() - (opts.stale and 5000 or 1), demo = "gmdr_tmp/abc/demo",
 	              movie = "gmdr_tmp/abc/f", movie_flags = { "raw" }, host_framerate = opts.rate,
 	              start_tick = opts.start_tick or 0, end_tick = opts.end_tick or -1, quit = true, menu_delay = 3,
-	              load_timeout = 600, seek_tick = opts.seek_tick or -1 }
+	              load_timeout = 600, seek_tick = opts.seek_tick or -1, mode = opts.watch and "watch" or nil,
+	              tick_interval = TI }
+	if opts.watch then job.host_framerate = 0; job.quit = false end
 	files["gmdr/job.txt"] = json_encode(job)
 
 	local env = {}
@@ -112,6 +114,7 @@ local function run_scenario(name, opts)
 		Read = function(p) return files[p] end,
 		Write = function(p, c) files[p] = c end,
 		Delete = function(p) files[p] = nil end,
+		Append = function(p, c) files[p] = (files[p] or "") .. c end,
 		CreateDir = function() end,
 	}
 	env.util = { JSONToTable = json_decode, TableToJSON = json_encode }
@@ -169,6 +172,8 @@ local function run_scenario(name, opts)
 		HideGameUI = function() S.ui_visible = S.ui_visible - 1 end,
 	}
 	env.IsInGame = function() return (not opts.no_ingame) and S.playing end
+	S.keys = {}
+	env.input = { IsKeyDown = function(k) return S.keys[k] == true end }
 	env.IsInLoading = function() return S.loading_until ~= nil and now < S.loading_until end
 	env.hook = { Add = function(ev, id, fn) hooks[ev] = fn end }
 
@@ -195,11 +200,37 @@ local function run_scenario(name, opts)
 			if S.tick >= TOTAL then S.playing = false end
 		end
 		if opts.cancel_at and S.tick >= opts.cancel_at then files["gmdr/cancel_abc.txt"] = "1" end
+		-- натискання клавіш (тримаються кілька кадрів, як справжні)
+		S.keys = {}
+		for _, p in ipairs(opts.press or {}) do
+			if S.tick >= p.tick and S.tick < p.tick + 5 then S.keys[p.key] = true end
+		end
+		if S.game_ui_at and S.tick >= S.game_ui_at then S.ui_visible = 1 end
+		if hooks.Think then hooks.Think() end
 		hooks.DrawOverlay()
 		now = now + 0.01
 		if S.quit then break end
 	end
 	local st = json_decode(files["gmdr/status_abc.txt"] or "{}")
+	if opts.watch then
+		local marks = files["gmdr/marks_abc.txt"] or ""
+		local kinds = {}
+		for kind, tick in marks:gmatch("(%a+) (%d+)") do kinds[#kinds + 1] = { kind = kind, tick = tonumber(tick) } end
+		check(S.starts == 0, "у режимі перегляду нічого не записується")
+		check(#kinds == #opts.press, "кожне натискання — рівно одна позначка (" .. #kinds .. ")")
+		for i, p in ipairs(opts.press) do
+			local k = kinds[i] or {}
+			check(k.kind == p.kind and k.tick and k.tick >= p.tick and k.tick < p.tick + 3,
+				"позначка " .. p.kind .. " на тіку " .. tostring(k.tick))
+		end
+		check(cvars.host_framerate == 0, "перегляд у реальному часі (host_framerate 0)")
+		check(cvars.fps_max_nofocus == 20, "fps_max_nofocus не змінено")
+		check(S.seeks == 1, "перемотано до місця перегляду")
+		check(not S.quit or opts.cancel_at, "гра не закривається сама після перегляду")
+		check(st.state == (opts.cancel_at and "quit" or "done"), "підсумковий статус (" .. tostring(st.state) .. ")")
+		if opts.verbose then for _, l in ipairs(log) do print("     " .. l) end end
+		return
+	end
 	check(S.quit, "гра закрита після завершення")
 	check(S.starts == 1, "startmovie виконано рівно один раз")
 	check(S.stops == 1, "endmovie виконано рівно один раз")
@@ -237,6 +268,11 @@ run_scenario("застаріле завдання", { cfg_loaded = true, rate = 
 run_scenario("перемотування до далекого фрагмента", { cfg_loaded = true, rate = 60, start_tick = 600, end_tick = 700, seek_tick = 400 })
 run_scenario("перемотування без конфігу (прямий demo_gototick)", { cfg_loaded = false, rate = 60, start_tick = 600, end_tick = 700, seek_tick = 400 })
 run_scenario("IsInGame() не працює під час демо", { cfg_loaded = true, rate = 60, start_tick = 50, no_ingame = true })
+
+run_scenario("перегляд у грі з позначками F9/F11/F6", { cfg_loaded = true, watch = true, start_tick = 300, seek_tick = 250,
+	press = { { tick = 320, key = 100, kind = "start" }, { tick = 400, key = 97, kind = "mark" }, { tick = 500, key = 102, kind = "end" } } })
+run_scenario("перегляд закрито з програми", { cfg_loaded = true, watch = true, start_tick = 300, seek_tick = 250,
+	press = { { tick = 350, key = 100, kind = "start" } }, cancel_at = 600 })
 
 print(failures == 0 and "\nУСІ СЦЕНАРІЇ ПРОЙДЕНО" or ("\nПРОВАЛІВ: " .. failures))
 os.exit(failures == 0 and 0 or 1)

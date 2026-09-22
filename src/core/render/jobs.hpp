@@ -15,6 +15,7 @@
 
 #include "../demo/analysis.hpp"
 #include "../game/gmod_install.hpp"
+#include "../game/lua_driver.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
 #include "settings.hpp"
@@ -168,6 +169,27 @@ private:
     bool                                            job_written_ = false;
     bool                                            test_run_ = false;
     std::atomic<bool>                               show_game_{false};
+};
+
+// ---- Перегляд демо в грі з вибраного місця ----------------------------------------
+// Гра запускається звичайно (у фокусі, зі звуком), демо перемотується до from_tick і
+// грає в реальному часі. Клавіші в грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка;
+// програма забирає їх через take_marks(). Завдання закінчується, коли гравець закриє гру.
+class WatchJob final : public Job {
+public:
+    WatchJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis, int32_t from_tick);
+    std::string name() const override { return "Перегляд у грі"; }
+    std::vector<game::DriverMark> take_marks();
+
+protected:
+    void run() override;
+
+private:
+    RenderSettings                            s_;
+    std::shared_ptr<const demo::DemoAnalysis> analysis_;
+    int32_t                                   from_tick_ = 0;
+    std::mutex                                marks_mutex_;
+    std::vector<game::DriverMark>             marks_;
 };
 
 // ---- Кодування вже готових кадрів (TGA/JPG послідовність від startmovie) ------------

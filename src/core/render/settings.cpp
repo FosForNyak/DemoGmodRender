@@ -17,7 +17,7 @@ namespace gmdr::render {
     X(audio_bitrate) X(sample_rate) X(game_audio) X(game_volume) X(game_audio_offset) X(voice_mode)   \
     X(voice_selected) X(voice_volume) X(voice_delay) X(voice_volumes) X(separate_tracks) X(mic_file) \
     X(mic_offset) X(mic_volume) X(output_path) X(container) X(faststart) X(crash_safe)              \
-    X(subtitles_srt) X(target_size_mb) X(threads) X(keep_temp_files)
+    X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files)
 
 namespace {
 json::Value to_value(const std::string& v) { return json::Value::string(v); }

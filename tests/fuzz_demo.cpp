@@ -29,6 +29,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         gmdr::demo::AnalyzeOptions opt;
         opt.detect_packets = 200;
         auto a = gmdr::demo::analyze_demo(f, opt);
+        const std::string chat = gmdr::demo::format_chat_log(a.events, a.tick_interval);   // чат і події теж
+        (void)chat;
         auto v = gmdr::voice::decode_voice(a);
         for (const auto& sp : v.speakers) {
             auto pcm = gmdr::voice::decode_range(sp, 0, std::min<int64_t>(sp.end_sample(), 48000));

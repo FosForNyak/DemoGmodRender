@@ -122,12 +122,20 @@ struct VoiceDataMsg {
     size_t               data_bits = 0;
 };
 
+// Повідомлення, дані яких розбираються окремо (events.hpp): лише сирі біти.
+struct RawBitsMsg {
+    int                  type = 0;        // svc_GameEventList: кількість подій; svc_UserMessage: тип
+    std::vector<uint8_t> data;
+    size_t               data_bits = 0;
+};
+
 // Обробник: перевизначте лише потрібні методи.
 class NetHandler {
 public:
     virtual ~NetHandler() = default;
     virtual bool wants_string_tables() const { return false; }
     virtual bool wants_voice() const { return false; }
+    virtual bool wants_events() const { return false; }   // ігрові події, user messages, net.*
     virtual void on_tick(int32_t /*tick*/) {}
     virtual void on_server_info(const ServerInfoMsg&) {}
     virtual void on_create_string_table(const CreateStringTableMsg&) {}
@@ -136,6 +144,10 @@ public:
     virtual void on_voice_data(const VoiceDataMsg&) {}
     virtual void on_print(const std::string&) {}
     virtual void on_set_convar(const std::string& /*name*/, const std::string& /*value*/) {}
+    virtual void on_game_event_list(const RawBitsMsg&) {}
+    virtual void on_game_event(const RawBitsMsg&) {}
+    virtual void on_user_message(const RawBitsMsg&) {}
+    virtual void on_gmod_net(const RawBitsMsg&) {}
 };
 
 struct PacketParseResult {

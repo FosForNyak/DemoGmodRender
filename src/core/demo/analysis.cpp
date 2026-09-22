@@ -3,6 +3,7 @@
 #include "../util/log.hpp"
 #include "../voice/steam_voice.hpp"
 #include "bitreader.hpp"
+#include "game_events.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -19,13 +20,126 @@ std::string DemoAnalysis::player_name(int slot) const {
     return std::format("Гравець #{}", slot);
 }
 
+size_t DemoAnalysis::count_events(DemoEventKind k) const {
+    return static_cast<size_t>(std::count_if(events.begin(), events.end(), [k](const DemoEvent& e) { return e.kind == k; }));
+}
+
 namespace {
+
+constexpr size_t kMaxEvents = 50000;
 
 class Collector final : public NetHandler {
 public:
-    Collector(DemoAnalysis& a, StringTableSet& st, bool voice) : a_(a), st_(st), voice_(voice) {}
+    Collector(DemoAnalysis& a, StringTableSet& st, bool voice, bool events)
+        : a_(a), st_(st), voice_(voice), events_(events) {}
     bool wants_string_tables() const override { return true; }
     bool wants_voice() const override { return voice_; }
+    bool wants_events() const override { return events_; }
+
+    void on_game_event_list(const RawBitsMsg& m) override {
+        if (!game_events_.load_list(m)) warn("список ігрових подій пошкоджений");
+    }
+    void on_game_event(const RawBitsMsg& m) override {
+        auto ev = game_events_.decode(m);
+        if (!ev) return;
+        DemoEvent e;
+        e.tick = tick_;
+        if (ev->name == "player_connect_client") {
+            if (ev->get_int("bot", 0) != 0) return;
+            e.kind = DemoEventKind::Join;
+            e.who = ev->get_str("name");
+            e.slot = ev->get_int("index");
+        } else if (ev->name == "player_disconnect") {
+            if (ev->get_int("bot", 0) != 0) return;
+            e.kind = DemoEventKind::Leave;
+            e.slot = slot_by_userid(ev->get_int("userid"));
+            e.who = ev->get_str("name");
+            if (e.who.empty()) e.who = a_.player_name(e.slot);
+            e.text = clean_text(ev->get_str("reason"));
+        } else if (ev->name == "player_changename") {
+            e.kind = DemoEventKind::NameChange;
+            e.slot = slot_by_userid(ev->get_int("userid"));
+            e.who = ev->get_str("oldname");
+            e.text = ev->get_str("newname");
+        } else if (ev->name == "player_death") {
+            e.kind = DemoEventKind::Kill;
+            const int victim = slot_by_userid(ev->get_int("userid"));
+            const int attacker = slot_by_userid(ev->get_int("attacker"));
+            e.slot = attacker >= 0 ? attacker : victim;
+            e.who = a_.player_name(e.slot);
+            const std::string weapon = ev->get_str("weapon");
+            e.text = attacker >= 0 && attacker != victim
+                         ? std::format("{} вбив {}", a_.player_name(attacker), a_.player_name(victim))
+                         : std::format("{} загинув", a_.player_name(victim));
+            if (!weapon.empty()) e.text += " (" + weapon + ")";
+        } else if (ev->name == "player_say") {
+            // Запасне джерело чату: якщо SayText не знайдеться, беремо ці події
+            e.kind = DemoEventKind::Chat;
+            e.slot = slot_by_userid(ev->get_int("userid"));
+            e.who = a_.player_name(e.slot);
+            e.text = ev->get_str("text");
+            if (ev->get_int("teamonly", 0) != 0) e.channel = "team";
+            player_say_.push_back(std::move(e));
+            return;
+        } else {
+            return;
+        }
+        push(std::move(e));
+    }
+    void on_user_message(const RawBitsMsg& m) override {
+        classifier_.add(m);
+        Pending p;
+        p.type = m.type;
+        p.ev.tick = tick_;
+        int ent = 0, dest = 0;
+        bool team = false, dead = false;
+        if (parse_say_text(m, ent, p.ev.text, team, dead)) {
+            p.ev.kind = DemoEventKind::Chat;
+            p.ev.slot = ent - 1;
+            p.ev.who = ent == 0 ? "Сервер" : a_.player_name(ent - 1);
+            if (team) p.ev.channel = "team";
+        } else if (parse_text_msg(m, dest, p.ev.text)) {
+            if (dest != 3) return;   // лише те, що сервер пише в чат (HUD_PRINTTALK)
+            p.ev.kind = DemoEventKind::Server;
+        } else {
+            return;
+        }
+        if (pending_.size() < kMaxEvents) pending_.push_back(std::move(p));
+    }
+    void on_gmod_net(const RawBitsMsg& m) override {
+        BitReader br(m.data.data(), m.data.size(), m.data_bits);
+        br.read_ubits(8);
+        const int id = br.read_word();
+        const StringTable* names = st_.find("networkstring");
+        if (!names || id < 0 || id >= static_cast<int>(names->entries.size())) return;
+        const std::string& name = names->entries[static_cast<size_t>(id)].key;
+        if (!is_chat_net_message(name)) return;
+        DemoEvent e;
+        e.tick = tick_;
+        e.kind = DemoEventKind::Chat;
+        int ent = -1;
+        if (!parse_chat_net_message(m, ent, e.text, e.channel)) return;
+        e.slot = ent >= 1 ? ent - 1 : -1;
+        e.who = e.slot >= 0 ? a_.player_name(e.slot) : "?";
+        push(std::move(e));
+    }
+    // Після проходу: визначаємо, які user messages були SayText/TextMsg, і додаємо їх
+    void finish_events() {
+        a_.user_message_types = classifier_.decide();
+        const auto& t = a_.user_message_types;
+        bool chat_from_say_text = false;
+        for (auto& p : pending_) {
+            if (p.ev.kind == DemoEventKind::Chat && p.type == t.say_text) chat_from_say_text = true;
+            else if (!(p.ev.kind == DemoEventKind::Server && p.type == t.text_msg)) continue;
+            push(std::move(p.ev));
+        }
+        if (!chat_from_say_text)
+            for (auto& e : player_say_) push(std::move(e));
+        pending_.clear();
+        player_say_.clear();
+        std::stable_sort(a_.events.begin(), a_.events.end(),
+                         [](const DemoEvent& x, const DemoEvent& y) { return x.tick < y.tick; });
+    }
 
     void on_server_info(const ServerInfoMsg& si) override {
         a_.server_info = si;
@@ -35,6 +149,7 @@ public:
     }
     void on_create_string_table(const CreateStringTableMsg& m) override {
         if (!st_.on_create(m)) warn(std::format("таблиця рядків '{}': {}", m.name, st_.last_error()));
+        else if (m.name == "userinfo") refresh_players();   // імена потрібні вже для перших повідомлень чату
     }
     void on_update_string_table(const UpdateStringTableMsg& m) override {
         if (!st_.on_update(m)) warn(std::format("оновлення таблиці: {}", st_.last_error()));
@@ -57,6 +172,12 @@ public:
     void refresh_players() {
         for (auto& [slot, pi] : st_.players()) a_.players[slot] = pi;
     }
+    int slot_by_userid(int userid) const {
+        if (userid < 0) return -1;
+        for (const auto& [slot, pi] : a_.players)
+            if (pi.userid == userid) return slot;
+        return -1;
+    }
     void set_tick(int32_t t) { tick_ = t; }
     // Однакові попередження (напр. оновлення тієї самої таблиці) показуємо один раз з лічильником.
     void finish_warnings() {
@@ -69,11 +190,23 @@ private:
     void warn(const std::string& w) {
         if (++warn_counts_[w] == 1 && a_.warnings.size() < 50) a_.warnings.push_back(w);
     }
+    void push(DemoEvent&& e) {
+        if (a_.events.size() < kMaxEvents) a_.events.push_back(std::move(e));
+    }
+    struct Pending {
+        int       type = -1;
+        DemoEvent ev;
+    };
     DemoAnalysis&              a_;
     StringTableSet&            st_;
     bool                       voice_;
+    bool                       events_;
     int32_t                    tick_ = 0;
     std::map<std::string, int> warn_counts_;
+    GameEventDecoder           game_events_;
+    UserMessageClassifier      classifier_;
+    std::vector<Pending>       pending_;
+    std::vector<DemoEvent>     player_say_;
 };
 
 } // namespace
@@ -153,7 +286,7 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
     log_info("Варіант протоколу: {} (збоїв на пробі: {})", a.variant.describe(), detect_fail);
 
     StringTableSet tables;
-    Collector collector(a, tables, opt.collect_voice);
+    Collector collector(a, tables, opt.collect_voice, opt.collect_events);
 
     file.rewind();
     DemoCommand cmd;
@@ -216,6 +349,7 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
     if (!file.reached_stop()) a.warnings.push_back("Демо не має маркера кінця (можливо, запис перервано) — використано наявні дані");
     collector.refresh_players();
     collector.finish_warnings();
+    collector.finish_events();
 
     a.first_tick = first_packet_seen ? min_tick : 0;
     a.last_tick = first_packet_seen ? max_tick : 0;

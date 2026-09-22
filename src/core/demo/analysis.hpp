@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "chat.hpp"
 #include "demo_file.hpp"
 #include "netmessages.hpp"
 #include "string_tables.hpp"
@@ -45,14 +46,18 @@ struct DemoAnalysis {
     int                         voice_scavenged = 0;
     std::map<int, int>          fail_types;         // тип повідомлення -> кількість збоїв
     std::vector<std::string>    console_commands;   // dem_consolecmd (перші кілька)
+    std::vector<DemoEvent>      events;             // чат, входи/виходи гравців (за часом)
+    UserMessageTypes            user_message_types; // які user messages виявились SayText/TextMsg
     std::vector<std::string>    warnings;
 
     double tick_to_seconds(double tick) const { return tick * tick_interval; }
+    size_t count_events(DemoEventKind k) const;
     std::string player_name(int slot) const;
 };
 
 struct AnalyzeOptions {
     bool collect_voice = true;
+    bool collect_events = true;
     int  detect_packets = 3000;   // скільки пакетів використовувати для визначення варіанту протоколу
 };
 

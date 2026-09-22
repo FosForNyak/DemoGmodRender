@@ -27,7 +27,7 @@
 namespace gmdr::game {
 
 const char* driver_lua_source();
-constexpr const char* kDriverVersion = "1.4";
+constexpr const char* kDriverVersion = "1.5";
 
 enum class DriverState { NotInstalled, Installed, Outdated };
 DriverState driver_state(const GModInstall& g);
@@ -48,6 +48,10 @@ struct DriverJob {
     double      load_timeout = 600.0; // с
     bool        hide_hud = false;
     bool        hide_viewmodel = false;
+    // "render" — запис; "watch" — перегляд у грі в реальному часі з клавішами-позначками
+    // (F9 — початок, F11 — кінець фрагмента, F6 — позначка; див. read_marks)
+    std::string mode = "render";
+    double      tick_interval = 1.0 / 66.0;   // для показу часу в підказках
 };
 
 // Вміст конфігу завдання (+ аліаси gmdr_*). originals — початкові значення
@@ -72,6 +76,13 @@ struct DriverStatus {
     double      time = 0;          // SysTime() гри
 };
 std::optional<DriverStatus> read_status(const GModInstall& g, const std::string& id);
+
+// Позначки, зроблені клавішами під час перегляду (data/gmdr/marks_<id>.txt): "start 123" ...
+struct DriverMark {
+    std::string kind;   // start / end / mark
+    int32_t     tick = 0;
+};
+std::vector<DriverMark> read_marks(const GModInstall& g, const std::string& id);
 
 // Значення змінних у config.cfg (щоб відновити після рендеру).
 std::map<std::string, std::string> read_config_values(const GModInstall& g, const std::vector<std::string>& names);

@@ -282,8 +282,11 @@ void App::draw_output_bar() {
                                   "Не клацайте в самій грі під час рендеру.");
             ImGui::SameLine();
         }
-        if (ImGui::Button("Зупинити", ImVec2(fs_ * 7.5f, 0))) job_->cancel();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Зупинити запис і зберегти вже відрендерену частину");
+        const bool watching = dynamic_cast<render::WatchJob*>(job_.get()) != nullptr;
+        if (ImGui::Button(watching ? "Закрити гру" : "Зупинити", ImVec2(fs_ * 7.5f, 0))) job_->cancel();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(watching ? "Закрити гру (позначки, зроблені в грі, вже збережено)"
+                                       : "Зупинити запис і зберегти вже відрендерену частину");
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
         if (ImGui::Button("Перервати", ImVec2(-1, 0))) job_->kill();

@@ -7,6 +7,8 @@
 //   * "рендерить" кадри TGA (як startmovie) і звук WAV, що росте під час запису
 //   * кожну цілу секунду — білий спалах у кадрі і "біп" 1 кГц у звуці
 //     (так перевіряється синхронізація звуку і відео)
+//   * режим перегляду (mode = "watch"): "грає" демо вдесятеро швидше за реальний час,
+//     сам "натискає" F9/F6/F11 (позначки в marks_<id>.txt) і закривається, як гравець
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
@@ -114,6 +116,36 @@ int main(int argc, char** argv) {
     const int start_req = static_cast<int>((*job)["start_tick"].as_int());
     const int end_req = static_cast<int>((*job)["end_tick"].as_int(-1));
     const bool jpeg = (*job)["movie_flags"][0].as_string() == "jpeg";
+
+    if ((*job)["mode"].as_string() == "watch") {
+        auto wcfg = read_file_text(gm / "cfg" / "gmdr" / ("job_" + id + ".cfg"));
+        if (!wcfg || wcfg->find("host_framerate 0") == std::string::npos || wcfg->find("alias gmdr_play") == std::string::npos) {
+            write_status(status, "error", 0, 0, -1, -1, "немає конфігу перегляду");
+            return 4;
+        }
+        const int from = std::max(3, static_cast<int>((*job)["start_tick"].as_int()));
+        const double wti = (*job)["tick_interval"].as_number(1.0 / 66.0);
+        const fs::path marks = gm / "data" / "gmdr" / ("marks_" + id + ".txt");
+        write_status(status, "loading", 0, 1000000, -1, -1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const struct { int at; const char* kind; } presses[] = {{10, "start"}, {40, "mark"}, {80, "end"}};
+        size_t next = 0;
+        for (int tick = from; tick <= from + 100; ++tick) {
+            if (fs::exists(cancel)) {
+                write_status(status, "quit", tick, 1000000, -1, -1, "перегляд закрито з програми");
+                return 0;
+            }
+            if (next < std::size(presses) && tick == from + presses[next].at) {
+                std::ofstream(marks, std::ios::app) << presses[next].kind << " " << tick << "\n";
+                ++next;
+            }
+            write_status(status, "watching", tick, 1000000, -1, -1);
+            std::this_thread::sleep_for(std::chrono::duration<double>(wti / 10));
+        }
+        write_status(status, "done", from + 100, 1000000, -1, -1, "демо закінчилось");
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        return 0;   // "гравець закрив гру"
+    }
 
     // Перевіряємо, що конфіг існує і містить потрібні аліаси
     auto cfg = read_file_text(gm / "cfg" / "gmdr" / ("job_" + id + ".cfg"));

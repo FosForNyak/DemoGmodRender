@@ -1,5 +1,5 @@
 -- ============================================================================
---  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.4
+--  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.5
 --
 --  Встановлюється програмою GMod Demo Render у garrysmod/lua/menu/.
 --  Скрипт НІЧОГО не робить, якщо немає файлу завдання data/gmdr/job.txt
@@ -25,6 +25,10 @@ end
 
 local STATUS_FILE = "gmdr/status_" .. job.id .. ".txt"
 local CANCEL_FILE = "gmdr/cancel_" .. job.id .. ".txt"
+local MARKS_FILE = "gmdr/marks_" .. job.id .. ".txt"
+-- Режим перегляду: демо грає в реальному часі з потрібного місця, без запису;
+-- клавіші F9/F11/F6 позначають початок і кінець фрагмента та позначки для програми.
+local watch = job.mode == "watch"
 local state, stateTime = "menu", SysTime()
 local startTick, lastTick, frames = -1, -1, 0
 local lastWrite, message = 0, ""
@@ -101,7 +105,7 @@ end
 -- і повертаємо наприкінці. Змінна зберігається в config.cfg, тож повернути її важливо.
 local savedNoFocus = nil
 local function UnthrottleBackground()
-	if savedNoFocus ~= nil then return end
+	if savedNoFocus ~= nil or watch then return end
 	savedNoFocus = ""
 	if not GetConVarString then return end
 	local ok, v = pcall( GetConVarString, "fps_max_nofocus" )
@@ -118,6 +122,50 @@ local function Quit()
 	if not pcall( RunGameUICommand, "quit" ) then Cmd( "gmdr_quit", "quit" ) end
 end
 
+-- ---- Перегляд: клавіші-позначки і підказка поверх гри ----
+-- F10 у GMod відкриває консоль, F8 — "load quick", тож беремо вільні F9, F11 і F6.
+local MARK_KEYS = {
+	{ key = KEY_F9 or 100, kind = "start", text = "Початок фрагмента" },
+	{ key = KEY_F11 or 102, kind = "end", text = "Кінець фрагмента" },
+	{ key = KEY_F6 or 97, kind = "mark", text = "Позначка" },
+}
+local keyWasDown = {}
+local hintText, hintUntil = "", 0
+
+local function Hint( text, seconds )
+	hintText = text
+	hintUntil = SysTime() + ( seconds or 2.5 )
+end
+
+local function FormatTime( tick )
+	local sec = math.floor( tick * ( tonumber( job.tick_interval ) or ( 1 / 66 ) ) )
+	return string.format( "%d:%02d", math.floor( sec / 60 ), sec % 60 )
+end
+
+local function PollMarkKeys()
+	if not input or not input.IsKeyDown then return end
+	if gui.IsGameUIVisible() then return end   -- у меню гри клавіші не рахуються
+	for _, m in ipairs( MARK_KEYS ) do
+		local ok, down = pcall( input.IsKeyDown, m.key )
+		down = ok and down or false
+		if down and not keyWasDown[ m.key ] then
+			local tick = engine.GetDemoPlaybackTick()
+			local line = m.kind .. " " .. tick .. "\n"
+			if file.Append then file.Append( MARKS_FILE, line )
+			else file.Write( MARKS_FILE, ( file.Read( MARKS_FILE, "DATA" ) or "" ) .. line ) end
+			MsgN( "[GMDR] ", m.text, ": тік ", tick )
+			Hint( m.text .. ": " .. FormatTime( tick ) .. " (тік " .. tick .. ")" )
+		end
+		keyWasDown[ m.key ] = down
+	end
+end
+
+local function DrawHint()
+	if SysTime() > hintUntil or not draw or not draw.SimpleTextOutlined then return end
+	pcall( draw.SimpleTextOutlined, "GMod Demo Render — " .. hintText, "DermaLarge", ScrW() / 2, 60,
+		Color( 255, 255, 255 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color( 0, 0, 0, 200 ) )
+end
+
 file.CreateDir( "gmdr" )
 SetState( "menu" )
 
@@ -125,6 +173,11 @@ SetState( "menu" )
 -- Ховати його в DrawOverlay запізно: цей кадр уже намальовано з меню, і воно потрапляло б у
 -- відео через кадр. Think спрацьовує раніше, до малювання кадру.
 hook.Add( "Think", "GMDR_HideGameUI", function()
+	if watch then
+		-- Під час перегляду гра у фокусі: меню гри відкриває сам гравець (Esc), його не чіпаємо
+		if state == "watching" then PollMarkKeys() end
+		return
+	end
 	if ( state == "arming" or state == "recording" or ( state == "loading" and DemoVisible() ) ) and gui.IsGameUIVisible() then
 		gui.HideGameUI()
 	end
@@ -133,6 +186,7 @@ end )
 hook.Add( "DrawOverlay", "GMDR_Driver", function()
 	local now = SysTime()
 	UnthrottleBackground()
+	if watch then DrawHint() end
 
 	if state == "menu" then
 		if now - stateTime < ( tonumber( job.menu_delay ) or 3 ) then return end
@@ -172,8 +226,26 @@ hook.Add( "DrawOverlay", "GMDR_Driver", function()
 			Cmd( "gmdr_seek", "demo_gototick", tostring( seekTick ), "0", "0" )
 			return
 		end
+		if watch then
+			SetState( "watching" )
+			Hint( "F9 — початок фрагмента, F11 — кінець, F6 — позначка", 8 )
+			return
+		end
 		if tick < ( tonumber( job.start_tick ) or 0 ) then return end
 		SetState( "arming" )
+		return
+	end
+
+	if state == "watching" then
+		Status()
+		if file.Exists( CANCEL_FILE, "DATA" ) then
+			SetState( "quit", "перегляд закрито з програми" )
+			Quit()
+			return
+		end
+		if not engine.IsPlayingDemo() then
+			SetState( "done", "демо закінчилось" )
+		end
 		return
 	end
 

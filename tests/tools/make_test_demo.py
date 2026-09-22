@@ -10,6 +10,9 @@ make_test_demo.py — генерує СИНТЕТИЧНИЙ .dem файл у ф�
 
 Використання:  python3 make_test_demo.py out.dem truth.json [--pe-bits 24] [--compress-userinfo] [--legacy] [--gmod2026]
 
+Чат: user message SayText (тип 3), TextMsg (тип 4, у чат) і ігрові події
+(svc_GameEventList + player_connect_client / player_disconnect / player_say).
+
 --gmod2026: формат серверів GMod 2026 року (білд 10000+): svc_ServerInfo має 16 біт
 у кінці, а svc_CreateStringTable передає розмір таблиці як log2 у 5 бітах.
 Потрібен ffmpeg з libopus (для кодування тестового голосу).
@@ -78,6 +81,58 @@ class BitWriter:
         if self.nacc:
             out.append(self.acc & 0xFF)
         return bytes(out)
+
+
+# Ігрові події, як у справжньому GMod (номер, назва, поля: 1 рядок, 4 short, 5 byte, 6 bool)
+GAME_EVENTS = [
+    (8, 'player_connect_client', [('name', 1), ('index', 5), ('userid', 4), ('networkid', 1), ('bot', 4)]),
+    (10, 'player_disconnect', [('userid', 4), ('reason', 1), ('name', 1), ('networkid', 1), ('bot', 4)]),
+    (12, 'player_say', [('userid', 4), ('text', 1), ('teamonly', 6)]),
+    (29, 'player_spawn', [('userid', 4)]),
+]
+
+
+def game_event_list(w):
+    body = BitWriter()
+    for eid, name, keys in GAME_EVENTS:
+        body.bits(eid, 9); body.string(name)
+        for k, t in keys:
+            body.bits(t, 3); body.string(k)
+        body.bits(0, 3)
+    msg_type(w, 30); w.bits(len(GAME_EVENTS), 9); w.bits(body.num_bits(), 20)
+    copy_bits(w, body)
+
+
+def game_event(w, name, values):
+    eid, _, keys = next(e for e in GAME_EVENTS if e[1] == name)
+    body = BitWriter()
+    body.bits(eid, 9)
+    for k, t in keys:
+        v = values[k]
+        if t == 1: body.string(v)
+        elif t == 4: body.word(v & 0xFFFF)
+        elif t == 5: body.byte(v)
+        elif t == 6: body.bit(v)
+    msg_type(w, 25); w.bits(body.num_bits(), 11)
+    copy_bits(w, body)
+
+
+def user_message(w, um_type, payload):
+    msg_type(w, 23); w.byte(um_type); w.bits(len(payload) * 8, 11); w.raw(payload)
+
+
+def say_text(entity, text):
+    return bytes([entity]) + text.encode('utf-8') + b'\x00' + b'\x01\x00\x00'
+
+
+def text_msg(dest, text):
+    return bytes([dest]) + text.encode('utf-8') + b'\x00' * 5
+
+
+def copy_bits(w, src):
+    data = src.getvalue()
+    for i in range(src.num_bits()):
+        w.bit((data[i >> 3] >> (i & 7)) & 1)
 
 
 def q_log2(v):
@@ -339,6 +394,7 @@ def main():
         ub = uw.getvalue()
         for i in range(uw.num_bits()):
             w.bit((ub[i >> 3] >> (i & 7)) & 1)
+    game_event_list(w)                                                    # svc_GameEventList
     msg_type(w, 14); w.string('steam'); w.byte(5)                        # svc_VoiceInit
     msg_type(w, 18); w.bits(1, EDICT_BITS)                                # svc_SetView
     msg_type(w, 6); w.byte(6); w.long(1)                                   # net_SignonState
@@ -366,10 +422,10 @@ def main():
             msg_type(w, 27); w.byte(rnd.randint(1, 5)); w.varint32(n); w.random_bits(n, rnd)
         if tick % 7 == 0:
             n = rnd.randint(8, 800)
-            msg_type(w, 23); w.byte(rnd.randint(0, 40)); w.bits(n, 11); w.random_bits(n, rnd)
+            msg_type(w, 23); w.byte(rnd.randint(6, 40)); w.bits(n, 11); w.random_bits(n, rnd)
         if tick % 11 == 0:
             n = rnd.randint(8, 600)
-            msg_type(w, 25); w.bits(n, 11); w.random_bits(n, rnd)
+            msg_type(w, 25); w.bits(n + 9, 11); w.bits(500, 9); w.random_bits(n, rnd)   # невідома подія
         if tick % 13 == 0:
             n = rnd.randint(8, 500)
             msg_type(w, 17); w.bit(0); w.byte(2); w.bits(n, 16); w.random_bits(n, rnd)
@@ -398,6 +454,24 @@ def main():
             ub = upd.getvalue()
             for i in range(upd.num_bits()):
                 w.bit((ub[i >> 3] >> (i & 7)) & 1)
+        # Чат і події
+        if tick == 100:
+            user_message(w, 3, say_text(2, 'Привіт усім'))
+            game_event(w, 'player_say', {'userid': 3, 'text': 'Привіт усім', 'teamonly': 0})
+        if tick == 200:
+            user_message(w, 3, say_text(1, 'gg 100%'))
+        if tick == 330:
+            game_event(w, 'player_connect_client', {'name': late_player[1], 'index': late_player[0],
+                                                    'userid': late_player[2], 'networkid': guid(late_player[3]), 'bot': 0})
+            game_event(w, 'player_spawn', {'userid': late_player[2]})
+        if tick == 400:
+            user_message(w, 4, text_msg(3, 'Server restart in 5 minutes\n'))
+            user_message(w, 4, text_msg(4, 'Noclip Speed: 600 ups'))    # у центр екрана, не в чат
+        if tick == 600:
+            game_event(w, 'player_disconnect', {'userid': 3, 'reason': 'Disconnect by user.', 'name': 'Friend',
+                                                'networkid': guid(players[1][3]), 'bot': 0})
+        if tick == 650:
+            user_message(w, 3, say_text(late_player[0] + 1, 'bye'))
         for slot, vp in voice_by_tick.get(tick, []):
             msg_type(w, 15); w.byte(slot); w.byte(0); w.word(len(vp) * 8); w.raw(vp)
         packet(2, tick, w.getvalue())
@@ -422,7 +496,9 @@ def main():
     open(out_path, 'wb').write(bytes(header) + bytes(demo))
     truth = {'tick_interval': TICK_INTERVAL, 'total_ticks': total_ticks, 'speech': truth_speech,
              'players': [{'slot': p[0], 'name': p[1], 'steamid64': STEAM_BASE + p[3]} for p in players + [late_player]],
-             'pe_bits': pe_bits}
+             'pe_bits': pe_bits,
+             'chat': [{'tick': 100, 'who': 'Friend', 'text': 'Привіт усім'}, {'tick': 200, 'who': 'Recorder Юзер', 'text': 'gg 100%'},
+                      {'tick': 650, 'who': 'LateJoiner', 'text': 'bye'}]}
     json.dump(truth, open(truth_path, 'w'), ensure_ascii=False, indent=1)
     print(f'OK: {out_path} ({len(header) + len(demo)} байт, {total_ticks} тіків)')
 

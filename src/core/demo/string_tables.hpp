@@ -23,6 +23,7 @@ namespace gmdr::demo {
 struct PlayerInfo {
     int         slot = -1;
     std::string name;
+    int         userid = -1;   // номер гравця на сервері (у подіях player_*)
     std::string guid;          // "STEAM_0:1:12345"
     uint64_t    steamid64 = 0;
     bool        fake_player = false;

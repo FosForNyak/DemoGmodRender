@@ -70,4 +70,49 @@ std::string make_speaker_srt(const std::vector<SpeakerSubtitleSource>& speakers,
     return out;
 }
 
+std::string make_chat_srt(const std::vector<demo::DemoEvent>& events, int32_t start_tick, int32_t end_tick,
+                          double ti, double duration) {
+    constexpr double kShow = 7.0;
+    constexpr size_t kMaxLines = 4;
+    struct Line {
+        double      a, b;
+        std::string text;
+    };
+    std::vector<Line> lines;
+    std::vector<double> bounds;
+    for (const auto& e : events) {
+        if (e.tick < start_tick || e.tick >= end_tick) continue;
+        const double a = (e.tick - start_tick) * ti;
+        if (a >= duration) continue;
+        lines.push_back({a, std::min(duration, a + kShow), demo::format_event(e)});
+        bounds.push_back(a);
+        bounds.push_back(lines.back().b);
+    }
+    std::sort(bounds.begin(), bounds.end());
+    bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+    std::string out;
+    int index = 0;
+    std::string cur;
+    double cur_a = 0;
+    auto flush = [&](double t) {
+        if (!cur.empty() && t - cur_a >= 0.05)
+            out += std::format("{}\n{} --> {}\n{}\n\n", ++index, srt_timestamp(cur_a), srt_timestamp(t), cur);
+    };
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        const double t = bounds[i];
+        std::vector<const Line*> active;
+        for (const auto& l : lines)
+            if (l.a <= t && l.b > t) active.push_back(&l);
+        if (active.size() > kMaxLines) active.erase(active.begin(), active.end() - kMaxLines);
+        std::string text;
+        for (const auto* l : active) text += (text.empty() ? "" : "\n") + l->text;
+        if (text == cur) continue;
+        flush(t);
+        cur = text;
+        cur_a = t;
+    }
+    if (!bounds.empty()) flush(bounds.back());
+    return out;
+}
+
 } // namespace gmdr::render

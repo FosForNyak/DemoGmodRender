@@ -83,6 +83,9 @@ struct RenderSettings {
     bool        faststart = true;
     bool        crash_safe = true;        // MP4/MOV фрагментами під час рендеру (файл вціліє при збої)
     bool        subtitles_srt = false;    // субтитри "хто говорить" (.srt поруч із відео)
+    bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
+    bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
+    std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"
     double      target_size_mb = 0;       // цільовий розмір файлу в МБ (напр. для Discord), 0 — за якістю
     int         threads = 0;
     bool        keep_temp_files = false;

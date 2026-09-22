@@ -135,7 +135,12 @@ int64_t Muxer::bytes_written() const {
     return avio_tell(fmt_ctx_->pb);
 }
 
-bool remux_file(const std::string& path, bool faststart, std::string* error) {
+bool container_supports_chapters(const std::string& path) {
+    std::string ext = to_lower(path_to_utf8(path_from_utf8(path).extension()));
+    return ext == ".mp4" || ext == ".m4v" || ext == ".mov" || ext == ".mkv" || ext == ".webm";
+}
+
+bool remux_file(const std::string& path, bool faststart, std::string* error, const std::vector<ChapterMark>* chapters) {
     // Пишемо поруч у тимчасовий файл, потім замінюємо оригінал
     const std::string tmp = path + ".remux" + path_to_utf8(path_from_utf8(path).extension());
     AVFormatContext* in = nullptr;
@@ -182,6 +187,33 @@ bool remux_file(const std::string& path, bool faststart, std::string* error) {
         map[i] = os->index;
     }
     av_dict_copy(&out->metadata, in->metadata, 0);
+    // Розділи: нові або ті, що вже були у файлі. Пам'ять звільнить avformat_free_context.
+    std::vector<ChapterMark> copied;
+    if (!chapters) {
+        for (unsigned i = 0; i < in->nb_chapters; ++i) {
+            const AVChapter* c = in->chapters[i];
+            const AVDictionaryEntry* t = av_dict_get(c->metadata, "title", nullptr, 0);
+            copied.push_back({c->start * av_q2d(c->time_base), c->end * av_q2d(c->time_base), t ? t->value : ""});
+        }
+        chapters = &copied;
+    }
+    if (!chapters->empty()) {
+        out->chapters = static_cast<AVChapter**>(av_calloc(chapters->size(), sizeof(AVChapter*)));
+        if (!out->chapters) {
+            if (error) *error = "недостатньо пам'яті";
+            return false;
+        }
+        for (const auto& c : *chapters) {
+            auto* ch = static_cast<AVChapter*>(av_mallocz(sizeof(AVChapter)));
+            if (!ch) break;
+            ch->id = static_cast<int64_t>(out->nb_chapters) + 1;
+            ch->time_base = AVRational{1, 1000};
+            ch->start = std::llround(c.start * 1000.0);
+            ch->end = std::max(ch->start + 1, static_cast<int64_t>(std::llround(c.end * 1000.0)));
+            av_dict_set(&ch->metadata, "title", c.title.c_str(), 0);
+            out->chapters[out->nb_chapters++] = ch;
+        }
+    }
     if ((r = avio_open(&out->pb, tmp.c_str(), AVIO_FLAG_WRITE)) < 0) {
         if (error) *error = "не вдалося створити тимчасовий файл: " + av_error_string(r);
         return false;
@@ -239,6 +271,7 @@ bool probe_media_file(const std::string& path, MediaFileInfo& out, std::string* 
     }
     InputCtxPtr guard(in);
     avformat_find_stream_info(in, nullptr);
+    out.chapters = static_cast<int>(in->nb_chapters);
     for (unsigned i = 0; i < in->nb_streams; ++i) {
         const AVStream* st = in->streams[i];
         double dur = st->duration > 0 ? st->duration * av_q2d(st->time_base) : 0;

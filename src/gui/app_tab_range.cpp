@@ -47,8 +47,23 @@ void App::draw_tab_range() {
         changed = true;
     }
     ImGui::SameLine();
-    ImGui::TextColored(kColDim, "   Шкала: протягніть мишею — вибрати фрагмент, коліщатко — масштаб, правою — зсунути");
+    ImGui::TextColored(kColDim, "   Шкала: протягніть — фрагмент, Ctrl+клік — позначка, правий клік — меню (?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Протягніть лівою кнопкою — вибрати фрагмент\n"
+                          "Коліщатко — масштаб, протягніть правою — зсунути, подвійний клік — уся шкала\n"
+                          "Ctrl+клік — позначка (стане розділом у відео)\n"
+                          "Правий клік — меню: позначка, початок/кінець фрагмента, перегляд у грі\n"
+                          "Під смугою голосів — чат (світлі риски), входи (зелені) і виходи (червоні); наведіть, щоб прочитати");
     draw_timeline(0);
+    ImGui::BeginDisabled(job_running());
+    if (ImGui::Button("Переглянути в грі")) start_watch(whole_demo_ ? 0 : std::max(0, s_.start_tick));
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Запустити гру і програти демо з початку фрагмента (у реальному часі, зі звуком).\n"
+                          "У грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка. Вони одразу з'являться тут.\n"
+                          "Коли надивитеся — просто закрийте гру.");
+    ImGui::SameLine();
+    ImGui::TextColored(kColDim, "у грі: F9 — початок, F11 — кінець фрагмента, F6 — позначка");
     ImGui::BeginDisabled(whole_demo_);
     float start_s = static_cast<float>(std::max(0, s_.start_tick) * ti);
     float end_s = static_cast<float>((s_.end_tick > 0 ? s_.end_tick : last) * ti);
@@ -130,6 +145,7 @@ void App::draw_tab_range() {
                        "До далекого фрагмента гра швидко перемотає демо (demo_gototick) і почне запис "
                        "за кілька секунд до нього, тож чекати, поки програється початок, не доведеться.");
     if (changed) mark_dirty();
+    draw_markers_list();
 }
 
 void App::rebuild_timeline() {
@@ -182,8 +198,9 @@ void App::draw_timeline(float) {
     const int max_lanes = 8;
     const int lanes = std::min<int>(static_cast<int>(timeline_.size()), max_lanes);
     const float lane_h = fs * 0.95f, act_h = fs * 0.75f, axis_h = fs * 1.3f;
+    const float ev_h = analysis_->events.empty() ? 0.0f : fs * 0.6f;   // смуга чату й подій
     const float W = std::max(50.0f, ImGui::GetContentRegionAvail().x);
-    const float body_h = act_h + lanes * lane_h + (lanes == 0 ? fs * 1.2f : 0.0f);
+    const float body_h = act_h + ev_h + lanes * lane_h + (lanes == 0 ? fs * 1.2f : 0.0f);
     const float H = body_h + axis_h;
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##timeline", ImVec2(W, H), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
@@ -214,8 +231,43 @@ void App::draw_timeline(float) {
         view_t0_ = 0;
         view_t1_ = static_cast<float>(dur);
     }
+    // Позначка під курсором (±4 px)
+    int hovered_marker = -1;
+    if (hovered)
+        for (size_t i = 0; i < markers_.size(); ++i)
+            if (std::abs(t2x(markers_[i].tick * ti) - io.MousePos.x) <= 4.0f) hovered_marker = static_cast<int>(i);
+    // Ctrl+клік — позначка; правий клік без протягування — меню
+    if (hovered && io.KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        add_marker_at(static_cast<int32_t>(std::llround(std::clamp(x2t(io.MousePos.x), 0.0, dur) / ti)), {});
+    } else if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right) && io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < 9.0f) {
+        tl_ctx_time_ = static_cast<float>(std::clamp(x2t(io.MousePos.x), 0.0, dur));
+        ImGui::OpenPopup("##tlctx");
+    }
+    if (ImGui::BeginPopup("##tlctx")) {
+        const int32_t tick = static_cast<int32_t>(std::llround(tl_ctx_time_ / ti));
+        ImGui::TextColored(kColDim, "%s (тік %d)", format_timecode(tl_ctx_time_).c_str(), tick);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Додати позначку тут")) add_marker_at(tick, {});
+        ImGui::BeginDisabled(job_running());
+        if (ImGui::MenuItem("Почати фрагмент тут")) set_fragment_start(tick);
+        if (ImGui::MenuItem("Закінчити фрагмент тут")) set_fragment_end(tick);
+        if (ImGui::MenuItem("Переглянути в грі звідси")) start_watch(tick);
+        ImGui::EndDisabled();
+        // Найближча позначка (у межах кількох пікселів) — видалити
+        for (size_t i = 0; i < markers_.size(); ++i) {
+            if (std::abs(t2x(markers_[i].tick * ti) - t2x(tl_ctx_time_)) > 4.0f) continue;
+            ImGui::Separator();
+            if (ImGui::MenuItem(std::format("Видалити позначку «{}»", markers_[i].title).c_str())) {
+                auto m = markers_;
+                m.erase(m.begin() + static_cast<std::ptrdiff_t>(i));
+                set_markers(std::move(m));
+            }
+            break;
+        }
+        ImGui::EndPopup();
+    }
     if (!job_running()) {
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !io.KeyCtrl) {
             tl_selecting_ = true;
             tl_sel_from_ = static_cast<float>(std::clamp(x2t(io.MousePos.x), 0.0, dur));
         }
@@ -253,6 +305,21 @@ void App::draw_timeline(float) {
             dl->AddRectFilled(ImVec2(p0.x + x, p0.y + 2), ImVec2(p0.x + x + 1, p0.y + act_h - 2), col);
         }
     }
+    // Смуга чату й подій: чат — світлі риски, сервер — жовті, входи — зелені, виходи — червоні
+    const float ev_y = p0.y + act_h;
+    if (ev_h > 0) {
+        dl->AddRectFilled(ImVec2(p0.x, ev_y), ImVec2(p0.x + W, ev_y + ev_h), IM_COL32(255, 255, 255, 12));
+        for (const auto& e : analysis_->events) {
+            const double t = e.tick * ti;
+            if (t < view_t0_ || t > view_t1_) continue;
+            const float x = std::floor(t2x(t));
+            const ImU32 col = e.kind == demo::DemoEventKind::Chat     ? IM_COL32(205, 210, 220, 190)
+                              : e.kind == demo::DemoEventKind::Join   ? IM_COL32(110, 215, 125, 230)
+                              : e.kind == demo::DemoEventKind::Leave  ? IM_COL32(240, 110, 100, 230)
+                                                                      : IM_COL32(240, 200, 100, 220);
+            dl->AddRectFilled(ImVec2(x, ev_y + 2), ImVec2(x + 1.5f, ev_y + ev_h - 2), col);
+        }
+    }
     // Доріжки гравців
     static const ImU32 palette[] = {IM_COL32(90, 170, 255, 230), IM_COL32(120, 220, 130, 230), IM_COL32(250, 190, 80, 230),
                                     IM_COL32(230, 110, 200, 230), IM_COL32(150, 130, 250, 230), IM_COL32(90, 220, 220, 230),
@@ -261,7 +328,7 @@ void App::draw_timeline(float) {
     const auto kv = parse_key_values(s_.voice_volumes);
     for (int i = 0; i < lanes; ++i) {
         const auto& lane = timeline_[static_cast<size_t>(i)];
-        const float y = p0.y + act_h + i * lane_h;
+        const float y = p0.y + act_h + ev_h + i * lane_h;
         if (i % 2 == 0) dl->AddRectFilled(ImVec2(p0.x, y), ImVec2(p0.x + W, y + lane_h), IM_COL32(255, 255, 255, 8));
         bool muted = false;
         for (const auto& [k, v] : kv)
@@ -278,7 +345,7 @@ void App::draw_timeline(float) {
     }
     if (lanes == 0) {
         const char* msg = "Голосу в демо немає — шкала показує лише фрагмент";
-        dl->AddText(ImVec2(p0.x + 6, p0.y + act_h + fs * 0.1f), IM_COL32(150, 155, 165, 255), msg);
+        dl->AddText(ImVec2(p0.x + 6, p0.y + act_h + ev_h + fs * 0.1f), IM_COL32(150, 155, 165, 255), msg);
     }
     // Вибраний фрагмент
     const double fa = std::max(0, s_.start_tick) * ti;
@@ -288,6 +355,15 @@ void App::draw_timeline(float) {
         dl->AddRectFilled(ImVec2(std::max(p0.x, xa), p0.y), ImVec2(std::min(p0.x + W, xb), p0.y + body_h), IM_COL32(80, 140, 255, 45));
         dl->AddLine(ImVec2(xa, p0.y), ImVec2(xa, p0.y + body_h), IM_COL32(120, 180, 255, 255), 2.0f);
         dl->AddLine(ImVec2(xb, p0.y), ImVec2(xb, p0.y + body_h), IM_COL32(120, 180, 255, 255), 2.0f);
+    }
+    // Позначки: жовта лінія з прапорцем
+    for (size_t i = 0; i < markers_.size(); ++i) {
+        const double t = markers_[i].tick * ti;
+        if (t < view_t0_ || t > view_t1_) continue;
+        const float x = t2x(t);
+        const ImU32 col = static_cast<int>(i) == hovered_marker ? IM_COL32(255, 235, 120, 255) : IM_COL32(255, 205, 60, 220);
+        dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p0.y + body_h), col, 1.5f);
+        dl->AddTriangleFilled(ImVec2(x, p0.y), ImVec2(x + fs * 0.55f, p0.y + fs * 0.28f), ImVec2(x, p0.y + fs * 0.56f), col);
     }
     // Вісь часу з "круглими" поділками
     static const double steps[] = {1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400};
@@ -316,8 +392,22 @@ void App::draw_timeline(float) {
                     who += (who.empty() ? "" : ", ") + lane.name;
                     break;
                 }
-        ImGui::SetTooltip("%s (тік %d)%s%s", format_timecode(t).c_str(), static_cast<int>(t / ti), who.empty() ? "" : "\nГоворить: ",
-                          who.c_str());
+        std::string extra;
+        if (hovered_marker >= 0) extra += "\nПозначка: " + markers_[static_cast<size_t>(hovered_marker)].title;
+        // Чат і події біля курсора (±4 px)
+        if (ev_h > 0) {
+            const double tol = 4.0 / W * (view_t1_ - view_t0_);
+            int shown = 0, more = 0;
+            for (const auto& e : analysis_->events) {
+                const double te = e.tick * ti;
+                if (te < t - tol || te > t + tol) continue;
+                if (shown++ < 6) extra += "\n" + format_duration(te).substr(0, format_duration(te).find('.')) + "  " + demo::format_event(e);
+                else ++more;
+            }
+            if (more > 0) extra += std::format("\n… і ще {}", more);
+        }
+        ImGui::SetTooltip("%s (тік %d)%s%s%s", format_timecode(t).c_str(), static_cast<int>(t / ti), who.empty() ? "" : "\nГоворить: ",
+                          who.c_str(), extra.c_str());
     }
     dl->PopClipRect();
     if (static_cast<int>(timeline_.size()) > lanes)

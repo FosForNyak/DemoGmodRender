@@ -7,6 +7,7 @@
 //    app_tab_audio.cpp  — вкладка «Звук і голос»
 //    app_tab_game.cpp   — вкладка «Гра»
 //    app_tab_range.cpp  — вкладка «Фрагмент» і часова шкала голосів
+//    app_tab_chat.cpp   — вкладка «Чат», позначки, перегляд демо в грі
 //    app_panels.cpp     — інформація про демо, голоси, прев'ю, прогрес, журнал
 // =============================================================================
 #pragma once
@@ -25,6 +26,7 @@
 #include "core/game/gmod_install.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/render/jobs.hpp"
+#include "core/render/markers.hpp"
 #include "core/render/settings.hpp"
 #include "core/util/log.hpp"
 
@@ -68,6 +70,8 @@ private:
     void draw_tab_audio();
     void draw_tab_game();
     void draw_tab_range();
+    void draw_tab_chat();
+    void draw_markers_list();
     void draw_timeline(float height);
     void draw_info_panel();
     void draw_voice_table();
@@ -97,6 +101,16 @@ private:
     std::string best_gpu_codec(const char* family) const;   // "hevc" -> hevc_nvenc/amf/qsv, якщо працює
     double fragment_seconds() const;
     void rebuild_timeline();
+    // Позначки поточного демо і фрагмент
+    void load_markers_for_demo();
+    void set_markers(std::vector<render::Marker> m);
+    void add_marker_at(int32_t tick, const std::string& title);
+    void set_fragment_start(int32_t tick);
+    void set_fragment_end(int32_t tick);
+    void focus_timeline(double seconds);
+    // Перегляд демо в грі (клавіші F9/F11/F6 у грі -> фрагмент і позначки тут)
+    void start_watch(int32_t tick);
+    void apply_watch_marks();
     void update_taskbar();
 
     // ---- стан ----
@@ -144,6 +158,13 @@ private:
     float                                           view_t0_ = 0, view_t1_ = 0;   // видимий відрізок, с
     bool                                            tl_selecting_ = false;
     float                                           tl_sel_from_ = 0;
+    float                                           tl_ctx_time_ = 0;   // час під курсором для контекстного меню
+    std::vector<render::Marker>                     markers_;
+
+    // Вкладка «Чат»
+    std::string chat_search_;
+    bool        chat_show_chat_ = true, chat_show_server_ = true, chat_show_joins_ = true, chat_only_range_ = false;
+    int         chat_selected_ = -1;
 
     // Попапи
     std::string popup_title_, popup_text_, popup_result_;

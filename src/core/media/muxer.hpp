@@ -51,9 +51,19 @@ private:
     mutable std::mutex        mutex_;
 };
 
+struct ChapterMark {
+    double      start = 0;   // с
+    double      end = 0;
+    std::string title;
+};
+// Чи вміє контейнер (за розширенням) зберігати розділи: mp4/m4v/mov/mkv/webm.
+bool container_supports_chapters(const std::string& path_utf8);
+
 // Переупакувати файл (без перекодування) у звичайний MP4/MOV з індексом на
 // початку — напр. фрагментований MP4 після рендеру. Результат замінює вхідний файл.
-bool remux_file(const std::string& path_utf8, bool faststart, std::string* error);
+// chapters: записати ці розділи (інакше — скопіювати наявні з вхідного файлу).
+bool remux_file(const std::string& path_utf8, bool faststart, std::string* error,
+                const std::vector<ChapterMark>* chapters = nullptr);
 
 // Короткі відомості про готовий файл (для перевірки результату).
 struct MediaFileInfo {
@@ -61,6 +71,7 @@ struct MediaFileInfo {
     int64_t video_frames = 0;   // 0 — невідомо
     double  audio_seconds = 0;
     int     audio_streams = 0;
+    int     chapters = 0;
     bool    has_video = false;
 };
 bool probe_media_file(const std::string& path_utf8, MediaFileInfo& out, std::string* error);

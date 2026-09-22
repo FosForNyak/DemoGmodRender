@@ -90,6 +90,17 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
     BitReader br(data, size);
     const bool want_voice = h && h->wants_voice();
     const bool want_tables = h && h->wants_string_tables();
+    const bool want_events = h && h->wants_events();
+    // Сирі біти повідомлення (або пропуск, якщо обробнику вони не потрібні)
+    auto raw = [&](int t, uint32_t bits, void (NetHandler::*fn)(const RawBitsMsg&)) {
+        if (!want_events || bits > br.bits_left()) return skip_block(br, bits);
+        RawBitsMsg m;
+        m.type = t;
+        m.data_bits = bits;
+        m.data = br.read_bits_to_bytes(bits);
+        (h->*fn)(m);
+        return !br.overflowed();
+    };
 
     auto fail = [&](int type, const std::string& why) {
         res.ok = false;
@@ -306,9 +317,9 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             break;
         }
         case svc_UserMessage: {
-            br.read_byte();   // тип user message
+            const int um = br.read_byte();   // тип user message
             const uint32_t bits = br.read_ubits(kMaxUserMessageBits);
-            skip_block(br, bits);
+            raw(um, bits, &NetHandler::on_user_message);
             break;
         }
         case svc_EntityMessage: {
@@ -320,7 +331,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
         }
         case svc_GameEvent: {
             const uint32_t bits = br.read_ubits(11);
-            skip_block(br, bits);
+            raw(0, bits, &NetHandler::on_game_event);
             break;
         }
         case svc_PacketEntities: {
@@ -351,9 +362,9 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             break;
         }
         case svc_GameEventList: {
-            br.read_ubits(9);
+            const int num = static_cast<int>(br.read_ubits(9));
             const uint32_t bits = br.read_ubits(20);
-            skip_block(br, bits);
+            raw(num, bits, &NetHandler::on_game_event_list);
             break;
         }
         case svc_GetCvarValue:
@@ -369,7 +380,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
         case svc_GMod_ServerToClient: {
             const uint32_t bits = br.read_ubits(20);
             if (bits > br.bits_left()) return fail(type, "svc_GMod_ServerToClient: довжина за межами пакета");
-            skip_block(br, bits);
+            raw(0, bits, &NetHandler::on_gmod_net);
             break;
         }
         default:

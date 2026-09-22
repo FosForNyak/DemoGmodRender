@@ -43,6 +43,10 @@ std::optional<PlayerInfo> parse_player_info(const std::vector<uint8_t>& d) {
     size_t n = 0;
     while (n < d.size() && n < name_max && d[n] != 0) ++n;
     pi.name.assign(reinterpret_cast<const char*>(d.data()), n);
+    if (d.size() >= name_max + 4) {   // одразу після імені — userID (int32, little-endian)
+        pi.userid = static_cast<int>(d[name_max] | (d[name_max + 1] << 8) | (d[name_max + 2] << 16) |
+                                     (static_cast<uint32_t>(d[name_max + 3]) << 24));
+    }
     // GUID шукаємо за шаблоном "STEAM_" або "BOT".
     for (size_t i = 0; i + 6 < d.size(); ++i) {
         if (std::memcmp(d.data() + i, "STEAM_", 6) == 0) {

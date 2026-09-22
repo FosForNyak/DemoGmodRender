@@ -61,6 +61,19 @@ jobs:
           & build\gmdr-cli.exe render build\td\test24.dem --test-run --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
               --size 640x360 --fps 30 --codec libx264 --menu-delay 1
           if ($LASTEXITCODE -ne 0) { throw "тестовий прогін не вдався" }
+          # Розділи з позначок і субтитри чату (MKV)
+          $mkv = "$PWD\build\out_chapters.mkv"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $mkv --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --markers "2=Вступ; 4.5=Бій" --chat-srt
+          if ($LASTEXITCODE -ne 0) { throw "рендер з позначками не вдався" }
+          $chapters = & third_party\ffmpeg\bin\ffprobe.exe -v error -show_chapters -of compact $mkv
+          $chapters
+          if (@($chapters).Count -ne 3) { throw "очікувалось 3 розділи" }
+          if (-not (Select-String -Path ($mkv -replace '\.mkv$', '.srt') -Pattern "Friend: " -Quiet)) { throw "немає чату в субтитрах" }
+          # Перегляд у грі: імітатор сам "натискає" F9/F6/F11
+          $watch = & build\gmdr-cli.exe watch build\td\test24.dem --from 2 --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" --menu-delay 1
+          if ($LASTEXITCODE -ne 0) { throw "перегляд не вдався" }
+          if (-not ($watch -match "--start-tick \d+ --end-tick \d+")) { $watch; throw "позначки з гри не дійшли" }
 
       - uses: actions/upload-artifact@v4
         with:

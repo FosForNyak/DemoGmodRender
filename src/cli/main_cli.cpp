@@ -15,6 +15,7 @@
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
 #include "core/render/jobs.hpp"
+#include "core/render/markers.hpp"
 #include "core/render/settings.hpp"
 #include "core/util/crash_dump.hpp"
 #include "core/util/file_util.hpp"
@@ -60,10 +61,12 @@ static void print_usage() {
     std::puts(R"(GMod Demo Render — рендер демо Garry's Mod у відео (консольна версія)
 
 Використання:
-  gmdr-cli info <demo.dem> [--json]            інформація про демо і голоси
+  gmdr-cli info <demo.dem> [--json] [--chat]   інформація про демо і голоси (--chat — увесь чат)
   gmdr-cli voice <demo.dem> -o <папка>         зберегти голоси гравців у WAV
   gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
   gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
+  gmdr-cli watch <demo.dem> [--from ЧАС]       переглянути демо в грі з цього місця; клавіші в грі:
+                                               F9 — початок фрагмента, F11 — кінець, F6 — позначка
   gmdr-cli encode <папка_кадрів> [параметри]   закодувати готові кадри startmovie (TGA/JPG + WAV)
   gmdr-cli encoders [--test]                   список кодеків (і перевірка GPU-кодеків)
   gmdr-cli driver install|uninstall|status     драйвер у меню GMod
@@ -90,6 +93,9 @@ static void print_usage() {
   --voice-volume 1.0  --voice-delay СЕКУНД  --separate-tracks  --engine-voice
   --player-volume "steam:7656...=1.5; slot:3=0"   гучність окремих гравців (0 — вимкнути)
   --srt                  субтитри «хто говорить» (.srt поруч із відео)
+  --chat-srt             субтитри з чатом гри (.srt; разом із --srt — .chat.srt)
+  --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
+  --no-chapters          не записувати розділи
   --mic ФАЙЛ  --mic-offset СЕКУНД  --mic-volume 1.0
 Гра:
   --game-dir ПАПКА  --game-exe ФАЙЛ  --capture tga|jpg  --jpeg-quality N
@@ -132,10 +138,11 @@ struct Cli {
 };
 
 // Прапорці без значення
-static const char* kFlags[] = {"--json", "--test", "--hide-hud", "--hide-viewmodel", "--keep-game-open", "--manual",
+static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hide-viewmodel", "--keep-game-open", "--manual",
                                "--no-audio", "--no-game-audio", "--separate-tracks", "--engine-voice", "--full-range",
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
-                               "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe"};
+                               "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
+                               "--chat-srt", "--no-chapters"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -242,7 +249,20 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--accurate-color")) s.accurate_color = true;
     if (c.has("--no-crash-safe")) s.crash_safe = false;
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");
+    if (c.has("--chat-srt")) s.chat_srt = true;
+    if (c.has("--no-chapters")) s.chapters = false;
     if (a) {
+        if (c.has("--markers")) {
+            std::vector<render::Marker> list;
+            for (const auto& item : split(c.get("--markers"), ';')) {
+                const size_t eq = item.find('=');
+                auto t = parse_timecode(trim(item.substr(0, eq)));
+                if (!t) { err = std::format("--markers: не розумію час у «{}»", trim(item)); return false; }
+                render::add_marker(list, {static_cast<int32_t>(std::llround(*t / a->tick_interval)),
+                                          eq == std::string::npos ? std::string() : trim(item.substr(eq + 1))});
+            }
+            s.markers = render::format_markers(list);
+        }
         // Час: секунди або "год:хв:сек" / "хв:сек"
         if (c.has("--start")) {
             auto t = parse_timecode(c.get("--start"));
@@ -347,6 +367,19 @@ static int cmd_info(const Cli& c) {
             sp.push(o);
         }
         j.set("speakers", sp);
+        json::Value ev = json::Value::array();
+        for (const auto& e : a.events) {
+            json::Value o = json::Value::object();
+            o.set("tick", json::Value::number(e.tick));
+            o.set("time", json::Value::number(a.tick_to_seconds(e.tick)));
+            o.set("kind", json::Value::string(demo::event_kind_name(e.kind)));
+            o.set("slot", json::Value::number(e.slot));
+            o.set("who", json::Value::string(e.who));
+            o.set("text", json::Value::string(e.text));
+            if (!e.channel.empty()) o.set("channel", json::Value::string(e.channel));
+            ev.push(o);
+        }
+        j.set("events", ev);
         std::printf("%s\n", j.dump().c_str());
         return 0;
     }
@@ -368,7 +401,65 @@ static int cmd_info(const Cli& c) {
                     s.is_local ? "<- це ви" : "");
     if (v.speakers.empty()) std::printf("  (немає)\n");
     for (const auto& w : v.warnings) std::printf("  ! %s\n", w.c_str());
+    std::printf("\nЧат і події: %zu повідомлень чату, %zu від сервера, %zu входів, %zu виходів\n",
+                a.count_events(demo::DemoEventKind::Chat), a.count_events(demo::DemoEventKind::Server),
+                a.count_events(demo::DemoEventKind::Join), a.count_events(demo::DemoEventKind::Leave));
+    if (c.has("--chat")) std::printf("%s", demo::format_chat_log(a.events, a.tick_interval).c_str());
     return 0;
+}
+
+static int cmd_watch(const Cli& c) {
+    if (c.positional.empty()) {
+        std::puts("Використання: gmdr-cli watch <demo.dem> [--from ЧАС] [--game-dir ПАПКА] [--game-exe ФАЙЛ] [--rtx]");
+        return 1;
+    }
+    render::RenderSettings s;
+    const fs::path cfg = app_data_dir() / "gmdr_settings.json";
+    if (fs::exists(cfg)) render::load_settings(s, path_to_utf8(cfg), nullptr);
+    std::shared_ptr<demo::DemoAnalysis> a;
+    try {
+        demo::AnalyzeOptions o;
+        o.collect_voice = false;
+        a = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(c.positional[0]), o));
+    } catch (const std::exception& e) {
+        std::printf("Помилка: %s\n", e.what());
+        return 1;
+    }
+    s.demo_path = c.positional[0];
+    std::string err;
+    if (!apply_options(c, s, a.get(), err)) {
+        std::printf("Помилка: %s\n", err.c_str());
+        return 1;
+    }
+    int32_t from = std::max(0, s.start_tick);
+    if (c.has("--from")) {
+        auto t = parse_timecode(c.get("--from"));
+        if (!t) {
+            std::puts("Неправильне значення --from (приклади: 95.5, 1:35, 1:02:03)");
+            return 1;
+        }
+        from = static_cast<int32_t>(std::llround(*t / a->tick_interval));
+    }
+    render::WatchJob job(s, a, from);
+    const int rc = run_job(job);
+    // Позначки з гри: початок/кінець — підказка для рендеру, позначки — у файл позначок демо
+    const auto marks = job.take_marks();
+    const fs::path store = app_data_dir() / "gmdr_markers.json";
+    auto saved = render::load_demo_markers(store, s.demo_path);
+    int32_t mstart = -1, mend = -1;
+    for (const auto& m : marks) {
+        const double t = m.tick * static_cast<double>(a->tick_interval);
+        std::printf("  %-8s %s (тік %d)\n", m.kind.c_str(), format_timecode(t).c_str(), m.tick);
+        if (m.kind == "start") mstart = m.tick;
+        else if (m.kind == "end") mend = m.tick;
+        else render::add_marker(saved, {m.tick, "Позначка з гри"});
+    }
+    if (!marks.empty()) render::save_demo_markers(store, s.demo_path, saved, nullptr);
+    if (mstart >= 0 || mend >= 0)
+        std::printf("Рендер цього фрагмента: gmdr-cli render \"%s\"%s%s\n", s.demo_path.c_str(),
+                    mstart >= 0 ? std::format(" --start-tick {}", mstart).c_str() : "",
+                    mend >= 0 ? std::format(" --end-tick {}", mend).c_str() : "");
+    return rc;
 }
 
 static int cmd_voice(const Cli& c) {
@@ -475,6 +566,8 @@ int main(int argc, char** argv) {
     if (c.command == "encoders") return cmd_encoders(c);
     if (c.command == "driver") return cmd_driver(c);
 
+    if (c.command == "watch") return cmd_watch(c);
+
     if (c.command == "render" || c.command == "encode") {
         if (c.positional.empty()) {
             print_usage();
@@ -504,6 +597,7 @@ int main(int argc, char** argv) {
             }
             voices = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*analysis));
             s.demo_path = demo_path;
+            s.markers = render::format_markers(render::load_demo_markers(app_data_dir() / "gmdr_markers.json", demo_path));
             std::printf("Демо: %s, %s, голосів: %zu\n", analysis->header.map_name.c_str(),
                         format_duration(analysis->duration_seconds).c_str(), voices->speakers.size());
         }

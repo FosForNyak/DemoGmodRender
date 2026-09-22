@@ -361,6 +361,8 @@ void App::poll() {
             voices_ = analyze_job_->voices();
             if (analysis_) {
                 platform_set_title("GMod Demo Render — " + path_to_utf8(path_from_utf8(s_.demo_path).filename()));
+                load_markers_for_demo();
+                chat_selected_ = -1;
                 if (s_.end_tick > analysis_->last_tick) s_.end_tick = -1;
                 if (std::getenv("GMDR_TEST_AUTOSTART")) start_render();   // лише для автотестів
             }
@@ -372,9 +374,21 @@ void App::poll() {
             analyze_job_.reset();
         }
     }
+    apply_watch_marks();
     // Рендер завершився?
     if (job_ && !job_->running() && !job_reported_) {
         job_reported_ = true;
+        if (dynamic_cast<render::WatchJob*>(job_.get())) {
+            // Перегляд у грі: без попапу, позначки вже на шкалі
+            if (job_->state() == render::JobState::Failed) {
+                popup_title_ = "Перегляд у грі: помилка";
+                popup_text_ = job_->error();
+                popup_result_.clear();
+                popup_checks_.clear();
+                open_popup_ = true;
+            }
+            return;
+        }
         const auto* render_job = dynamic_cast<render::RenderJob*>(job_.get());
         const bool test = render_job && render_job->is_test_run();
         popup_checks_.clear();
@@ -566,7 +580,7 @@ void App::draw_demo_bar() {
 }
 
 void App::draw_settings_tabs() {
-    // Для автотестів інтерфейсу: GMDR_TEST_TAB=0..3 — відкрити вкладку при старті
+    // Для автотестів інтерфейсу: GMDR_TEST_TAB=0..4 — відкрити вкладку при старті
     static int forced_tab = [] {
         const char* e = std::getenv("GMDR_TEST_TAB");
         return e ? std::atoi(e) : -1;
@@ -587,6 +601,10 @@ void App::draw_settings_tabs() {
     }
     if (ImGui::BeginTabItem("Фрагмент", nullptr, flags(3))) {
         draw_tab_range();
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Чат", nullptr, flags(4))) {
+        draw_tab_chat();
         ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
