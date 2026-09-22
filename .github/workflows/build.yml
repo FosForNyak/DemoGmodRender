@@ -111,7 +111,7 @@ jobs:
       - name: Залежності
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+          sudo apt-get install -y ninja-build clang libclang-rt-18-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libswresample-dev ffmpeg python3
 
       - name: Збірка фазера

@@ -133,7 +133,9 @@ std::string pick_folder_dialog(const std::string& title, const std::string& init
     return run_capture(cmd + " 2>/dev/null");
 }
 
-void open_path(const std::string& path) { std::system(("xdg-open " + shell_quote(path) + " >/dev/null 2>&1 &").c_str()); }
+void open_path(const std::string& path) {
+    if (std::system(("xdg-open " + shell_quote(path) + " >/dev/null 2>&1 &").c_str()) != 0) {}
+}
 void show_in_folder(const std::string& path) {
     const auto slash = path.find_last_of('/');
     open_path(slash == std::string::npos ? "." : path.substr(0, slash));

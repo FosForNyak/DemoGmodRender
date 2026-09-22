@@ -624,6 +624,28 @@ static void test_fuzz_demo(const std::filesystem::path& demo_path) {
     CHECK(parsed + rejected == 120);
 }
 
+// Лічильник "Минуло" зупиняється, коли завдання завершилося
+struct SleepJob final : render::Job {
+    std::string name() const override { return "test"; }
+    void run() override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        succeed("ok");
+    }
+};
+
+static void test_job_elapsed() {
+    std::printf("[job elapsed]\n");
+    SleepJob j;
+    j.start();
+    j.wait();
+    const double a = j.progress().elapsed;
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    const double b = j.progress().elapsed;
+    CHECK(j.state() == render::JobState::Succeeded);
+    CHECK(a >= 0.05 && a < 1.0);
+    CHECK_NEAR(a, b, 1e-9);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -688,6 +710,7 @@ int main(int argc, char** argv) {
     test_color_conversion();
     test_subtitles_and_sizes();
     test_frame_files();
+    test_job_elapsed();
     test_driver_cfg();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];

@@ -1,5 +1,5 @@
 -- ============================================================================
---  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.3
+--  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.4
 --
 --  Встановлюється програмою GMod Demo Render у garrysmod/lua/menu/.
 --  Скрипт НІЧОГО не робить, якщо немає файлу завдання data/gmdr/job.txt
@@ -120,6 +120,15 @@ end
 
 file.CreateDir( "gmdr" )
 SetState( "menu" )
+
+-- Без фокуса (гра у фоні) рушій GMod щокадру знову відкриває своє меню — як після Alt+Tab.
+-- Ховати його в DrawOverlay запізно: цей кадр уже намальовано з меню, і воно потрапляло б у
+-- відео через кадр. Think спрацьовує раніше, до малювання кадру.
+hook.Add( "Think", "GMDR_HideGameUI", function()
+	if ( state == "arming" or state == "recording" or ( state == "loading" and DemoVisible() ) ) and gui.IsGameUIVisible() then
+		gui.HideGameUI()
+	end
+end )
 
 hook.Add( "DrawOverlay", "GMDR_Driver", function()
 	local now = SysTime()

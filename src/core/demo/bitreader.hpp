@@ -109,15 +109,16 @@ public:
 
     // Скопіювати n біт у масив байтів (вирівняний до байта результат).
     std::vector<uint8_t> read_bits_to_bytes(size_t nbits) {
-        std::vector<uint8_t> out((nbits + 7) / 8, 0);
+        // Спершу перевірка меж, потім виділення: у битому файлі довжина може бути будь-якою
         if (pos_ + nbits > end_bits_) {
             overflow_ = true;
             pos_ = end_bits_;
             return {};
         }
+        std::vector<uint8_t> out((nbits + 7) / 8, 0);
         if ((pos_ & 7) == 0) {
             // швидкий шлях: вирівняні дані
-            std::memcpy(out.data(), data_ + (pos_ >> 3), nbits / 8);
+            if (nbits >= 8) std::memcpy(out.data(), data_ + (pos_ >> 3), nbits / 8);
             pos_ += (nbits / 8) * 8;
             if (nbits % 8) out[nbits / 8] = static_cast<uint8_t>(read_ubits(static_cast<int>(nbits % 8)));
             return out;

@@ -1,0 +1,6 @@
+# Кінці рядків: у репозиторії — LF, bat-файли — CRLF (cmd.exe інакше плутається)
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.ico binary
+*.png binary

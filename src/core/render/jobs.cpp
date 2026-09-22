@@ -45,6 +45,7 @@ void Job::start() {
     kill_ = false;
     state_ = JobState::Running;
     started_ = Clock::now();
+    ended_ns_ = 0;
     thread_ = std::thread([this] {
         try {
             run();
@@ -53,6 +54,7 @@ void Job::start() {
         } catch (...) {
             fail("Непередбачена помилка");
         }
+        mark_ended();
         if (state_ == JobState::Running) state_ = cancel_ ? JobState::Cancelled : JobState::Succeeded;
     });
 }
@@ -93,8 +95,16 @@ void Job::set_report(const std::string& report) {
     report_ = report;
 }
 
+// Після завершення лічильник "Минуло" зупиняється на тривалості завдання.
+void Job::mark_ended() {
+    if (ended_ns_ != 0) return;
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started_).count();
+    ended_ns_ = std::max<int64_t>(1, ns);
+}
+
 double Job::elapsed_seconds() const {
     if (state_ == JobState::Idle) return 0;
+    if (const int64_t ended = ended_ns_.load(); ended != 0) return static_cast<double>(ended) / 1e9;
     return std::chrono::duration<double>(Clock::now() - started_).count();
 }
 
@@ -114,6 +124,7 @@ void Job::fail(const std::string& message) {
         progress_.stage = "Помилка";
     }
     log_error("{}", message);
+    mark_ended();
     state_ = JobState::Failed;
 }
 
@@ -124,6 +135,7 @@ void Job::succeed(const std::string& result) {
         progress_.stage = "Готово";
         progress_.fraction = 1.0;
     }
+    mark_ended();
     state_ = JobState::Succeeded;
 }
 

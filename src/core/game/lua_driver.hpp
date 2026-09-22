@@ -27,7 +27,7 @@
 namespace gmdr::game {
 
 const char* driver_lua_source();
-constexpr const char* kDriverVersion = "1.3";
+constexpr const char* kDriverVersion = "1.4";
 
 enum class DriverState { NotInstalled, Installed, Outdated };
 DriverState driver_state(const GModInstall& g);

@@ -106,6 +106,8 @@ private:
     std::string           error_, result_, report_;
     std::thread           thread_;
     std::chrono::steady_clock::time_point started_;
+    std::atomic<int64_t>  ended_ns_{0};   // скільки тривало завдання (нс); 0 — ще триває
+    void mark_ended();
 };
 
 // ---- Аналіз демо + декодування голосу ------------------------------------------
