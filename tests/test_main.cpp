@@ -14,6 +14,7 @@
 #include "core/frames/sequence_reader.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/game/process.hpp"
+#include "core/game/rtx.hpp"
 #include "core/render/jobs.hpp"
 #include "core/render/subtitles.hpp"
 #include "core/util/file_util.hpp"
@@ -697,6 +698,53 @@ static void test_driver_cfg() {
     fs::remove_all(root.parent_path());
 }
 
+static void test_rtx_profile() {
+    std::printf("[rtx profile]\n");
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "gmdr_test_rtx" / "GarrysMod";
+    fs::remove_all(root.parent_path());
+    fs::create_directories(root / "garrysmod");
+    fs::create_directories(root / "rtx-remix" / "logs");
+    write_file_text(root / "garrysmod" / "gameinfo.txt", "GameInfo {}");
+    write_file_text(root / "hl2.exe", "");
+    auto g = game::gmod_from_dir(root);
+    CHECK(g.has_value() && g->valid());
+    if (!g) return;
+    CHECK(game::is_rtx_install(*g));
+    const fs::path backup = root.parent_path() / "rtx.conf.bak";
+
+    // 1) rtx.conf не було: після рендеру файл має зникнути
+    std::string err;
+    CHECK(game::apply_rtx_render_profile(*g, backup, &err));
+    auto conf = read_file_text(root / "rtx.conf");
+    CHECK(conf && conf->find("rtx.qualityDLSS = 5") != std::string::npos);
+    CHECK(game::restore_rtx_profile(*g, backup));
+    CHECK(!fs::exists(root / "rtx.conf") && !fs::exists(backup));
+
+    // 2) свій rtx.conf із тим самим ключем: без дублів, оригінал повертається байт у байт
+    const std::string original = "rtx.enableRaytracing = True\r\nrtx.qualityDLSS = 2\r\n";
+    write_file_text(root / "rtx.conf", original);
+    CHECK(game::apply_rtx_render_profile(*g, backup, &err));
+    CHECK(game::apply_rtx_render_profile(*g, root.parent_path() / "second.bak", &err));   // двічі — один блок
+    conf = read_file_text(root / "rtx.conf");
+    CHECK(conf && conf->find("rtx.qualityDLSS = 2") == std::string::npos);
+    CHECK(conf && conf->find("rtx.enableRaytracing = True") != std::string::npos);
+    CHECK(conf && conf->find("# GMod Demo Render") == conf->rfind("# GMod Demo Render"));
+    CHECK(conf && conf->find("rtx.qualityDLSS = 5") == conf->rfind("rtx.qualityDLSS = 5"));
+    CHECK(game::restore_rtx_profile(*g, backup));
+    CHECK(read_file_text(root / "rtx.conf").value_or("") == original);
+
+    // 3) журнал Remix: береться останній блок, лише рядки rtx.*
+    write_file_text(root / "rtx-remix" / "logs" / "remix-dxvk.log",
+                    "info:  Effective RtxOption values\ninfo:    rtx.qualityDLSS = 1\n"
+                    "info:  Effective RtxOption values\ninfo:    rtx.qualityDLSS = 5\n"
+                    "info:    rtx.graphicsPreset = 4\ninfo:  Device created\ninfo:    rtx.fake = 1\n");
+    auto eff = game::read_remix_effective_options(*g);
+    CHECK(eff.size() == 2);
+    CHECK(eff["rtx.qualityDLSS"] == "5" && eff["rtx.graphicsPreset"] == "4");
+    fs::remove_all(root.parent_path());
+}
+
 int main(int argc, char** argv) {
     set_min_log_level(LogLevel::Warn);
     add_log_sink([](LogLevel l, const std::string& s) { std::printf("  [%s] %s\n", log_level_name(l), s.c_str()); });
@@ -712,6 +760,7 @@ int main(int argc, char** argv) {
     test_frame_files();
     test_job_elapsed();
     test_driver_cfg();
+    test_rtx_profile();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

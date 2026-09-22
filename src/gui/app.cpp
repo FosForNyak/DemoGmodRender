@@ -17,6 +17,7 @@
 #include "core/util/file_util.hpp"
 #include "core/util/strings.hpp"
 #include "core/game/audio_mute.hpp"
+#include "core/game/rtx.hpp"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -614,11 +615,12 @@ void App::update_taskbar() {
 
 void App::detect_rtx_launcher() {
     rtx_dir_.clear();
-    // RTXLauncher ставить копію гри в %LOCALAPPDATA%\RTXLauncher\Game
-    const char* la = std::getenv("LOCALAPPDATA");
-    if (!la || !*la) return;
-    const fs::path dir = path_from_utf8(la) / "RTXLauncher" / "Game";
-    if (auto g = game::gmod_from_dir(dir); g && g->valid()) rtx_dir_ = path_to_utf8(g->root);
+    // Шлях до копії гри RTXLauncher пише у свій settings.xml
+    std::vector<std::string> log;
+    if (auto g = game::detect_rtx_install(&log)) {
+        rtx_dir_ = path_to_utf8(g->root);
+        for (const auto& l : log) log_debug("{}", l);
+    }
 }
 
 std::string App::best_gpu_codec(const char* family) const {

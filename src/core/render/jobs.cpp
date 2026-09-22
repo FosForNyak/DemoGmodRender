@@ -4,6 +4,7 @@
 #include "../game/audio_mute.hpp"
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
+#include "../game/rtx.hpp"
 #include "../media/muxer.hpp"
 #include "../util/file_util.hpp"
 #include "../util/log.hpp"
@@ -363,6 +364,10 @@ void recover_leftovers(const game::GModInstall& g) {
             log_warn("Знайдено залишки перерваного рендеру — відновлюю config.cfg гри");
             game::restore_config(g, bak);
         }
+        if (fs::exists(it->path() / "rtx.conf.bak", ec)) {
+            log_warn("Знайдено залишки перерваного RTX-рендеру — повертаю rtx.conf");
+            game::restore_rtx_profile(g, it->path() / "rtx.conf.bak");
+        }
         const std::string id = path_to_utf8(it->path().filename());
         game::remove_job_files(g, id);
         fs::remove_all(it->path(), ec);
@@ -511,17 +516,19 @@ void ExportVoicesJob::run() {
 // =============================== RenderJob ========================================
 namespace {
 // Кроки, які показуються в тестовому прогоні (і в журналі звичайного рендеру)
-enum CheckIndex { kCheckLaunch, kCheckDriver, kCheckDemo, kCheckFrames, kCheckAudio, kCheckEncode, kCheckCount };
+enum CheckIndex { kCheckLaunch, kCheckDriver, kCheckDemo, kCheckFrames, kCheckAudio, kCheckEncode, kCheckRtx, kCheckCount };
 const char* const kCheckNames[kCheckCount] = {"Гру запущено", "Драйвер у меню GMod відповідає",
                                               "Демо завантажилось і грає", "Кадри надходять",
-                                              "Звук гри записується", "Кодування працює"};
+                                              "Звук гри записується", "Кодування працює", "RTX у кадрі"};
 const char* const kCheckHints[kCheckCount] = {
     "Перевірте папку і версію гри на вкладці «Гра».",
     "Натисніть «Інструменти → Встановити драйвер у GMod» (GMod міг оновити menu.lua) і переконайтеся, що Steam запущено.",
     "Перевірте, що демо відкривається в самій грі (playdemo) і що у вас є карта й аддони з сервера.",
     "Гра не записує кадри: перевірте місце на диску з грою; спробуйте режим вікна «позаду інших» на вкладці «Гра».",
     "Гра не пише звук: вимкніть і ввімкніть звук у налаштуваннях GMod або вимкніть «Звук гри», щоб рендерити без нього.",
-    "Кодек не працює з цими налаштуваннями: спробуйте інший кодек або формат файлу."};
+    "Кодек не працює з цими налаштуваннями: спробуйте інший кодек або формат файлу.",
+    "Кадр чорний: Remix не малює, коли вікно гри за межами екрана. Виберіть на вкладці «Гра» вікно «Позаду інших вікон» "
+    "або «На екрані» і перевірте, що RTX-копія гри запускається з RTXLauncher."};
 } // namespace
 
 RenderJob::RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
@@ -531,6 +538,7 @@ RenderJob::RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis>
         p.checks.clear();
         for (int i = 0; i < kCheckCount; ++i) p.checks.push_back({kCheckNames[i], CheckItem::Pending, {}});
     });
+    if (!s_.rtx) set_check(kCheckRtx, CheckItem::Skipped, "без RTX");
 }
 
 bool RenderJob::can_show_game() const {
@@ -555,10 +563,23 @@ void RenderJob::set_check(int index, CheckItem::State state, const std::string& 
 bool RenderJob::prepare(std::string* error) {
     // Папка гри
     if (!s_.game_dir.empty()) gmod_ = game::gmod_from_dir(path_from_utf8(s_.game_dir));
-    else {
+    else if (!s_.rtx) {
         std::vector<std::string> log;
         gmod_ = game::detect_gmod(&log);
         for (const auto& l : log) log_debug("{}", l);
+    }
+    // RTX: потрібна копія від RTXLauncher. Якщо вказано звичайну гру — беремо RTX-копію автоматично.
+    if (s_.rtx && (!gmod_ || !game::is_rtx_install(*gmod_))) {
+        std::vector<std::string> log;
+        if (auto rtx = game::detect_rtx_install(&log)) {
+            if (gmod_) log_info("RTX: замість звичайної гри використовую копію від RTXLauncher");
+            gmod_ = rtx;
+            s_.game_exe.clear();   // exe звичайної гри тут не підходить
+            for (const auto& l : log) log_info("{}", l);
+        } else if (!gmod_) {
+            if (error) *error = "Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на вкладці «Гра».";
+            return false;
+        }
     }
     if (!gmod_ || !gmod_->valid()) {
         if (error) *error = "Не знайдено Garry's Mod. Вкажіть папку гри (…\\steamapps\\common\\GarrysMod) у налаштуваннях.";
@@ -583,6 +604,16 @@ bool RenderJob::prepare(std::string* error) {
     if (ec) {
         if (error) *error = "Не вдалося створити тимчасову папку в папці гри: " + ec.message();
         return false;
+    }
+    if (s_.rtx) {
+        if (!game::is_rtx_install(*gmod_))
+            log_warn("Увімкнено RTX, але в папці гри немає rtx.conf чи rtx-remix — це точно копія від RTXLauncher?");
+        // Налаштування Remix для офлайн-рендеру; оригінал повернеться після рендеру (і після збою)
+        std::string rerr;
+        if (game::apply_rtx_render_profile(*gmod_, tmp_dir_ / "rtx.conf.bak", &rerr))
+            log_info("rtx.conf: на час рендеру — повна роздільна здатність (DLAA), без генерації кадрів і заставки");
+        else
+            log_warn("Не вдалося змінити rtx.conf ({}) — Remix рендеритиме з вашими налаштуваннями", rerr);
     }
     const uint64_t free_space = free_disk_space(tmp_dir_);
     log_info("Вільно на диску з грою: {}", format_bytes(free_space));
@@ -672,6 +703,8 @@ void RenderJob::cleanup(bool game_closing) {
     if (!config_backup_.empty() && fs::exists(config_backup_, ec)) {
         if (!game_running) game::restore_config(*gmod_, config_backup_);
     }
+    if (!tmp_dir_.empty() && !game_running && fs::exists(tmp_dir_ / "rtx.conf.bak", ec))
+        game::restore_rtx_profile(*gmod_, tmp_dir_ / "rtx.conf.bak");
     if (!s_.keep_temp_files && !tmp_dir_.empty() && !game_running) {
         fs::remove_all(tmp_dir_, ec);
         std::error_code ec2;
@@ -769,7 +802,12 @@ void RenderJob::run() {
 
     // ---- 3. Запуск ----
     set_stage("Запуск Garry's Mod");
-    const game::WindowMode window_mode = s_.manual_mode ? game::WindowMode::Normal : game::window_mode_from_string(s_.game_window);
+    game::WindowMode window_mode = s_.manual_mode ? game::WindowMode::Normal : game::window_mode_from_string(s_.game_window);
+    if (s_.rtx && window_mode == game::WindowMode::Offscreen) {
+        // Перевірено: за межами екрана Remix віддає чорні кадри, а на моніторі (навіть позаду вікон) — з RTX
+        window_mode = game::WindowMode::Behind;
+        log_info("RTX: вікно гри буде позаду інших вікон, а не за межами екрана (інакше Remix не малює)");
+    }
     fs::path exe = s_.game_exe.empty() ? gmod_->default_exe() : path_from_utf8(s_.game_exe);
     std::vector<std::string> args;
     const std::string exe_name = to_lower(path_to_utf8(exe.filename()));
@@ -893,6 +931,7 @@ void RenderJob::run() {
     auto last_disk_check = Clock::now() - std::chrono::seconds(10);
     bool producer_done = false, cancel_sent = false, recording_seen = false, wav_warned = false;
     bool attached_after_relaunch = false, disk_low = false, disk_warned = false, window_fallback = false;
+    bool rtx_checked = false;
     int64_t last_frames = 0;
     auto last_speed_t = Clock::now();
     auto last_frame_t = Clock::now();
@@ -1117,6 +1156,26 @@ void RenderJob::run() {
                 return;
             }
             if (session.frames_encoded() > 0) set_check(kCheckEncode, CheckItem::Ok, session.video_description());
+            // RTX: чи є трасування в кадрі. Чорний кадр (лише HUD) — Remix не малює.
+            if (s_.rtx && !rtx_checked && session.video_seconds() >= 1.0) {
+                PreviewFrame pf;
+                if (preview_->get_if_newer(0, pf) && !pf.rgba.empty()) {
+                    rtx_checked = true;
+                    size_t dark = 0;
+                    const size_t n = pf.rgba.size() / 4;
+                    for (size_t i = 0; i < n; ++i) {
+                        const uint8_t* q = &pf.rgba[i * 4];
+                        if (std::max({q[0], q[1], q[2]}) < 14) ++dark;
+                    }
+                    const double share = n ? static_cast<double>(dark) / static_cast<double>(n) : 1.0;
+                    if (share > 0.9) {
+                        set_check(kCheckRtx, CheckItem::Failed, std::format("кадр на {:.0f}% чорний", share * 100));
+                        log_warn("RTX: кадр майже чорний ({:.0f}%) — схоже, Remix не малює. {}", share * 100, kCheckHints[kCheckRtx]);
+                    } else {
+                        set_check(kCheckRtx, CheckItem::Ok);
+                    }
+                }
+            }
             if (s_.game_audio && s_.audio) {
                 if (session.game_audio_opened()) set_check(kCheckAudio, CheckItem::Ok);
                 else if (!wav_warned && session.video_seconds() > std::min(5.0, kTestSeconds * 0.8)) {
@@ -1153,9 +1212,17 @@ void RenderJob::run() {
         // ---- Місце на диску: призупиняємо гру до того, як диск заповниться ----
         if (Clock::now() - last_disk_check > std::chrono::seconds(2)) {
             last_disk_check = Clock::now();
-            const uint64_t free_tmp = free_disk_space(frames_dir);
+            uint64_t free_tmp = free_disk_space(frames_dir);
             const fs::path out_dir = path_from_utf8(s_.output_path).parent_path();
-            const uint64_t free_out = free_disk_space(out_dir.empty() ? fs::path(".") : out_dir);
+            uint64_t free_out = free_disk_space(out_dir.empty() ? fs::path(".") : out_dir);
+            // Для автотестів: GMDR_TEST_LOW_DISK=N — перші N секунд запису "місця майже немає"
+            static const double test_low_disk = [] {
+                const char* e = std::getenv("GMDR_TEST_LOW_DISK");
+                return e ? std::atof(e) : 0.0;
+            }();
+            if (test_low_disk > 0 && recording_since != Clock::time_point{} &&
+                std::chrono::duration<double>(Clock::now() - recording_since).count() < test_low_disk)
+                free_tmp = free_out = 100ull << 20;
             const uint64_t low = 1ull << 30, ok = 3ull << 29;   // 1 ГіБ — пауза, 1.5 ГіБ — продовжити
             const bool now_low = (free_tmp > 0 && free_tmp < low) || (free_out > 0 && free_out < low);
             const bool now_ok = (free_tmp == 0 || free_tmp > ok) && (free_out == 0 || free_out > ok);
@@ -1276,6 +1343,19 @@ void RenderJob::run() {
     cleanup(s_.quit_game_when_done);
     if (rp->skipped() > 0) log_warn("Пропущено кадрів: {}", rp->skipped());
     finalize_output(s_, fragmented, frames_done, secs);
+    if (s_.rtx) {
+        // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
+        const auto eff = game::read_remix_effective_options(*gmod_);
+        for (const auto& [k, v] : game::rtx_render_profile_values()) {
+            auto it = eff.find(k);
+            if (it == eff.end()) continue;   // Remix пише лише значення, відмінні від типових
+            if (it->second != v)
+                log_warn("Remix: {} = {} замість {} — налаштування користувача в меню Remix мають вищий пріоритет", k,
+                         it->second, v);
+            else
+                log_debug("Remix прийняв {} = {}", k, v);
+        }
+    }
     log_info("Готово! {} — {} кадрів, {}, {}", s_.output_path, frames_done, format_duration(secs),
              format_bytes(file_size_or_zero(path_from_utf8(s_.output_path))));
     if (cancel_) log_info("Запис зупинено достроково — збережено відрендерену частину");

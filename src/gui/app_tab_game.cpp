@@ -101,6 +101,8 @@ void App::draw_tab_game() {
                 return to_lower(path_to_utf8(e.parent_path().filename())) == "win64";
             }))
             ImGui::TextColored(kColWarn, "RTX потребує 64-бітної гри (гілка x86-64) — у цій папці її немає");
+        if (s_.rtx && s_.game_window == "offscreen")
+            ImGui::TextColored(kColDim, "З RTX вікно гри буде позаду інших вікон: за межами екрана Remix не малює.");
     }
 
     ImGui::SeparatorText("Рендер у грі");
