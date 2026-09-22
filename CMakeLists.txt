@@ -1,0 +1,166 @@
+# =============================================================================
+#  GMod Demo Render — рендер демо-записів Garry's Mod у відео.
+#
+#  Збірка (Windows, Visual Studio 2022):
+#     1) Завантажте FFmpeg:  powershell -ExecutionPolicy Bypass -File scripts\get_ffmpeg.ps1
+#     2) Відкрийте папку проекту у Visual Studio ("Відкрити локальну папку")
+#        або виконайте build.bat
+#
+#  Цілі:
+#     gmdr       — програма з вікном (Dear ImGui)
+#     gmdr-cli   — консольна версія (для автоматизації та тестів)
+#     gmdr_core  — ядро (статична бібліотека)
+# =============================================================================
+cmake_minimum_required(VERSION 3.20)
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)   # FFMPEG_ROOT як шлях пошуку FFmpeg
+endif()
+project(GModDemoRender VERSION 1.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+option(GMDR_BUILD_GUI   "Збирати програму з вікном" ON)
+option(GMDR_BUILD_CLI   "Збирати консольну програму" ON)
+option(GMDR_BUILD_TESTS "Збирати тести" OFF)
+option(GMDR_BUILD_FUZZERS "Збирати фазер парсера демо (libFuzzer; Clang або MSVC)" OFF)
+set(GMDR_SANITIZE "" CACHE STRING "Санітайзери: address (MSVC/GCC/Clang), address,undefined (GCC/Clang)")
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+if(MSVC)
+    # /utf-8 — вихідні файли у UTF-8 (українські рядки!), /MP — паралельна компіляція
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8;/W3;/MP;/permissive-;/Zc:__cplusplus>")
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+else()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-Wall;-Wextra;-Wno-unused-parameter;-Wno-missing-field-initializers>")
+    if(WIN32)
+        add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    endif()
+endif()
+
+if(WIN32)
+    # Windows 10+: потрібні API (SetFileInformationByHandle, EcoQoS...) і в заголовках MinGW
+    add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif()
+
+# Санітайзери (ловлять вихід за межі пам'яті тощо) — для перевірки тестами і фазером
+if(GMDR_SANITIZE)
+    if(MSVC)
+        add_compile_options(/fsanitize=address /Zi)
+        add_link_options(/INCREMENTAL:NO /DEBUG)
+    else()
+        add_compile_options(-fsanitize=${GMDR_SANITIZE} -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=${GMDR_SANITIZE})
+    endif()
+endif()
+
+find_package(Threads REQUIRED)
+find_package(FFmpeg REQUIRED)
+
+# ---- Ядро ---------------------------------------------------------------------
+file(GLOB_RECURSE GMDR_CORE_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/src/core/*.cpp" "${CMAKE_SOURCE_DIR}/src/core/*.hpp")
+add_library(gmdr_core STATIC ${GMDR_CORE_SOURCES})
+target_include_directories(gmdr_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
+
+# Lua-драйвер вбудовується в програму як масив байтів (щоб .exe був самодостатнім).
+# Масив, а не рядковий літерал: у MSVC літерал не може бути довшим за ~16 КБ.
+set(GMDR_DRIVER_LUA "${CMAKE_SOURCE_DIR}/src/core/game/gmdr_driver.lua")
+file(READ "${GMDR_DRIVER_LUA}" _gmdr_lua_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _gmdr_lua_bytes "${_gmdr_lua_hex}")
+string(REPLACE "0x0a," "0x0a,\n" _gmdr_lua_bytes "${_gmdr_lua_bytes}")   # рядок Lua = рядок масиву
+file(WRITE "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp" "${_gmdr_lua_bytes}0x00\n")
+configure_file("${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp"
+               "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc" COPYONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GMDR_DRIVER_LUA}")
+target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated")
+target_link_libraries(gmdr_core PUBLIC
+    FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
+    Threads::Threads)
+if(WIN32)
+    target_link_libraries(gmdr_core PUBLIC advapi32 shell32 ole32 user32)
+endif()
+
+# Функція: скопіювати DLL FFmpeg поруч з .exe (Windows)
+function(gmdr_copy_ffmpeg_dlls target)
+    if(WIN32 AND FFMPEG_DLL_DIR)
+        file(GLOB _dlls "${FFMPEG_DLL_DIR}/*.dll")
+        if(_dlls)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dlls} "$<TARGET_FILE_DIR:${target}>"
+                COMMENT "Копіюю DLL FFmpeg")
+        endif()
+    endif()
+endfunction()
+
+# ---- Консольна програма ---------------------------------------------------------
+if(GMDR_BUILD_CLI)
+    add_executable(gmdr-cli src/cli/main_cli.cpp)
+    target_link_libraries(gmdr-cli PRIVATE gmdr_core)
+    gmdr_copy_ffmpeg_dlls(gmdr-cli)
+endif()
+
+# ---- Програма з вікном --------------------------------------------------------
+if(GMDR_BUILD_GUI)
+    set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
+    set(GMDR_IMGUI_SOURCES
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp)
+    file(GLOB GMDR_GUI_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/gui/*.cpp" "${CMAKE_SOURCE_DIR}/src/gui/*.hpp")
+    if(WIN32)
+        list(APPEND GMDR_IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp)
+        add_executable(gmdr WIN32 ${GMDR_GUI_SOURCES} ${GMDR_IMGUI_SOURCES} src/gui/app.rc)
+        target_link_libraries(gmdr PRIVATE gmdr_core d3d11 dxgi d3dcompiler dwmapi uuid comdlg32 shell32 ole32 imm32)
+        if(MSVC)
+            # Маніфест уже вбудовано через app.rc
+            target_link_options(gmdr PRIVATE /MANIFEST:NO)
+        else()
+            # MinGW: точка входу wWinMain (Unicode)
+            target_link_options(gmdr PRIVATE -municode)
+        endif()
+    else()
+        find_package(glfw3 QUIET)
+        find_package(OpenGL REQUIRED)
+        if(NOT glfw3_FOUND)
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+            set(_glfw PkgConfig::GLFW)
+        else()
+            set(_glfw glfw)
+        endif()
+        list(APPEND GMDR_IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
+        add_executable(gmdr ${GMDR_GUI_SOURCES} ${GMDR_IMGUI_SOURCES})
+        target_link_libraries(gmdr PRIVATE gmdr_core ${_glfw} OpenGL::GL ${CMAKE_DL_LIBS})
+    endif()
+    target_include_directories(gmdr PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends ${IMGUI_DIR}/misc/cpp)
+    gmdr_copy_ffmpeg_dlls(gmdr)
+endif()
+
+# ---- Тести --------------------------------------------------------------------
+if(GMDR_BUILD_TESTS)
+    enable_testing()
+    add_executable(gmdr-tests tests/test_main.cpp)
+    target_link_libraries(gmdr-tests PRIVATE gmdr_core)
+    add_test(NAME unit COMMAND gmdr-tests)
+    add_executable(gmdr-fakegame tests/fake_game.cpp)
+    target_link_libraries(gmdr-fakegame PRIVATE gmdr_core)
+endif()
+
+# ---- Фазер ----------------------------------------------------------------------
+if(GMDR_BUILD_FUZZERS)
+    add_executable(gmdr-fuzz-demo tests/fuzz_demo.cpp)
+    target_link_libraries(gmdr-fuzz-demo PRIVATE gmdr_core)
+    if(MSVC)
+        target_compile_options(gmdr-fuzz-demo PRIVATE /fsanitize=fuzzer)
+        target_link_options(gmdr-fuzz-demo PRIVATE /fsanitize=fuzzer)
+    else()
+        target_compile_options(gmdr-fuzz-demo PRIVATE -fsanitize=fuzzer)
+        target_link_options(gmdr-fuzz-demo PRIVATE -fsanitize=fuzzer)
+    endif()
+    gmdr_copy_ffmpeg_dlls(gmdr-fuzz-demo)
+endif()

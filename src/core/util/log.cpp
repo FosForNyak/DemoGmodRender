@@ -1,0 +1,55 @@
+#include "log.hpp"
+
+#include <atomic>
+#include <map>
+#include <mutex>
+
+namespace gmdr {
+
+namespace {
+std::mutex                g_mutex;
+std::map<int, LogSink>    g_sinks;
+int                       g_next_id = 1;
+std::atomic<int>          g_min_level{static_cast<int>(LogLevel::Info)};
+} // namespace
+
+int add_log_sink(LogSink sink) {
+    std::lock_guard lock(g_mutex);
+    const int id = g_next_id++;
+    g_sinks.emplace(id, std::move(sink));
+    return id;
+}
+
+void remove_log_sink(int id) {
+    std::lock_guard lock(g_mutex);
+    g_sinks.erase(id);
+}
+
+void set_min_log_level(LogLevel level) { g_min_level = static_cast<int>(level); }
+LogLevel min_log_level() { return static_cast<LogLevel>(g_min_level.load()); }
+
+const char* log_level_name(LogLevel level) {
+    switch (level) {
+    case LogLevel::Debug: return "DEBUG";
+    case LogLevel::Info:  return "INFO";
+    case LogLevel::Warn:  return "УВАГА";
+    case LogLevel::Error: return "ПОМИЛКА";
+    }
+    return "?";
+}
+
+void log_message(LogLevel level, const std::string& text) {
+    if (static_cast<int>(level) < g_min_level.load()) return;
+    // Копіюємо список приймачів під замком, а викликаємо без замка —
+    // так приймач може сам щось логувати і не буде взаємоблокування.
+    std::map<int, LogSink> sinks;
+    {
+        std::lock_guard lock(g_mutex);
+        sinks = g_sinks;
+    }
+    for (auto& [id, sink] : sinks) {
+        if (sink) sink(level, text);
+    }
+}
+
+} // namespace gmdr

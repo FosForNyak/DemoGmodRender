@@ -1,0 +1,526 @@
+// =============================================================================
+//  main_cli.cpp — консольна версія GMod Demo Render (gmdr-cli).
+//
+//  Приклади:
+//    gmdr-cli info  demo.dem
+//    gmdr-cli voice demo.dem -o voices/
+//    gmdr-cli render demo.dem -o video.mp4 --size 2560x1440 --fps 60 --codec hevc_nvenc --bit-depth 10
+//    gmdr-cli render demo.dem -o film.mov --codec prores_ks --motion-blur 16 --shutter 180
+//    gmdr-cli encode "C:\...\garrysmod" --prefix movie -o out.mkv --codec ffv1
+//    gmdr-cli encoders --test
+// =============================================================================
+#include "core/demo/analysis.hpp"
+#include "core/game/gmod_install.hpp"
+#include "core/game/lua_driver.hpp"
+#include "core/media/ffmpeg_util.hpp"
+#include "core/media/video_encoder.hpp"
+#include "core/render/jobs.hpp"
+#include "core/render/settings.hpp"
+#include "core/util/crash_dump.hpp"
+#include "core/util/file_util.hpp"
+#include "core/util/log.hpp"
+#include "core/util/strings.hpp"
+#include "core/voice/voice_decoder.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cmath>
+#include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <format>
+#include <iostream>
+#include <map>
+#include <string>
+#include <system_error>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
+using namespace gmdr;
+namespace fs = std::filesystem;
+
+static std::atomic<int> g_interrupts{0};
+static void on_sigint(int) { ++g_interrupts; }
+
+static void print_usage() {
+    std::puts(R"(GMod Demo Render — рендер демо Garry's Mod у відео (консольна версія)
+
+Використання:
+  gmdr-cli info <demo.dem> [--json]            інформація про демо і голоси
+  gmdr-cli voice <demo.dem> -o <папка>         зберегти голоси гравців у WAV
+  gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
+  gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
+  gmdr-cli encode <папка_кадрів> [параметри]   закодувати готові кадри startmovie (TGA/JPG + WAV)
+  gmdr-cli encoders [--test]                   список кодеків (і перевірка GPU-кодеків)
+  gmdr-cli driver install|uninstall|status     драйвер у меню GMod
+
+Відео:
+  -o, --output ФАЙЛ      вихідний файл (.mp4 .mkv .mov .webm .avi ... або кадри_%06d.png)
+  --size ШxВ             роздільна здатність відео (типово 1920x1080)
+  --render-size ШxВ      розмір вікна гри (типово = --size; більше — суперсемплінг)
+  --fps N                частота кадрів: 24, 30, 59.94, 60, 120, 240, 60000/1001 ...
+  --motion-blur N        під-кадрів на кадр для розмиття руху (1 — вимкнено)
+  --shutter ГРАДУСИ      кут затвора для motion blur (типово 180)
+  --codec НАЗВА          libx264, libx265, libsvtav1, libvpx-vp9, prores_ks, ffv1, png,
+                         h264_nvenc, hevc_nvenc, av1_nvenc, h264_amf, hevc_amf, h264_qsv ...
+  --bit-depth 8|10|12    бітність, --chroma 420|422|444, --pix-fmt ФОРМАТ
+  --quality N            CRF/CQ/QP (менше — краще), --bitrate 20M, --preset ПРЕСЕТ
+  --vopt ключ=значення   довільний параметр кодека (можна кілька разів)
+  --scaler lanczos|bicubic|bilinear|spline   --full-range   --gop СЕКУНД   --threads N
+  --accurate-color       максимальна точність кольору (повільніше)
+  --target-size МБ       бітрейт під розмір файлу (напр. 10 для Discord)
+Звук:
+  --no-audio  --acodec aac|libopus|flac|pcm_s16le|pcm_s24le|alac|libmp3lame  --abitrate 320k
+  --sample-rate 48000  --no-game-audio  --game-volume 1.0  --audio-offset СЕКУНД
+  --voice all|local|others|none|selected  --voice-keys steam:7656...,slot:3
+  --voice-volume 1.0  --voice-delay СЕКУНД  --separate-tracks  --engine-voice
+  --player-volume "steam:7656...=1.5; slot:3=0"   гучність окремих гравців (0 — вимкнути)
+  --srt                  субтитри «хто говорить» (.srt поруч із відео)
+  --mic ФАЙЛ  --mic-offset СЕКУНД  --mic-volume 1.0
+Гра:
+  --game-dir ПАПКА  --game-exe ФАЙЛ  --capture tga|jpg  --jpeg-quality N
+  --hide-hud  --hide-viewmodel  --exec "команда"  --launch-args "..."  --max-pending N
+  --start-tick N  --end-tick N  --start ЧАС  --end ЧАС (секунди або год:хв:сек)  --keep-game-open  --manual
+  --window offscreen|behind|normal   де вікно гри (типово — за межами екрана)
+  --no-mute              не вимикати звук гри в мікшері Windows
+  --rtx                  копія GMod RTX від RTXLauncher (її параметри запуску)
+Інше:
+  --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
+  --no-crash-safe        звичайний MP4 під час запису (типово — фрагментами, вціліє при збої)
+  encode: --prefix ПРЕФІКС  --wav ФАЙЛ  --demo ДЕМО.dem (для голосу)
+)");
+}
+
+static std::vector<std::string> utf8_args(int argc, char** argv) {
+    std::vector<std::string> out;
+#ifdef _WIN32
+    int n = 0;
+    LPWSTR* w = CommandLineToArgvW(GetCommandLineW(), &n);
+    for (int i = 0; i < n; ++i) out.push_back(wide_to_utf8(w[i]));
+    LocalFree(w);
+    (void)argc;
+    (void)argv;
+#else
+    for (int i = 0; i < argc; ++i) out.emplace_back(argv[i]);
+#endif
+    return out;
+}
+
+struct Cli {
+    std::string              command;
+    std::vector<std::string> positional;
+    std::map<std::string, std::vector<std::string>> opts;
+    bool has(const std::string& k) const { return opts.count(k) > 0; }
+    std::string get(const std::string& k, const std::string& def = {}) const {
+        auto it = opts.find(k);
+        return it == opts.end() || it->second.empty() ? def : it->second.back();
+    }
+};
+
+// Прапорці без значення
+static const char* kFlags[] = {"--json", "--test", "--hide-hud", "--hide-viewmodel", "--keep-game-open", "--manual",
+                               "--no-audio", "--no-game-audio", "--separate-tracks", "--engine-voice", "--full-range",
+                               "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
+                               "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe"};
+
+static bool is_flag(const std::string& a) {
+    for (const char* f : kFlags)
+        if (a == f) return true;
+    return false;
+}
+
+static Cli parse_cli(const std::vector<std::string>& args) {
+    Cli c;
+    for (size_t i = 1; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        if (a.size() > 1 && a[0] == '-' && !(a.size() > 1 && std::isdigit(static_cast<unsigned char>(a[1])))) {
+            std::string key = a == "-o" ? "--output" : a;
+            if (is_flag(key)) {
+                c.opts[key].push_back("1");
+            } else if (i + 1 < args.size()) {
+                c.opts[key].push_back(args[++i]);
+            } else {
+                c.opts[key].push_back("");
+            }
+        } else if (c.command.empty()) {
+            c.command = a;
+        } else {
+            c.positional.push_back(a);
+        }
+    }
+    return c;
+}
+
+static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::DemoAnalysis* a, std::string& err) {
+    auto num = [&](const char* k, auto& field) {
+        if (!c.has(k)) return true;
+        auto v = parse_double(c.get(k));
+        if (!v) { err = std::format("неправильне значення {} '{}'", k, c.get(k)); return false; }
+        field = static_cast<std::remove_reference_t<decltype(field)>>(*v);
+        return true;
+    };
+    if (c.has("--output")) s.output_path = c.get("--output");
+    if (c.has("--game-dir")) s.game_dir = c.get("--game-dir");
+    if (c.has("--game-exe")) s.game_exe = c.get("--game-exe");
+    if (c.has("--size")) {
+        auto sz = parse_size(c.get("--size"));
+        if (!sz) { err = "неправильний --size"; return false; }
+        s.width = sz->first;
+        s.height = sz->second;
+    }
+    if (c.has("--render-size")) {
+        auto sz = parse_size(c.get("--render-size"));
+        if (!sz) { err = "неправильний --render-size"; return false; }
+        s.render_width = sz->first;
+        s.render_height = sz->second;
+    }
+    if (c.has("--fps")) s.fps = c.get("--fps");
+    if (!num("--motion-blur", s.motion_blur) || !num("--shutter", s.shutter) || !num("--bit-depth", s.bit_depth) ||
+        !num("--chroma", s.chroma) || !num("--quality", s.quality) || !num("--gop", s.gop_seconds) ||
+        !num("--threads", s.threads) || !num("--sample-rate", s.sample_rate) || !num("--game-volume", s.game_volume) ||
+        !num("--audio-offset", s.game_audio_offset) || !num("--voice-volume", s.voice_volume) ||
+        !num("--voice-delay", s.voice_delay) || !num("--mic-offset", s.mic_offset) ||
+        !num("--mic-volume", s.mic_volume) || !num("--jpeg-quality", s.jpeg_quality) ||
+        !num("--max-pending", s.max_pending_frames) || !num("--start-tick", s.start_tick) ||
+        !num("--end-tick", s.end_tick) || !num("--menu-delay", s.menu_delay) ||
+        !num("--target-size", s.target_size_mb))
+        return false;
+    if (c.has("--codec")) s.video_codec = c.get("--codec");
+    if (c.has("--pix-fmt")) s.pix_fmt = c.get("--pix-fmt");
+    if (c.has("--bitrate")) s.video_bitrate = c.get("--bitrate");
+    if (c.has("--preset")) s.preset = c.get("--preset");
+    if (c.has("--vopt")) {
+        for (const auto& v : c.opts.at("--vopt")) s.video_options += (s.video_options.empty() ? "" : "; ") + v;
+    }
+    if (c.has("--scaler")) s.scaler = c.get("--scaler");
+    if (c.has("--full-range")) s.full_range = true;
+    if (c.has("--no-audio")) s.audio = false;
+    if (c.has("--acodec")) s.audio_codec = c.get("--acodec");
+    if (c.has("--abitrate")) s.audio_bitrate = c.get("--abitrate");
+    if (c.has("--no-game-audio")) s.game_audio = false;
+    if (c.has("--voice")) s.voice_mode = c.get("--voice");
+    if (c.has("--voice-keys")) {
+        s.voice_selected = c.get("--voice-keys");
+        if (!c.has("--voice")) s.voice_mode = "selected";
+    }
+    if (c.has("--separate-tracks")) s.separate_tracks = true;
+    if (c.has("--engine-voice")) s.mute_engine_voice = false;
+    if (c.has("--mic")) s.mic_file = c.get("--mic");
+    if (c.has("--capture")) s.capture_format = c.get("--capture");
+    if (c.has("--hide-hud")) s.hide_hud = true;
+    if (c.has("--hide-viewmodel")) s.hide_viewmodel = true;
+    if (c.has("--exec"))
+        for (const auto& v : c.opts.at("--exec")) s.extra_commands += (s.extra_commands.empty() ? "" : "\n") + v;
+    if (c.has("--launch-args")) s.extra_launch_args = c.get("--launch-args");
+    if (c.has("--keep-game-open")) s.quit_game_when_done = false;
+    if (c.has("--manual")) s.manual_mode = true;
+    if (c.has("--format")) s.container = c.get("--format");
+    if (c.has("--no-faststart")) s.faststart = false;
+    if (c.has("--keep-temp")) s.keep_temp_files = true;
+    if (c.has("--window")) {
+        const std::string w = c.get("--window");
+        if (w != "offscreen" && w != "behind" && w != "normal") { err = "--window: offscreen, behind або normal"; return false; }
+        s.game_window = w;
+    }
+    if (c.has("--no-mute")) s.mute_game_sound = false;
+    if (c.has("--rtx")) s.rtx = true;
+    if (c.has("--srt")) s.subtitles_srt = true;
+    if (c.has("--accurate-color")) s.accurate_color = true;
+    if (c.has("--no-crash-safe")) s.crash_safe = false;
+    if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");
+    if (a) {
+        // Час: секунди або "год:хв:сек" / "хв:сек"
+        if (c.has("--start")) {
+            auto t = parse_timecode(c.get("--start"));
+            if (!t) { err = "неправильне значення --start (приклади: 95.5, 1:35, 1:02:03)"; return false; }
+            s.start_tick = static_cast<int32_t>(std::llround(*t / a->tick_interval));
+        }
+        if (c.has("--end")) {
+            auto t = parse_timecode(c.get("--end"));
+            if (!t) { err = "неправильне значення --end (приклади: 95.5, 1:35, 1:02:03)"; return false; }
+            s.end_tick = static_cast<int32_t>(std::llround(*t / a->tick_interval));
+        }
+    }
+    if (!parse_rational(s.fps)) { err = "неправильне значення --fps"; return false; }
+    return true;
+}
+
+// Показ прогресу завдання в один рядок
+static int run_job(render::Job& job) {
+    std::signal(SIGINT, on_sigint);
+    job.start();
+    int handled_interrupts = 0;
+    std::string last_line;
+    while (job.running()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (g_interrupts > handled_interrupts) {
+            handled_interrupts = g_interrupts;
+            if (handled_interrupts == 1) {
+                std::fprintf(stderr, "\nЗупиняю (ще раз Ctrl+C — перервати негайно)...\n");
+                job.cancel();
+            } else {
+                job.kill();
+            }
+        }
+        const auto p = job.progress();
+        std::string line = std::format("[{}] {:5.1f}%  кадрів {}  відео {}", p.stage, std::max(0.0, p.fraction) * 100,
+                                       p.frames, format_duration(p.video_seconds));
+        if (p.demo_total > 0) line += std::format("  тік {}/{}", p.demo_tick, p.demo_total);
+        if (p.speed_fps > 0) line += std::format("  {:.1f} к/с", p.speed_fps);
+        if (p.eta >= 0) line += "  залишилось " + format_duration(p.eta);
+        if (p.pending_files > 0) line += std::format("  у черзі {}", p.pending_files);
+        if (p.game_paused) line += "  [гра на паузі]";
+        if (line != last_line) {
+            std::fprintf(stderr, "\r%-150s", line.c_str());
+            std::fflush(stderr);
+            last_line = line;
+        }
+    }
+    job.wait();
+    std::fprintf(stderr, "\n");
+    const auto final_progress = job.progress();
+    if (!job.report().empty()) std::printf("\n%s\n\n", job.report().c_str());
+    else if (job.state() == render::JobState::Failed && !final_progress.checks.empty()) {
+        for (const auto& ch : final_progress.checks)
+            std::printf("  %s %s%s\n", ch.state == render::CheckItem::Ok ? "+" : ch.state == render::CheckItem::Skipped ? "-" : "x",
+                        ch.name.c_str(), ch.detail.empty() ? "" : (" — " + ch.detail).c_str());
+    }
+    switch (job.state()) {
+    case render::JobState::Succeeded:
+        std::printf("Готово: %s\n", job.result().c_str());
+        return 0;
+    case render::JobState::Cancelled:
+        std::printf("Скасовано\n");
+        return 2;
+    default:
+        std::printf("Помилка: %s\n", job.error().c_str());
+        return 1;
+    }
+}
+
+static int cmd_info(const Cli& c) {
+    if (c.positional.empty()) { print_usage(); return 1; }
+    demo::DemoAnalysis a;
+    try {
+        a = demo::analyze_demo(path_from_utf8(c.positional[0]));
+    } catch (const std::exception& e) {
+        std::printf("Помилка: %s\n", e.what());
+        return 1;
+    }
+    auto v = voice::decode_voice(a);
+    if (c.has("--json")) {
+        json::Value j = json::Value::object();
+        j.set("map", json::Value::string(a.header.map_name));
+        j.set("server", json::Value::string(a.header.server_name));
+        j.set("client", json::Value::string(a.header.client_name));
+        j.set("gamemode", json::Value::string(a.server_info.gamemode));
+        j.set("ticks", json::Value::number(a.last_tick));
+        j.set("tick_interval", json::Value::number(a.tick_interval));
+        j.set("duration", json::Value::number(a.duration_seconds));
+        j.set("packets", json::Value::number(a.packets_total));
+        j.set("packets_failed", json::Value::number(a.packets_failed));
+        j.set("variant", json::Value::string(a.variant.describe()));
+        json::Value sp = json::Value::array();
+        for (const auto& s : v.speakers) {
+            json::Value o = json::Value::object();
+            o.set("key", json::Value::string(s.key));
+            o.set("name", json::Value::string(s.name));
+            o.set("steamid64", json::Value::string(std::to_string(s.steamid64)));
+            o.set("slot", json::Value::number(s.slot));
+            o.set("local", json::Value::boolean(s.is_local));
+            o.set("seconds", json::Value::number(s.seconds));
+            o.set("packets", json::Value::number(s.packets));
+            sp.push(o);
+        }
+        j.set("speakers", sp);
+        std::printf("%s\n", j.dump().c_str());
+        return 0;
+    }
+    std::printf("Файл:        %s\n", c.positional[0].c_str());
+    std::printf("Карта:       %s\n", a.header.map_name.c_str());
+    std::printf("Сервер:      %s\n", a.header.server_name.c_str());
+    std::printf("Записав:     %s (слот %d)\n", a.header.client_name.c_str(), a.local_slot);
+    std::printf("Режим гри:   %s\n", a.server_info.gamemode.c_str());
+    std::printf("Тривалість:  %s (%d тіків, %.2f тік/с)\n", format_duration(a.duration_seconds).c_str(), a.last_tick,
+                1.0 / a.tick_interval);
+    std::printf("Протокол:    демо %d, мережа %d, варіант [%s]\n", a.header.demo_protocol, a.header.network_protocol,
+                a.variant.describe().c_str());
+    std::printf("Пакетів:     %d (не розібрано повністю: %d)\n", a.packets_total, a.packets_failed);
+    std::printf("Гравців:     %zu, голосовий кодек: %s\n", a.players.size(), a.voice_codec.c_str());
+    for (const auto& w : a.warnings) std::printf("  ! %s\n", w.c_str());
+    std::printf("\nГолоси (%zu):\n", v.speakers.size());
+    for (const auto& s : v.speakers)
+        std::printf("  %-20s %-40s %6.1f с  %s\n", s.key.c_str(), s.display_name().c_str(), s.seconds,
+                    s.is_local ? "<- це ви" : "");
+    if (v.speakers.empty()) std::printf("  (немає)\n");
+    for (const auto& w : v.warnings) std::printf("  ! %s\n", w.c_str());
+    return 0;
+}
+
+static int cmd_voice(const Cli& c) {
+    if (c.positional.empty() || !c.has("--output")) {
+        std::puts("Використання: gmdr-cli voice <demo.dem> -o <папка> [--voice all|local|others] [--voice-keys ...]\n"
+                  "                      [--start СЕКУНД] [--end СЕКУНД]");
+        return 1;
+    }
+    auto a = std::make_shared<demo::DemoAnalysis>();
+    try {
+        *a = demo::analyze_demo(path_from_utf8(c.positional[0]));
+    } catch (const std::exception& e) {
+        std::printf("Помилка: %s\n", e.what());
+        return 1;
+    }
+    auto v = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*a));
+    render::RenderSettings s;
+    s.demo_path = c.positional[0];
+    s.voice_mode = "all";
+    std::string err;
+    if (!apply_options(c, s, a.get(), err)) {
+        std::printf("Помилка: %s\n", err.c_str());
+        return 1;
+    }
+    render::ExportVoicesJob job(s, a, v, path_from_utf8(c.get("--output")));
+    const int r = run_job(job);
+    if (r == 0) std::printf("Кожен файл починається з того самого моменту демо — у програмі монтажу кладіть їх на початок.\n");
+    return r;
+}
+
+static int cmd_encoders(const Cli& c) {
+    const bool test = c.has("--test");
+    std::printf("%-22s %-10s %-9s %s\n", "Кодек", "Формат", "Тип", test ? "Перевірка" : "Опис");
+    for (const auto& e : media::list_encoders(true)) {
+        std::string status;
+        if (test && e.hardware) {
+            media::VideoEncoderSettings vs;
+            vs.codec = e.name;
+            vs.width = 1280;
+            vs.height = 720;
+            media::VideoEncoder enc;
+            std::string err;
+            status = enc.open(vs, 1280, 720, false, &err) ? "ПРАЦЮЄ" : "недоступний";
+        }
+        std::printf("%-22s %-10s %-9s %s\n", e.name.c_str(), e.codec_name.c_str(),
+                    e.hardware ? ("GPU/" + e.vendor).c_str() : "CPU", test ? status.c_str() : e.long_name.c_str());
+    }
+    return 0;
+}
+
+static int cmd_driver(const Cli& c) {
+    const std::string action = c.positional.empty() ? "status" : c.positional[0];
+    std::optional<game::GModInstall> g = c.has("--game-dir") ? game::gmod_from_dir(path_from_utf8(c.get("--game-dir")))
+                                                              : game::detect_gmod();
+    if (!g) {
+        std::puts("Garry's Mod не знайдено — вкажіть --game-dir");
+        return 1;
+    }
+    std::printf("Garry's Mod: %s\n", path_to_utf8(g->root).c_str());
+    for (const auto& e : g->executables) std::printf("  %s\n", path_to_utf8(e).c_str());
+    std::string err;
+    if (action == "install") {
+        if (!game::install_driver(*g, &err)) { std::printf("Помилка: %s\n", err.c_str()); return 1; }
+        std::puts("Драйвер встановлено");
+    } else if (action == "uninstall") {
+        if (!game::uninstall_driver(*g, &err)) { std::printf("Помилка: %s\n", err.c_str()); return 1; }
+        std::puts("Драйвер видалено");
+    } else {
+        const auto st = game::driver_state(*g);
+        std::printf("Драйвер: %s\n", st == game::DriverState::Installed ? "встановлено"
+                                     : st == game::DriverState::Outdated ? "застарів (переустановіть)" : "не встановлено");
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+    install_crash_handler(app_data_dir());
+    const auto args = utf8_args(argc, argv);
+    Cli c = parse_cli(args);
+    if (c.command.empty() || c.has("-h") || c.has("--help")) {
+        print_usage();
+        return c.command.empty() ? 1 : 0;
+    }
+    const bool verbose = c.has("-v") || c.has("--verbose");
+    set_min_log_level(verbose ? LogLevel::Debug : LogLevel::Info);
+    add_log_sink([](LogLevel l, const std::string& msg) {
+        const char* prefix = l == LogLevel::Error ? "ПОМИЛКА: " : l == LogLevel::Warn ? "УВАГА: " : "";
+        std::fprintf(stderr, "\r%s%-100s\n", prefix, msg.c_str());
+    });
+    media::install_ffmpeg_log_bridge(verbose ? AV_LOG_INFO : AV_LOG_ERROR);
+
+    // Якщо першим аргументом одразу дали .dem (перетягнули файл на exe) — рендер
+    if (ends_with_i(c.command, ".dem")) {
+        c.positional.insert(c.positional.begin(), c.command);
+        c.command = "render";
+    }
+
+    if (c.command == "info") return cmd_info(c);
+    if (c.command == "voice") return cmd_voice(c);
+    if (c.command == "encoders") return cmd_encoders(c);
+    if (c.command == "driver") return cmd_driver(c);
+
+    if (c.command == "render" || c.command == "encode") {
+        if (c.positional.empty()) {
+            print_usage();
+            return 1;
+        }
+        render::RenderSettings s;
+        const fs::path default_cfg = app_data_dir() / "gmdr_settings.json";
+        std::string err;
+        if (c.has("--config")) {
+            if (!render::load_settings(s, c.get("--config"), &err)) {
+                std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
+                return 1;
+            }
+        } else if (fs::exists(default_cfg)) {
+            render::load_settings(s, path_to_utf8(default_cfg), nullptr);
+            s.output_path.clear();
+        }
+        std::shared_ptr<demo::DemoAnalysis> analysis;
+        std::shared_ptr<voice::VoiceDecodeResult> voices;
+        const std::string demo_path = c.command == "render" ? c.positional[0] : c.get("--demo");
+        if (!demo_path.empty()) {
+            try {
+                analysis = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(demo_path)));
+            } catch (const std::exception& e) {
+                std::printf("Помилка: %s\n", e.what());
+                return 1;
+            }
+            voices = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*analysis));
+            s.demo_path = demo_path;
+            std::printf("Демо: %s, %s, голосів: %zu\n", analysis->header.map_name.c_str(),
+                        format_duration(analysis->duration_seconds).c_str(), voices->speakers.size());
+        }
+        if (!apply_options(c, s, analysis.get(), err)) {
+            std::printf("Помилка: %s\n", err.c_str());
+            return 1;
+        }
+        if (c.has("--save-config")) render::save_settings(s, c.get("--save-config"), nullptr);
+        if (c.command == "render") {
+            render::RenderJob job(s, analysis, voices, c.has("--test-run"));
+            return run_job(job);
+        }
+        render::EncodeFramesJob job(s, path_from_utf8(c.positional[0]), c.get("--prefix"),
+                                    c.has("--wav") ? path_from_utf8(c.get("--wav")) : fs::path(), analysis, voices);
+        return run_job(job);
+    }
+    std::printf("Невідома команда '%s'\n\n", c.command.c_str());
+    print_usage();
+    return 1;
+}

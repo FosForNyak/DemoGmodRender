@@ -1,0 +1,15 @@
+build/
+out/
+.vs/
+third_party/ffmpeg/
+bin/
+*.user
+
+# Локальні файли програми і тестів
+gmdr_settings.json
+gmdr_log*.txt
+gmdr_crash_*.dmp
+gmdr_test_run.*
+*.dmp
+# Моделі й програми для розпізнавання мовлення (завантажуються окремо)
+third_party/whisper/

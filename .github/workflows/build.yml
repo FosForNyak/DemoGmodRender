@@ -1,0 +1,141 @@
+# =============================================================================
+#  Автоматична перевірка кожної зміни:
+#   * Windows / Visual Studio — збірка, модульні тести і наскрізний рендер через
+#     імітатор гри (tests/fake_game.cpp), готові .exe — в артефактах;
+#   * Linux / GCC — збірка з системним FFmpeg (перевіряє і старий шлях swscale),
+#     тести звичайні та з санітайзерами ASan + UBSan;
+#   * Linux / Clang — фазинг парсера демо (libFuzzer) протягом 2 хвилин.
+# =============================================================================
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: FFmpeg (BtbN, shared)
+        shell: pwsh
+        run: ./scripts/get_ffmpeg.ps1
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Збірка
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON
+          cmake --build build
+
+      - name: Синтетичні демо для тестів
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\third_party\ffmpeg\bin;$env:PATH"
+          New-Item -ItemType Directory -Force build\td | Out-Null
+          python tests/tools/make_test_demo.py build/td/test24.dem build/td/truth24.json --pe-bits 24
+          python tests/tools/make_test_demo.py build/td/test20c.dem build/td/truth20.json --pe-bits 20 --compress-userinfo
+          python tests/tools/make_test_demo.py build/td/test2026.dem build/td/truth2026.json --pe-bits 24 --compress-userinfo --gmod2026
+
+      - name: Модульні тести
+        run: build\gmdr-tests.exe build\td
+
+      - name: Наскрізний рендер через імітатор гри
+        shell: pwsh
+        run: |
+          $fake = "$PWD\build\fake\GarrysMod"
+          New-Item -ItemType Directory -Force "$fake\garrysmod\lua\menu", "$fake\garrysmod\cfg" | Out-Null
+          Set-Content "$fake\garrysmod\gameinfo.txt" "GameInfo {}"
+          Set-Content "$fake\garrysmod\lua\menu\menu.lua" 'include( "util.lua" )'
+          Set-Content "$fake\hl2.exe" ""
+          foreach ($cap in @("tga", "jpg")) {
+            $out = "$PWD\build\out_$cap.mp4"
+            & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+                --size 640x360 --fps 30 --codec libx264 --capture $cap --menu-delay 1 --srt
+            if ($LASTEXITCODE -ne 0) { throw "рендер ($cap) не вдався" }
+            & third_party\ffmpeg\bin\ffprobe.exe -v error -show_entries stream=codec_name,nb_frames,duration -of compact $out
+            if (-not (Test-Path ($out -replace '\.mp4$', '.srt'))) { throw "немає субтитрів" }
+          }
+          & build\gmdr-cli.exe render build\td\test24.dem --test-run --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1
+          if ($LASTEXITCODE -ne 0) { throw "тестовий прогін не вдався" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gmod-demo-render-windows
+          path: |
+            build/gmdr.exe
+            build/gmdr-cli.exe
+            build/*.dll
+            third_party/ffmpeg/LICENSE.txt
+
+  linux-gcc:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: ["", "address,undefined"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Залежності
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libswresample-dev libglfw3-dev libgl-dev ffmpeg python3
+
+      - name: Збірка
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGMDR_BUILD_TESTS=ON \
+            -DGMDR_SANITIZE="${{ matrix.sanitize }}"
+          cmake --build build
+
+      - name: Тести
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          mkdir -p build/td
+          python3 tests/tools/make_test_demo.py build/td/test24.dem build/td/truth24.json --pe-bits 24
+          python3 tests/tools/make_test_demo.py build/td/test20c.dem build/td/truth20.json --pe-bits 20 --compress-userinfo
+          python3 tests/tools/make_test_demo.py build/td/test2026.dem build/td/truth2026.json --pe-bits 24 --compress-userinfo --gmod2026
+          ./build/gmdr-tests build/td
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Залежності
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libswresample-dev ffmpeg python3
+
+      - name: Збірка фазера
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ -DGMDR_BUILD_GUI=OFF -DGMDR_BUILD_CLI=OFF -DGMDR_BUILD_FUZZERS=ON \
+            -DGMDR_SANITIZE=address,undefined
+          cmake --build build --target gmdr-fuzz-demo
+
+      - name: Фазинг (2 хвилини)
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          mkdir -p corpus
+          python3 tests/tools/make_test_demo.py corpus/a.dem corpus/a.json --pe-bits 24
+          python3 tests/tools/make_test_demo.py corpus/b.dem corpus/b.json --pe-bits 24 --compress-userinfo --gmod2026
+          rm corpus/*.json
+          ./build/gmdr-fuzz-demo -max_total_time=120 -rss_limit_mb=4096 -max_len=400000 corpus
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: |
+            crash-*
+            timeout-*
+            oom-*

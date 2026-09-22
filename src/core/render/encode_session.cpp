@@ -1,0 +1,416 @@
+#include "encode_session.hpp"
+
+#include "../util/log.hpp"
+#include "../util/strings.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <format>
+
+namespace gmdr::render {
+
+using media::kMixRate;
+using Clock = std::chrono::steady_clock;
+
+namespace {
+double ms_since(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
+int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+}
+void atomic_add(std::atomic<double>& a, double v) {
+    double cur = a.load();
+    while (!a.compare_exchange_weak(cur, cur + v)) {}
+}
+} // namespace
+
+// ================================ PreviewSink ======================================
+void PreviewSink::set(int w, int h, std::vector<uint8_t>&& rgba) {
+    std::lock_guard lock(mutex_);
+    frame_.width = w;
+    frame_.height = h;
+    frame_.rgba = std::move(rgba);
+    ++frame_.serial;
+}
+
+bool PreviewSink::get_if_newer(uint64_t have_serial, PreviewFrame& out) const {
+    std::lock_guard lock(mutex_);
+    if (frame_.serial == 0 || frame_.serial == have_serial) return false;
+    out = frame_;
+    return true;
+}
+
+// =============================== EncodeSession =====================================
+EncodeSession::EncodeSession(EncodeSettings s, ThreadPool* pool, PreviewSink* preview)
+    : s_(std::move(s)), pool_(pool), preview_(preview) {}
+
+EncodeSession::~EncodeSession() {
+    if (started_ && !finished_) abort();
+    if (worker_.joinable()) {
+        {
+            std::lock_guard lock(q_mutex_);
+            worker_stop_ = true;
+            queue_.clear();
+        }
+        q_cv_.notify_all();
+        worker_.join();
+    }
+    sws_freeContext(preview_sws_);
+}
+
+double EncodeSession::video_seconds() const {
+    return static_cast<double>(frames_out_.load()) * s_.video.fps.den / static_cast<double>(s_.video.fps.num);
+}
+
+int64_t EncodeSession::audio_position() const {
+    std::lock_guard lock(audio_mutex_);
+    return mixer_ ? mixer_->position() : 0;
+}
+
+bool EncodeSession::game_audio_opened() const {
+    std::lock_guard lock(audio_mutex_);
+    return game_input_ && game_input_->has_file();
+}
+
+std::string EncodeSession::audio_description() const {
+    if (side_wav_) return "WAV поруч із кадрами";
+    if (audio_encoders_.empty()) return "без звуку";
+    return std::format("{} × {}", audio_encoders_.size(), audio_encoders_.front()->describe());
+}
+
+PipelineStats EncodeSession::stats() const {
+    PipelineStats st;
+    st.subframes = subframes_in_;
+    st.frames = frames_out_.load();
+    if (st.subframes > 0) st.blend_ms = blend_ms_ / static_cast<double>(st.subframes);
+    if (st.frames > 0) {
+        st.convert_ms = convert_ms_.load() / static_cast<double>(st.frames);
+        st.encode_ms = encode_ms_.load() / static_cast<double>(st.frames);
+        st.audio_ms = audio_ms_.load() / static_cast<double>(st.frames);
+    }
+    {
+        std::lock_guard lock(q_mutex_);
+        st.queue = static_cast<int>(queue_.size());
+    }
+    return st;
+}
+
+bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec, std::string* error) {
+    frame_w_ = frame_w;
+    frame_h_ = frame_h;
+    {
+        // Папка для вихідного файлу може ще не існувати
+        std::error_code ec;
+        const std::filesystem::path parent = path_from_utf8(s_.output_path).parent_path();
+        if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    }
+    if (!muxer_.open(s_.output_path, s_.container, error)) return false;
+    if (!muxer_.supports_codec(s_.video.codec)) {
+        if (error) *error = std::format("контейнер '{}' не підтримує кодек {} — оберіть інший формат файлу",
+                                        muxer_.format()->name, s_.video.codec);
+        return false;
+    }
+    const bool global_header = muxer_.needs_global_header();
+    if (!video_.open(s_.video, frame_w, frame_h, global_header, error)) return false;
+    video_stream_ = muxer_.add_stream(video_.context(), "GMod demo");
+    video_desc_ = video_.describe();
+    log_info("Відео: {}", video_desc_);
+
+    // Motion blur: 16-бітне змішування, якщо вихід >8 біт
+    const bool high_depth = media::pix_fmt_bit_depth(video_.output_pix_fmt()) > 8;
+    blender_ = std::make_unique<frames::MotionBlender>(s_.motion_blur_samples, s_.shutter_degrees, high_depth, pool_);
+    if (s_.motion_blur_samples > 1)
+        log_info("Motion blur: {} під-кадрів, затвор {:.0f}° (усереднюється {})", s_.motion_blur_samples,
+                 s_.shutter_degrees, blender_->used_samples());
+
+    // ---- Звук ----
+    if (s_.audio_enabled) {
+        std::vector<std::unique_ptr<audio::AudioInput>> inputs;
+        std::vector<audio::AudioTrackPlan> tracks;
+        audio::AudioTrackPlan mix;
+        mix.title = "Мікс";
+        audio::AudioInput* game = nullptr;
+        audio::AudioInput* mic = nullptr;
+        std::vector<audio::AudioInput*> voices;
+        std::vector<float> voice_gains;
+        if (spec.game_audio) {
+            auto g = std::make_unique<audio::GameAudioInput>(spec.game_wav, spec.game_wav_live, spec.game_offset);
+            game_input_ = g.get();
+            game = g.get();
+            inputs.push_back(std::move(g));
+            mix.sources.push_back({game, spec.game_gain});
+        }
+        for (size_t i = 0; i < spec.voices.size(); ++i) {
+            const float gain = spec.voice_gain * (i < spec.voice_gains.size() ? spec.voice_gains[i] : 1.0f);
+            if (gain <= 0.0f) continue;   // вимкнений гравець
+            auto vi = std::make_unique<audio::VoiceInput>(spec.voices[i], spec.voice_origin_sample, spec.voice_delay);
+            voices.push_back(vi.get());
+            voice_gains.push_back(gain);
+            mix.sources.push_back({vi.get(), gain});
+            inputs.push_back(std::move(vi));
+        }
+        if (!spec.mic_file.empty()) {
+            auto m = std::make_unique<audio::FileAudioInput>(spec.mic_file, spec.mic_offset);
+            if (!m->ok()) {
+                log_warn("Файл мікрофона не додано: {}", m->error());
+            } else {
+                mic = m.get();
+                mix.sources.push_back({mic, spec.mic_gain});
+                inputs.push_back(std::move(m));
+            }
+        }
+        if (!mix.sources.empty()) {
+            tracks.push_back(mix);
+            if (s_.separate_tracks) {
+                if (game) tracks.push_back({"Гра", {{game, spec.game_gain}}});
+                for (size_t i = 0; i < voices.size(); ++i)
+                    tracks.push_back({voices[i]->name(), {{voices[i], voice_gains[i]}}});
+                if (mic) tracks.push_back({"Мікрофон", {{mic, spec.mic_gain}}});
+            }
+            if (muxer_.is_image_sequence()) {
+                // У послідовність зображень звук не вбудувати — пишемо WAV поруч
+                std::filesystem::path out = path_from_utf8(s_.output_path);
+                std::filesystem::path wav = out.parent_path() / "audio.wav";
+                side_wav_ = std::make_unique<audio::WavWriter>();
+                if (!side_wav_->open(wav, kMixRate, 2, audio::WavWriter::Format::Int16, error)) return false;
+                tracks.resize(1);
+                log_info("Звук буде збережено окремо: {}", path_to_utf8(wav));
+            } else {
+                for (const auto& t : tracks) {
+                    auto enc = std::make_unique<media::AudioEncoder>();
+                    if (!enc->open(s_.audio, global_header, error)) return false;
+                    if (!muxer_.supports_codec(s_.audio.codec)) {
+                        if (error) *error = std::format("контейнер '{}' не підтримує аудіокодек {}",
+                                                        muxer_.format()->name, s_.audio.codec);
+                        return false;
+                    }
+                    audio_streams_.push_back(muxer_.add_stream(enc->context(), t.title));
+                    audio_encoders_.push_back(std::move(enc));
+                }
+                log_info("Звук: {} доріжк(и), {}", tracks.size(), audio_encoders_.front()->describe());
+            }
+            for (const auto& t : tracks) {
+                std::string names;
+                for (const auto& src : t.sources) names += (names.empty() ? "" : " + ") + src.input->name();
+                log_info("  Доріжка «{}»: {}", t.title, names);
+            }
+            mixer_ = std::make_unique<audio::AudioMixer>(std::move(inputs), std::move(tracks));
+        } else {
+            log_info("Звук: немає джерел — відео буде без звуку");
+        }
+    }
+    if (!muxer_.write_header(s_.faststart, s_.crash_safe, error)) return false;
+    if (s_.crash_safe && muxer_.is_fragmented())
+        log_info("Файл пишеться фрагментами: навіть якщо гра чи ПК впадуть, уже записане відео відкриється");
+    started_ = true;
+    worker_ = std::thread([this] { worker_loop(); });
+    return true;
+}
+
+bool EncodeSession::encode_video_frame(const frames::Image& img, std::string* error) {
+    const double conv0 = video_.convert_ms(), enc0 = video_.encode_ms();
+    const bool ok = video_.encode(img, frames_out_.load(), [&](AVPacket* p) {
+        return muxer_.write_packet(video_stream_, p, video_.context()->time_base);
+    }, error);
+    atomic_add(convert_ms_, video_.convert_ms() - conv0);
+    atomic_add(encode_ms_, video_.encode_ms() - enc0);
+    if (!ok) {
+        if (error && error->empty()) *error = muxer_.last_error();
+        return false;
+    }
+    ++frames_out_;
+    return true;
+}
+
+void EncodeSession::worker_loop() {
+    for (;;) {
+        frames::Image img;
+        {
+            std::unique_lock lock(q_mutex_);
+            q_cv_.wait(lock, [&] { return !queue_.empty() || worker_stop_; });
+            if (queue_.empty()) return;   // зупинка, черга порожня
+            img = std::move(queue_.front());
+            queue_.pop_front();
+        }
+        q_space_cv_.notify_all();
+        std::string err;
+        bool ok = encode_video_frame(img, &err);
+        if (ok) {
+            capture_preview(img);
+            img.release();   // буфер кадру — назад у пул, поки кодуємо звук
+            ok = pump_audio(&err);
+        }
+        if (!ok) {
+            {
+                std::lock_guard lock(q_mutex_);
+                worker_failed_ = true;
+                worker_error_ = err.empty() ? "помилка кодування" : err;
+                queue_.clear();
+            }
+            q_space_cv_.notify_all();
+            return;
+        }
+    }
+}
+
+bool EncodeSession::enqueue(frames::Image&& img, std::string* error) {
+    std::unique_lock lock(q_mutex_);
+    q_space_cv_.wait(lock, [&] { return queue_.size() < queue_max_ || worker_failed_ || worker_stop_; });
+    if (worker_failed_) {
+        if (error) *error = worker_error_;
+        return false;
+    }
+    queue_.push_back(std::move(img));
+    lock.unlock();
+    q_cv_.notify_one();
+    return true;
+}
+
+bool EncodeSession::stop_worker(std::string* error) {
+    if (worker_.joinable()) {
+        {
+            std::lock_guard lock(q_mutex_);
+            worker_stop_ = true;
+        }
+        q_cv_.notify_all();
+        worker_.join();
+    }
+    std::lock_guard lock(q_mutex_);
+    if (worker_failed_) {
+        if (error) *error = worker_error_;
+        return false;
+    }
+    return true;
+}
+
+bool EncodeSession::push_subframe(frames::Image&& img, std::string* error) {
+    if (!started_) {
+        if (error) *error = "сесію кодування не запущено";
+        return false;
+    }
+    {
+        std::lock_guard lock(q_mutex_);
+        if (worker_failed_) {
+            if (error) *error = worker_error_;
+            return false;
+        }
+    }
+    ++subframes_in_;
+    const auto t0 = Clock::now();
+    auto out = blender_->push(std::move(img));
+    if (s_.motion_blur_samples > 1) blend_ms_ += ms_since(t0);
+    if (!out) return true;
+    return enqueue(std::move(*out), error);
+}
+
+// Викликається під audio_mutex_.
+bool EncodeSession::produce_audio(int64_t until, std::string* error) {
+    if (!mixer_) return true;
+    bool ok = true;
+    mixer_->produce(until, [&](size_t track, const float* data, size_t frames) {
+        if (!ok) return;
+        if (side_wav_) {
+            if (track == 0) side_wav_->write(data, frames);
+            return;
+        }
+        auto& enc = audio_encoders_[track];
+        const int stream = audio_streams_[track];
+        const AVRational tb = enc->context()->time_base;
+        if (!enc->push(data, frames, [&](AVPacket* p) { return muxer_.write_packet(stream, p, tb); }, error)) ok = false;
+    });
+    return ok;
+}
+
+bool EncodeSession::pump_audio(std::string* error) {
+    std::lock_guard lock(audio_mutex_);
+    if (!mixer_) return true;
+    const auto t0 = Clock::now();
+    const int64_t target = static_cast<int64_t>(std::llround(video_seconds() * kMixRate));
+    const int64_t until = std::min(target, mixer_->ready_until());
+    if (until <= mixer_->position()) return true;
+    const bool ok = produce_audio(until, error);
+    atomic_add(audio_ms_, ms_since(t0));
+    return ok;
+}
+
+void EncodeSession::game_audio_finished() {
+    std::lock_guard lock(audio_mutex_);
+    if (game_input_) game_input_->set_finished();
+}
+
+bool EncodeSession::finish(std::string* error) {
+    if (!started_ || finished_) return true;
+    // Незавершена група motion blur
+    if (auto last = blender_->flush()) {
+        if (!enqueue(std::move(*last), error)) return false;
+    }
+    if (!stop_worker(error)) return false;
+    if (!video_.flush([&](AVPacket* p) { return muxer_.write_packet(video_stream_, p, video_.context()->time_base); },
+                      error))
+        return false;
+    {
+        std::lock_guard lock(audio_mutex_);
+        if (mixer_) {
+            mixer_->set_finished();
+            const int64_t total = static_cast<int64_t>(std::llround(video_seconds() * kMixRate));
+            if (!produce_audio(total, error)) return false;
+            for (size_t i = 0; i < audio_encoders_.size(); ++i) {
+                const int stream = audio_streams_[i];
+                const AVRational tb = audio_encoders_[i]->context()->time_base;
+                if (!audio_encoders_[i]->flush([&](AVPacket* p) { return muxer_.write_packet(stream, p, tb); }, error))
+                    return false;
+            }
+            if (side_wav_) side_wav_->close(error);
+        }
+    }
+    finished_ = true;
+    return muxer_.finish(error);
+}
+
+void EncodeSession::abort() {
+    {
+        std::lock_guard lock(q_mutex_);
+        worker_stop_ = true;
+        queue_.clear();
+    }
+    q_cv_.notify_all();
+    q_space_cv_.notify_all();
+    if (worker_.joinable()) worker_.join();
+    finished_ = true;
+    muxer_.abort();
+    std::lock_guard lock(audio_mutex_);
+    if (side_wav_) side_wav_->close(nullptr);
+}
+
+void EncodeSession::capture_preview(const frames::Image& img) {
+    if (!preview_) return;
+    const int64_t t = now_ms();
+    if (t - preview_last_ms_ < 250) return;   // 4 кадри на секунду достатньо
+    preview_last_ms_ = t;
+    // Зменшена копія, що вміщується в 480×270 (з тими самими пропорціями)
+    const double k = std::min({1.0, 480.0 / img.width, 270.0 / img.height});
+    const int pw = std::max(2, static_cast<int>(img.width * k)) & ~1;
+    const int ph = std::max(2, static_cast<int>(img.height * k)) & ~1;
+    const AVPixelFormat in_fmt = media::image_pix_fmt(img.layout);
+    preview_sws_ = sws_getCachedContext(preview_sws_, img.width, img.height, in_fmt, pw, ph, AV_PIX_FMT_RGBA,
+                                        SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    if (!preview_sws_) return;
+    if (frames::is_yuv(img.layout)) {
+        const int* in = sws_getCoefficients(img.bt709 ? SWS_CS_ITU709 : SWS_CS_ITU601);
+        sws_setColorspaceDetails(preview_sws_, in, img.full_range ? 1 : 0, sws_getCoefficients(SWS_CS_ITU709), 1, 0,
+                                 1 << 16, 1 << 16);
+    }
+    std::vector<uint8_t> rgba(static_cast<size_t>(pw) * static_cast<size_t>(ph) * 4);
+    const uint8_t* src[4] = {nullptr, nullptr, nullptr, nullptr};
+    int src_stride[4] = {0, 0, 0, 0};
+    for (int p = 0; p < img.planes(); ++p) {
+        src[p] = img.row(p, 0);
+        src_stride[p] = img.stride[p];
+    }
+    uint8_t* dst[4] = {rgba.data(), nullptr, nullptr, nullptr};
+    const int dst_stride[4] = {pw * 4, 0, 0, 0};
+    sws_scale(preview_sws_, src, src_stride, 0, img.height, dst, dst_stride);
+    preview_->set(pw, ph, std::move(rgba));
+}
+
+} // namespace gmdr::render
