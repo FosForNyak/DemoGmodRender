@@ -142,7 +142,14 @@ void App::init(const std::vector<std::string>& args) {
         else log_warn("Не вдалося прочитати налаштування: {}", err);
     }
     whole_demo_ = s_.start_tick <= 0 && s_.end_tick <= 0;
+    platform_set_minimize_to_tray(s_.minimize_to_tray);
     load_queue();
+    // Для автотестів: сповіщення і відлік після рендеру — без самого рендеру
+    // (разом із GMDR_TEST_POWER_DRYRUN=1, щоб нічого не вимкнулось)
+    if (const char* a = std::getenv("GMDR_TEST_AFTER_DONE"); a && std::getenv("GMDR_TEST_POWER_DRYRUN")) {
+        if (auto pa = parse_power_action(a)) after_done_ = *pa;
+        on_job_finished(render::JobState::Succeeded, "Готово!", "Відео збережено:\nтест.mp4", false);
+    }
 
     log_info("GMod Demo Render {} — рендер демо Garry's Mod у відео", GMDR_VERSION);
     log_info("FFmpeg: libavcodec {}.{}.{}", LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
@@ -450,6 +457,7 @@ void App::poll() {
             open_popup_ = true;
             if (gmod_) driver_state_ = game::driver_state(*gmod_);
             platform_flash_window();
+            on_job_finished(job_->state(), popup_title_, popup_text_, false);
             return;
         }
         const auto* render_job = dynamic_cast<render::RenderJob*>(job_.get());
@@ -483,6 +491,7 @@ void App::poll() {
         open_popup_ = true;
         if (gmod_) driver_state_ = game::driver_state(*gmod_);
         platform_flash_window();
+        on_job_finished(job_->state(), popup_title_, popup_text_, test);
     }
     // Автозбереження налаштувань
     if (dirty_) {
@@ -591,6 +600,19 @@ void App::draw_menu_bar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Інструменти")) {
+        if (ImGui::MenuItem("Сповіщати, коли рендер готовий", nullptr, s_.notify_when_done)) {
+            s_.notify_when_done = !s_.notify_when_done;
+            mark_dirty();
+        }
+        if (ImGui::MenuItem("Згортати в трей", nullptr, s_.minimize_to_tray)) {
+            s_.minimize_to_tray = !s_.minimize_to_tray;
+            platform_set_minimize_to_tray(s_.minimize_to_tray);
+            mark_dirty();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Згорнуте вікно зникає з панелі задач, лишається значок біля годинника\n"
+                              "(з прогресом рендеру в підказці). Клік по значку повертає вікно.");
+        ImGui::Separator();
         if (ImGui::MenuItem("Перевірити GPU-кодеки ще раз", nullptr, false, !gpu_probe_running_)) start_gpu_probe();
         if (ImGui::MenuItem("Знайти Garry's Mod автоматично", nullptr, false, !job_running())) detect_gmod(true);
         ImGui::Separator();
@@ -723,6 +745,21 @@ void App::update_taskbar() {
         st = TaskbarState::Normal;
         fr = analyze_job_->progress().fraction;
     }
+    // Значок у треї: поки йде рендер (прогрес у підказці) або поки вікно сховане в трей
+    const double now = ImGui::GetTime();
+    if (now - tray_update_t_ > 1.0) {
+        tray_update_t_ = now;
+        const bool busy = job_ && job_->running() && !dynamic_cast<render::WatchJob*>(job_.get());
+        std::string tip = "GMod Demo Render";
+        if (busy) {
+            const auto p = job_->progress();
+            tip += " — " + p.stage;
+            if (p.fraction > 0) tip += std::format(" {:.0f}%", p.fraction * 100);
+            if (p.eta >= 0) tip += ", залишилось ~" + format_duration(p.eta);
+            if (after_done_ != PowerAction::None) tip += std::string("; потім — ") + power_action_name(after_done_);
+        }
+        platform_tray(busy || (s_.minimize_to_tray && platform_window_hidden()), tip);
+    }
     const int key = static_cast<int>(st) * 1000 + static_cast<int>(fr * 999);
     if (key == last_taskbar_state_) return;
     last_taskbar_state_ = key;
@@ -827,9 +864,84 @@ void App::apply_preset(int index) {
 }
 
 // ================================== Попапи ========================================
+void App::on_job_finished(render::JobState state, const std::string& title, const std::string& text, bool test_run) {
+    if (s_.notify_when_done && (platform_window_hidden() || after_done_ != PowerAction::None)) {
+        std::string body = text.substr(0, text.find("\n\n"));   // перший абзац — без довгих подробиць
+        if (body.size() > 220) body = body.substr(0, 217) + "...";
+        platform_notify(title, body);
+    }
+    if (after_done_ == PowerAction::None || test_run) return;
+    if (state == render::JobState::Cancelled) {
+        log_info("Рендер зупинено вручну — «{}» після завершення скасовано", power_action_name(after_done_));
+        after_done_ = PowerAction::None;
+        return;
+    }
+    // Хвилина, щоб передумати: вікно виходить наперед із відліком і кнопкою «Скасувати»
+    power_countdown_ = true;
+    power_deadline_ = ImGui::GetTime() + power_countdown_seconds();
+    log_info("Після завершення: {} через {} с (можна скасувати)", power_action_name(after_done_), power_countdown_seconds());
+    platform_notify(after_done_ == PowerAction::Shutdown ? "ПК вимкнеться за хвилину" : "ПК засне за хвилину",
+                    "Рендер завершено. Відкрийте GMod Demo Render, щоб скасувати.");
+    platform_restore_window();
+}
+
+void App::draw_after_done_combo() {
+    const float fs_ = ImGui::GetFontSize();
+    ImGui::SetNextItemWidth(fs_ * 9);
+    const PowerAction opts[] = {PowerAction::None, PowerAction::Shutdown, PowerAction::Sleep};
+    const char* labels[] = {"нічого не робити", "вимкнути ПК", "сон"};
+    if (ImGui::BeginCombo("##afterdone", labels[static_cast<int>(after_done_)])) {
+        for (int i = 0; i < 3; ++i)
+            if (ImGui::Selectable(labels[i], after_done_ == opts[i])) {
+                after_done_ = opts[i];
+                if (after_done_ != PowerAction::None)
+                    log_info("Коли рендер закінчиться: {} (з хвилиною на скасування)", power_action_name(after_done_));
+            }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Що зробити, коли рендер або вся черга закінчиться (успішно чи з помилкою).\n"
+                          "Перед цим — хвилина з кнопкою «Скасувати». Діє лише цього разу, не зберігається.");
+}
+
+void App::draw_power_countdown() {
+    const float fs_ = ImGui::GetFontSize();
+    if (!power_countdown_) return;
+    const double left = power_deadline_ - ImGui::GetTime();
+    if (!ImGui::IsPopupOpen("##power")) ImGui::OpenPopup("##power");
+    if (ImGui::BeginPopupModal("##power", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::TextColored(kColWarn, "%s", after_done_ == PowerAction::Shutdown ? "Вимкнення ПК" : "Сон");
+        ImGui::Separator();
+        ImGui::Text("Рендер завершено. %s через %d с.", after_done_ == PowerAction::Shutdown ? "ПК вимкнеться" : "ПК засне",
+                    std::max(0, static_cast<int>(std::ceil(left))));
+        ImGui::Spacing();
+        bool now = left <= 0;
+        if (ImGui::Button("Скасувати", ImVec2(fs_ * 8, 0))) {
+            log_info("«{}» після рендеру скасовано", power_action_name(after_done_));
+            after_done_ = PowerAction::None;
+            power_countdown_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Зараз")) now = true;
+        if (now && power_countdown_) {
+            power_countdown_ = false;
+            ImGui::CloseCurrentPopup();
+            save_settings_now();
+            std::string err;
+            const PowerAction a = after_done_;
+            after_done_ = PowerAction::None;
+            log_info("Після рендеру: {}", power_action_name(a));
+            if (!do_power_action(a, &err)) log_error("Не вдалося {}: {}", power_action_name(a), err);
+        }
+        ImGui::EndPopup();
+    }
+}
+
 void App::draw_popups() {
     const float fs_ = ImGui::GetFontSize();
-    if (open_popup_) {
+    draw_power_countdown();
+    if (open_popup_ && !power_countdown_) {   // під час відліку перед вимкненням — лише він
         ImGui::OpenPopup("##result");
         open_popup_ = false;
     }

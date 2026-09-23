@@ -22,6 +22,7 @@
 #include "core/util/crash_dump.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/log.hpp"
+#include "core/util/power.hpp"
 #include "core/util/strings.hpp"
 #include "core/voice/voice_decoder.hpp"
 
@@ -58,6 +59,7 @@ namespace fs = std::filesystem;
 
 static std::atomic<int> g_interrupts{0};
 static void on_sigint(int) { ++g_interrupts; }
+static PowerAction g_then = PowerAction::None;   // --then: що зробити після рендеру чи черги
 
 static void print_usage() {
     std::puts(R"(GMod Demo Render — рендер демо Garry's Mod у відео (консольна версія)
@@ -122,6 +124,7 @@ static void print_usage() {
 Інше:
   --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
   --no-crash-safe        звичайний MP4 під час запису (типово — фрагментами, вціліє при збої)
+  --then shutdown|sleep  після рендеру чи черги вимкнути ПК або сон (60 с на скасування: Ctrl+C)
   encode: --prefix ПРЕФІКС  --wav ФАЙЛ  --demo ДЕМО.dem (для голосу)
 )");
 }
@@ -356,17 +359,36 @@ static int run_job(render::Job& job) {
             std::printf("  %s %s%s\n", ch.state == render::CheckItem::Ok ? "+" : ch.state == render::CheckItem::Skipped ? "-" : "x",
                         ch.name.c_str(), ch.detail.empty() ? "" : (" — " + ch.detail).c_str());
     }
+    int rc = 1;
     switch (job.state()) {
     case render::JobState::Succeeded:
         std::printf("Готово: %s\n", job.result().c_str());
-        return 0;
+        rc = 0;
+        break;
     case render::JobState::Cancelled:
         std::printf("Скасовано\n");
-        return 2;
+        return 2;   // зупинили вручну — вимикати ПК не треба
     default:
         std::printf("Помилка: %s\n", job.error().c_str());
-        return 1;
+        break;
     }
+    if (g_then != PowerAction::None) {
+        // Хвилина, щоб передумати
+        const int before = g_interrupts;
+        for (int left = power_countdown_seconds(); left > 0; --left) {
+            std::fprintf(stderr, "\rПісля рендеру: %s через %2d с (Ctrl+C — скасувати)", power_action_name(g_then), left);
+            std::fflush(stderr);
+            for (int i = 0; i < 10 && g_interrupts == before; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (g_interrupts != before) {
+                std::fprintf(stderr, "\nСкасовано: %s не буде\n", power_action_name(g_then));
+                return rc;
+            }
+        }
+        std::fprintf(stderr, "\n");
+        std::string err;
+        if (!do_power_action(g_then, &err)) std::printf("Не вдалося %s: %s\n", power_action_name(g_then), err.c_str());
+    }
+    return rc;
 }
 
 static int cmd_info(const Cli& c) {
@@ -748,6 +770,14 @@ int main(int argc, char** argv) {
     if (c.command.empty() || c.has("-h") || c.has("--help")) {
         print_usage();
         return c.command.empty() ? 1 : 0;
+    }
+    if (c.has("--then")) {
+        const auto a = parse_power_action(to_lower(c.get("--then")));
+        if (!a) {
+            std::puts("--then: shutdown (вимкнути ПК), sleep (сон) або none");
+            return 1;
+        }
+        g_then = *a;
     }
     const bool verbose = c.has("-v") || c.has("--verbose");
     set_min_log_level(verbose ? LogLevel::Debug : LogLevel::Info);

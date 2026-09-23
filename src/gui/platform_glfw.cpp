@@ -157,6 +157,11 @@ std::string clipboard_text_set(const std::string& text) {
 }
 
 bool platform_forward_to_running_instance(const std::vector<std::string>&) { return false; }
+void platform_tray(bool, const std::string&) {}
+void platform_notify(const std::string&, const std::string&) {}
+void platform_set_minimize_to_tray(bool) {}
+bool platform_window_hidden() { return false; }
+void platform_restore_window() {}
 
 bool platform_screenshot(const std::string& path) {
     int w, h;

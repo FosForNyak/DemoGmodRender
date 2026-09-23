@@ -424,6 +424,14 @@ void App::draw_progress() {
     }
     if (p.elapsed > 0) stats += (stats.empty() ? "" : "  |  ") + std::string("Минуло: ") + format_duration(p.elapsed);
     ImGui::TextColored(kColDim, "%s", stats.c_str());
+    // Що зробити, коли рендер чи черга закінчиться (вимкнути ПК / сон)
+    if (job_->running() && !dynamic_cast<render::WatchJob*>(job_.get()) &&
+        !dynamic_cast<render::ExportVoicesJob*>(job_.get())) {
+        ImGui::SameLine();
+        ImGui::TextColored(kColDim, "  |  Потім:");
+        ImGui::SameLine();
+        draw_after_done_combo();
+    }
     if (p.disk_low) {
         ImGui::SameLine();
         ImGui::TextColored(kColErr, "  [гру призупинено: закінчується місце на диску]");

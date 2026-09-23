@@ -29,6 +29,7 @@
 #include "core/render/report.hpp"
 #include "core/util/zip_writer.hpp"
 #include "core/util/file_assoc.hpp"
+#include "core/util/power.hpp"
 #include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -886,6 +887,19 @@ static void test_dem_association() {
 #endif
 }
 
+// Дія після рендеру: розбір параметра (саму дію тести не виконують)
+static void test_power_action() {
+    std::printf("[power action]\n");
+    CHECK(parse_power_action("shutdown") == PowerAction::Shutdown);
+    CHECK(parse_power_action("sleep") == PowerAction::Sleep);
+    CHECK(parse_power_action("") == PowerAction::None && parse_power_action("none") == PowerAction::None);
+    CHECK(!parse_power_action("reboot").has_value());
+    CHECK(std::string(power_action_name(PowerAction::Shutdown)) == "вимкнути ПК");
+    std::string err;
+    CHECK(do_power_action(PowerAction::None, &err));   // "нічого" — завжди успіх і без дій
+    CHECK(power_countdown_seconds() >= 1);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1366,6 +1380,7 @@ int main(int argc, char** argv) {
     test_derived_outputs();
     test_report_zip();
     test_dem_association();
+    test_power_action();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

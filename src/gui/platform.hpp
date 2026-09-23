@@ -60,4 +60,14 @@ void platform_set_taskbar_progress(TaskbarState state, double fraction);
 // Привернути увагу (блимнути кнопкою в панелі задач), якщо вікно не активне.
 void platform_flash_window();
 
+// Значок в області сповіщень (трей): show — показати/прибрати, tooltip — підказка (прогрес рендеру).
+// Клік по значку або по сповіщенню повертає вікно.
+void platform_tray(bool show, const std::string& tooltip);
+// Сповіщення Windows (з'являється і в Центрі сповіщень).
+void platform_notify(const std::string& title, const std::string& text);
+// Згортати в трей: згорнуте вікно зникає з панелі задач, лишається значок.
+void platform_set_minimize_to_tray(bool on);
+bool platform_window_hidden();   // згорнуте або в треї
+void platform_restore_window();  // повернути з трею / розгорнути і показати поверх
+
 } // namespace gmdr::gui

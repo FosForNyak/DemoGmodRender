@@ -31,6 +31,7 @@
 #include "core/render/markers.hpp"
 #include "core/render/settings.hpp"
 #include "core/util/log.hpp"
+#include "core/util/power.hpp"
 #include "voice_player.hpp"
 
 namespace gmdr::gui {
@@ -131,6 +132,10 @@ private:
     void finish_queue(const render::QueueJob& q);
     // Звіт про проблему (Довідка → «Зібрати звіт про проблему»)
     void make_report();
+    // Кінець рендеру/черги: сповіщення і дія після завершення (вимкнути ПК / сон)
+    void on_job_finished(render::JobState state, const std::string& title, const std::string& text, bool test_run);
+    void draw_power_countdown();
+    void draw_after_done_combo();
 
     // ---- стан ----
     render::RenderSettings                          s_;
@@ -181,6 +186,12 @@ private:
     std::vector<render::Marker>                     markers_;
 
     std::vector<QueueEntry>                         queue_;
+
+    // Після завершення рендеру/черги (лише на цей запуск програми, не зберігається)
+    PowerAction                                     after_done_ = PowerAction::None;
+    bool                                            power_countdown_ = false;
+    double                                          power_deadline_ = 0;   // ImGui::GetTime()
+    double                                          tray_update_t_ = -10;
 
     // Прослуховування голосу
     VoicePlayer                                     player_;

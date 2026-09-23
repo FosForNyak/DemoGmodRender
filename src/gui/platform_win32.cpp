@@ -56,6 +56,39 @@ std::vector<UserTexture> g_textures;
 ITaskbarList3*           g_taskbar = nullptr;
 bool                     g_taskbar_tried = false;
 
+// Трей і "холості" кадри (вікно згорнуте або в треї: програма стежить за рендером, але не малює)
+constexpr UINT           kTrayMessage = WM_APP + 1;
+NOTIFYICONDATAW          g_tray{};
+bool                     g_tray_shown = false;
+bool                     g_minimize_to_tray = false;
+bool                     g_idle_frame = false;
+
+void restore_from_tray() {
+    ShowWindow(g_hwnd, SW_SHOW);
+    if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
+    SetForegroundWindow(g_hwnd);
+}
+
+bool tray_add() {
+    if (g_tray_shown) return true;
+    g_tray = {};
+    g_tray.cbSize = sizeof(g_tray);
+    g_tray.hWnd = g_hwnd;
+    g_tray.uID = 1;
+    g_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_tray.uCallbackMessage = kTrayMessage;
+    g_tray.hIcon = g_wc.hIcon;
+    wcsncpy(g_tray.szTip, L"GMod Demo Render", ARRAYSIZE(g_tray.szTip) - 1);
+    g_tray_shown = Shell_NotifyIconW(NIM_ADD, &g_tray) != FALSE;
+    return g_tray_shown;
+}
+
+void tray_remove() {
+    if (!g_tray_shown) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_tray);
+    g_tray_shown = false;
+}
+
 void create_rtv() {
     ID3D11Texture2D* back = nullptr;
     g_swapchain->GetBuffer(0, IID_PPV_ARGS(&back));
@@ -105,7 +138,10 @@ LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
     switch (msg) {
     case WM_SIZE:
-        if (wparam == SIZE_MINIMIZED) return 0;
+        if (wparam == SIZE_MINIMIZED) {
+            if (g_minimize_to_tray && tray_add()) ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
         g_resize_w = LOWORD(lparam);
         g_resize_h = HIWORD(lparam);
         return 0;
@@ -127,6 +163,11 @@ LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (g_cb.on_files_dropped) g_cb.on_files_dropped(files);
         return 0;
     }
+    case kTrayMessage:
+        if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK || lparam == WM_RBUTTONUP ||
+            lparam == NIN_BALLOONUSERCLICK)
+            restore_from_tray();
+        return 0;
     case WM_COPYDATA: {
         const auto* cds = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
         if (!cds || cds->dwData != kCopyDataOpen) break;
@@ -285,11 +326,13 @@ bool platform_begin_frame() {
         if (msg.message == WM_QUIT) g_quit = true;
     }
     if (g_quit) return false;
-    if (g_occluded && g_swapchain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
-        Sleep(20);
-        return platform_begin_frame();
-    }
-    g_occluded = false;
+    // Вікно згорнуте, у треї або повністю закрите іншими: кадр раз на 100 мс і без малювання —
+    // програма далі стежить за рендером (сповіщення, дія після завершення), а процесор вільний.
+    // (Раніше тут був рекурсивний виклик кожні 20 мс — за довгий рендер у згорнутому вікні стек ріс.)
+    g_idle_frame = !IsWindowVisible(g_hwnd) || IsIconic(g_hwnd) ||
+                   (g_occluded && g_swapchain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED);
+    if (g_idle_frame) Sleep(100);
+    else g_occluded = false;
     if (g_resize_w && g_resize_h) {
         release_rtv();
         g_swapchain->ResizeBuffers(0, g_resize_w, g_resize_h, DXGI_FORMAT_UNKNOWN, 0);
@@ -302,6 +345,7 @@ bool platform_begin_frame() {
 }
 
 void platform_end_frame(const float clear[4]) {
+    if (g_idle_frame) return;   // нічого не видно — не малюємо
     g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
     g_context->ClearRenderTargetView(g_rtv, clear);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -310,6 +354,7 @@ void platform_end_frame(const float clear[4]) {
 }
 
 void platform_shutdown() {
+    tray_remove();
     while (!g_textures.empty()) platform_destroy_texture(reinterpret_cast<uint64_t>(g_textures.back().srv));
     if (g_taskbar) {
         g_taskbar->Release();
@@ -446,6 +491,42 @@ void platform_set_taskbar_progress(TaskbarState state, double fraction) {
         const double fr = fraction < 0 ? 0 : fraction > 1 ? 1 : fraction;
         g_taskbar->SetProgressValue(g_hwnd, static_cast<ULONGLONG>(fr * 1000), 1000);
     }
+}
+
+void platform_tray(bool show, const std::string& tooltip) {
+    if (!g_hwnd) return;
+    if (!show) {
+        if (!IsWindowVisible(g_hwnd)) return;   // вікно в треї — значок потрібен, щоб його повернути
+        tray_remove();
+        return;
+    }
+    if (!tray_add()) return;
+    const std::wstring tip = utf8_to_wide(tooltip.empty() ? "GMod Demo Render" : tooltip);
+    if (tip == g_tray.szTip) return;
+    wcsncpy(g_tray.szTip, tip.c_str(), ARRAYSIZE(g_tray.szTip) - 1);
+    g_tray.szTip[ARRAYSIZE(g_tray.szTip) - 1] = 0;
+    g_tray.uFlags = NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &g_tray);
+}
+
+void platform_notify(const std::string& title, const std::string& text) {
+    // Сповіщення показується від імені значка в треї; App прибере значок, коли він стане непотрібним
+    if (!g_hwnd || !tray_add()) return;
+    NOTIFYICONDATAW n = g_tray;
+    n.uFlags = NIF_INFO;
+    wcsncpy(n.szInfoTitle, utf8_to_wide(title).c_str(), ARRAYSIZE(n.szInfoTitle) - 1);
+    wcsncpy(n.szInfo, utf8_to_wide(text).c_str(), ARRAYSIZE(n.szInfo) - 1);
+    n.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
+    n.hBalloonIcon = g_wc.hIcon;
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+}
+
+void platform_set_minimize_to_tray(bool on) { g_minimize_to_tray = on; }
+
+bool platform_window_hidden() { return g_hwnd && (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)); }
+
+void platform_restore_window() {
+    if (g_hwnd) restore_from_tray();
 }
 
 void platform_flash_window() {

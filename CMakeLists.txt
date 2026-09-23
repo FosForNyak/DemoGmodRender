@@ -87,7 +87,7 @@ target_link_libraries(gmdr_core PUBLIC
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
     Threads::Threads)
 if(WIN32)
-    target_link_libraries(gmdr_core PUBLIC advapi32 shell32 ole32 user32)
+    target_link_libraries(gmdr_core PUBLIC advapi32 shell32 ole32 user32 powrprof)
 endif()
 
 # Функція: скопіювати DLL FFmpeg поруч з .exe (Windows)

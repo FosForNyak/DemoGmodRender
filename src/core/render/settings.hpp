@@ -96,6 +96,10 @@ struct RenderSettings {
     int         threads = 0;
     bool        keep_temp_files = false;
 
+    // ---- Програма (вікно) ----
+    bool        notify_when_done = true;  // сповіщення Windows, коли рендер чи черга закінчились
+    bool        minimize_to_tray = false; // згорнуте вікно — лише значком у треї
+
     json::Value to_json() const;
     static RenderSettings from_json(const json::Value& j);
 };
