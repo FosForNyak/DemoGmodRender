@@ -81,9 +81,10 @@ jobs:
           if ($r128 -notmatch "I:\s+(-?[\d\.]+) LUFS" -or [math]::Abs([double]$matches[1] + 14) -gt 1.5) { $r128; throw "гучність не -14 LUFS" }
           # Додаткові версії з тих самих кадрів: Discord і вертикальна 9:16
           $ver = "$PWD\build\out_ver.mp4"
-          & build\gmdr-cli.exe render build\td\test24.dem -o $ver --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
-              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --also discord,vertical
-          if ($LASTEXITCODE -ne 0) { throw "рендер з версіями не вдався" }
+          $verlog = & build\gmdr-cli.exe render build\td\test24.dem -o $ver --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --also discord,vertical --speaker-overlay 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { $verlog; throw "рендер з версіями не вдався" }
+          if ($verlog -notmatch "на кадрі: 3 гравц") { $verlog; throw "немає підписів «хто говорить» на кадрі" }
           $frames = & third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=nb_frames -of csv=p=0 $ver
           $vert = & third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -of csv=p=0 ($ver -replace '\.mp4$', '_vertical.mp4')
           $vert

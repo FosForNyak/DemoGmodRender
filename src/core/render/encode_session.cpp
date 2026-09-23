@@ -390,6 +390,11 @@ bool EncodeSession::stop_worker(std::string* error) {
     return true;
 }
 
+void EncodeSession::draw_overlay(frames::Image& img) {
+    const int64_t n = blended_frames_++;
+    if (overlay_) overlay_->draw(img, static_cast<double>(n) * s_.video.fps.den / s_.video.fps.num);
+}
+
 bool EncodeSession::push_subframe(frames::Image&& img, std::string* error) {
     if (!started_) {
         if (error) *error = "сесію кодування не запущено";
@@ -407,6 +412,7 @@ bool EncodeSession::push_subframe(frames::Image&& img, std::string* error) {
     auto out = blender_->push(std::move(img));
     if (s_.motion_blur_samples > 1) blend_ms_ += ms_since(t0);
     if (!out) return true;
+    draw_overlay(*out);
     return enqueue(std::move(*out), error);
 }
 
@@ -461,6 +467,7 @@ bool EncodeSession::finish(std::string* error) {
     if (!started_ || finished_) return true;
     // Незавершена група motion blur
     if (auto last = blender_->flush()) {
+        draw_overlay(*last);
         if (!enqueue(std::move(*last), error)) return false;
     }
     if (!stop_worker(error)) return false;

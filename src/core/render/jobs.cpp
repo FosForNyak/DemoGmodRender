@@ -247,19 +247,44 @@ bool is_mov_family(const std::string& path, const std::string& container) {
 }
 
 // Субтитри "хто говорить" поруч із відео (те саме ім'я, розширення .srt).
-void write_speaker_subtitles(const RenderSettings& s, const std::vector<const voice::SpeakerTrack*>& speakers,
-                             int64_t origin_sample, double duration) {
-    if (s.output_path.find('%') != std::string::npos) return;   // послідовність зображень
+// Мовці для субтитрів і підписів на кадрі (вимкнені гравці — без підпису)
+std::vector<SpeakerSubtitleSource> subtitle_sources(const RenderSettings& s,
+                                                    const std::vector<const voice::SpeakerTrack*>& speakers) {
     const auto gains = speaker_gains(s, speakers);
     std::vector<SpeakerSubtitleSource> src;
     for (size_t i = 0; i < speakers.size(); ++i)
         if (gains[i] > 0.0f) src.push_back({speakers[i], speakers[i]->name.empty() ? speakers[i]->display_name() : speakers[i]->name});
-    const std::string srt = make_speaker_srt(src, origin_sample, duration, s.voice_delay);
+    return src;
+}
+
+void write_speaker_subtitles(const RenderSettings& s, const std::vector<const voice::SpeakerTrack*>& speakers,
+                             int64_t origin_sample, double duration) {
+    if (s.output_path.find('%') != std::string::npos) return;   // послідовність зображень
+    const std::string srt = make_speaker_srt(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay);
     fs::path path = path_from_utf8(s.output_path);
     path.replace_extension(".srt");
     std::string err;
     if (write_file_text(path, srt, &err)) log_info("Субтитри «хто говорить»: {}", path_to_utf8(path));
     else log_warn("Не вдалося записати субтитри: {}", err);
+}
+
+// Підписи «хто говорить» на кадрі; nullptr — нема кого показувати або немає шрифту
+std::unique_ptr<SpeakerOverlay> make_overlay(const RenderSettings& s, const std::vector<const voice::SpeakerTrack*>& speakers,
+                                             int64_t origin_sample, double duration, int frame_w, int frame_h) {
+    const std::string font = SpeakerOverlay::find_font();
+    if (font.empty()) {
+        log_warn("Підписи «хто говорить»: у системі не знайдено шрифту з кирилицею — без підписів");
+        return nullptr;
+    }
+    auto ov = std::make_unique<SpeakerOverlay>();
+    std::string err;
+    if (!ov->init(SpeakerOverlay::speakers_for(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay),
+                  frame_w, frame_h, font, &err)) {
+        log_info("Підписи «хто говорить»: {}", err);
+        return nullptr;
+    }
+    log_info("Підписи «хто говорить» на кадрі: {} гравц(ів)", ov->label_count());
+    return ov;
 }
 
 void write_chat_subtitles(const RenderSettings& s, const demo::DemoAnalysis& a, int32_t start_tick, double duration) {
@@ -1337,6 +1362,9 @@ void RenderJob::run() {
                     // Субтитри пишемо одразу: відрізок і голоси вже відомі
                     write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, expected_seconds);
                 }
+                if (s_.speaker_overlay && !speakers.empty())
+                    session.set_overlay(make_overlay(s_, speakers, spec.voice_origin_sample, expected_seconds, img.width,
+                                                     img.height));
                 set_stage(test_run_ ? "Тестовий прогін: рендер" : "Рендер");
                 update([&](Progress& p) {
                     p.video_desc = session.video_description();

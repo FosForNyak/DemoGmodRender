@@ -26,6 +26,7 @@
 #include "../media/muxer.hpp"
 #include "../media/video_encoder.hpp"
 #include "../util/thread_pool.hpp"
+#include "overlay.hpp"
 
 namespace gmdr::render {
 
@@ -131,6 +132,8 @@ public:
     PipelineStats stats() const;
     // Додаткові версії, що записалися без помилок (після finish)
     std::vector<std::string> finished_extras() const;
+    // Підписи «хто говорить» на кадрах (після motion blur, до кодування)
+    void set_overlay(std::unique_ptr<SpeakerOverlay> o) { overlay_ = std::move(o); }
 
 private:
     struct Extra {
@@ -149,6 +152,7 @@ private:
     bool encode_video_frame(const frames::Image& img, std::string* error);
     bool produce_audio(int64_t until, std::string* error, bool final = false);   // під audio_mutex_
     bool enqueue(frames::Image&& img, std::string* error);
+    void draw_overlay(frames::Image& img);
     bool stop_worker(std::string* error);
     void worker_loop();
     void capture_preview(const frames::Image& img);
@@ -169,6 +173,8 @@ private:
     std::vector<int>                          audio_streams_;
     std::unique_ptr<audio::WavWriter>         side_wav_;   // для послідовності зображень
     std::vector<std::unique_ptr<Extra>>       extras_;
+    std::unique_ptr<SpeakerOverlay>           overlay_;
+    int64_t                                   blended_frames_ = 0;   // кадрів після motion blur (час підписів)
     int64_t                                   subframes_in_ = 0;
     std::atomic<int64_t>                      frames_out_{0};
     int                                       frame_w_ = 0, frame_h_ = 0;

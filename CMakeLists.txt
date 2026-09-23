@@ -82,7 +82,8 @@ file(WRITE "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp" "${_gmdr_lua_
 configure_file("${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp"
                "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc" COPYONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GMDR_DRIVER_LUA}")
-target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated")
+target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated"
+                           "${CMAKE_SOURCE_DIR}/third_party/imgui")   # stb_truetype для підписів на кадрі
 target_link_libraries(gmdr_core PUBLIC
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
     Threads::Threads)

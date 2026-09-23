@@ -112,6 +112,7 @@ static void print_usage() {
   --duck-game            звук гри стихає, коли хтось говорить
   --loudness LUFS|off    гучність загального міксу за EBU R128 (-14 — YouTube, -23 — ТБ)
   --srt                  субтитри «хто говорить» (.srt поруч із відео)
+  --speaker-overlay      підписи «хто говорить» прямо на кадрі (плашки праворуч унизу)
   --chat-srt             субтитри з чатом гри (.srt; разом із --srt — .chat.srt)
   --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
   --no-chapters          не записувати розділи
@@ -162,7 +163,8 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--no-audio", "--no-game-audio", "--separate-tracks", "--engine-voice", "--full-range",
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
-                               "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game"};
+                               "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game",
+                               "--speaker-overlay", "--version"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -266,6 +268,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--no-mute")) s.mute_game_sound = false;
     if (c.has("--rtx")) s.rtx = true;
     if (c.has("--srt")) s.subtitles_srt = true;
+    if (c.has("--speaker-overlay")) s.speaker_overlay = true;
     if (c.has("--accurate-color")) s.accurate_color = true;
     if (c.has("--no-crash-safe")) s.crash_safe = false;
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");

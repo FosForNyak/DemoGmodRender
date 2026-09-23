@@ -26,6 +26,7 @@
 #include "core/render/subtitles.hpp"
 #include "core/render/versions.hpp"
 #include "core/render/derived.hpp"
+#include "core/render/overlay.hpp"
 #include "core/render/report.hpp"
 #include "core/util/zip_writer.hpp"
 #include "core/util/file_assoc.hpp"
@@ -917,6 +918,55 @@ static void test_update_check() {
     CHECK(!parse_latest_release("не json", &err));
 }
 
+// Підписи «хто говорить» на кадрі: з'являються лише під час мовлення, праворуч унизу, у всіх форматах
+static void test_speaker_overlay() {
+    std::printf("[speaker overlay]\n");
+    const std::string font = render::SpeakerOverlay::find_font();
+    if (font.empty()) {
+        std::printf("  пропуск: немає системного шрифту\n");
+        return;
+    }
+    render::SpeakerOverlay ov;
+    std::string err;
+    CHECK(!ov.init({}, 640, 360, font, &err));   // нема кого показувати
+    CHECK(ov.init({{"Олег", {{1.0, 3.0}}}, {"Friend", {{2.0, 4.0}}}}, 640, 360, font, &err));
+    CHECK(ov.label_count() == 2);
+    auto changed = [](const frames::Image& a, const frames::Image& b, int p, int x0, int x1, int y0, int y1) {
+        int n = 0;
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x)
+                if (std::memcmp(a.row(p, y) + x, b.row(p, y) + x, 1) != 0) ++n;
+        return n;
+    };
+    for (auto layout : {frames::PixelLayout::BGR24, frames::PixelLayout::BGR48, frames::PixelLayout::YUV420P,
+                        frames::PixelLayout::YUV420P16}) {
+        frames::Image base, img;
+        base.allocate(640, 360, layout);
+        img.allocate(640, 360, layout);
+        for (int p = 0; p < base.planes(); ++p)
+            for (int y = 0; y < base.plane_height(p); ++y) {
+                std::memset(base.row(p, y), 100, base.row_bytes(p));
+                std::memset(img.row(p, y), 100, img.row_bytes(p));
+            }
+        ov.draw(img, 0.5);   // ще ніхто не говорить
+        CHECK(changed(base, img, 0, 0, static_cast<int>(img.row_bytes(0)), 0, 360) == 0);
+        ov.draw(img, 2.5);   // говорять обоє
+        const int right = changed(base, img, 0, static_cast<int>(img.row_bytes(0)) / 2, static_cast<int>(img.row_bytes(0)), 150, 300);
+        const int left = changed(base, img, 0, 0, static_cast<int>(img.row_bytes(0)) / 2, 0, 360);
+        CHECK(right > 500 && left == 0);
+    }
+    // Кадр іншого розміру (гра віддала менший) — без виходу за межі
+    frames::Image small;
+    small.allocate(100, 60, frames::PixelLayout::BGRA32);
+    ov.draw(small, 2.5);
+    // Відрізки з доріжок: коротші за 0.25 с відкидаються, близькі — зливаються
+    voice::SpeakerTrack tr;
+    tr.segments = {{48000, 48000}, {100000, 4800}, {106000, 48000}};   // 1-2 с; 0.1 с; 2.2-3.2 с
+    const auto sp = render::SpeakerOverlay::speakers_for({{&tr, "X"}}, 0, 10.0, 0.0);
+    CHECK(sp.size() == 1 && sp[0].spans.size() == 1 && std::abs(sp[0].spans[0].a - 1.0) < 0.01 &&
+          std::abs(sp[0].spans[0].b - (106000 + 48000) / 48000.0) < 0.01);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1399,6 +1449,7 @@ int main(int argc, char** argv) {
     test_dem_association();
     test_power_action();
     test_update_check();
+    test_speaker_overlay();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();
