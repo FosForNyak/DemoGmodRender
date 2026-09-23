@@ -328,7 +328,7 @@ void App::draw_output_bar() {
     ImGui::TextUnformatted("Зберегти як:");
     ImGui::SameLine();
     ImGui::BeginDisabled(job_running());
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 27.5f);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 33.5f);
     if (ImGui::InputText("##out", &s_.output_path)) mark_dirty();
     ImGui::SameLine();
     if (ImGui::Button("Огляд...##out")) {
@@ -351,6 +351,13 @@ void App::draw_output_bar() {
             ImGui::SetTooltip("Тестовий прогін: 3 секунди з початку фрагмента в тимчасовий файл.\n"
                               "Перевіряє кожен крок (гра, драйвер, демо, кадри, звук, кодек) і рахує,\n"
                               "скільки триватиме весь рендер і скільки важитиме файл.");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!can_start || s_.manual_mode || s_.output_path.empty());
+        if (ImGui::Button("До черги", ImVec2(fs_ * 5.5f, 0))) add_to_queue();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Додати цей рендер (демо, фрагмент, файл і всі налаштування) до черги.\n"
+                              "Черга — на вкладці «Черга»: кілька рендерів підряд, гра запускається один раз.");
         ImGui::SameLine();
         ImGui::BeginDisabled(!can_start);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.30f, 1.0f));

@@ -65,6 +65,9 @@ static void print_usage() {
   gmdr-cli voice <demo.dem> -o <папка>         зберегти голоси гравців у WAV
   gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
   gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
+  gmdr-cli render a.dem b.dem ... -o <папка>   черга: кілька демо підряд, гра запускається один раз
+  gmdr-cli queue <список.txt> [параметри]      черга з файлу: у рядку — демо і його параметри
+                                               ("match.dem" --start 5:00 --end 7:30 -o "бій.mp4")
   gmdr-cli watch <demo.dem> [--from ЧАС]       переглянути демо в грі з цього місця; клавіші в грі:
                                                F9 — початок фрагмента, F11 — кінець, F6 — позначка
   gmdr-cli encode <папка_кадрів> [параметри]   закодувати готові кадри startmovie (TGA/JPG + WAV)
@@ -508,6 +511,147 @@ static int cmd_voice(const Cli& c) {
     return r;
 }
 
+// Налаштування за замовчуванням: --config або збережені програмою (без шляху виходу).
+static bool load_base_settings(const Cli& c, render::RenderSettings& s, std::string& err) {
+    const fs::path default_cfg = app_data_dir() / "gmdr_settings.json";
+    if (c.has("--config")) return render::load_settings(s, c.get("--config"), &err);
+    if (fs::exists(default_cfg)) {
+        render::load_settings(s, path_to_utf8(default_cfg), nullptr);
+        s.output_path.clear();
+    }
+    return true;
+}
+
+// Рядок файлу черги -> аргументи (лапки групують, як у командному рядку).
+static std::vector<std::string> split_command_line(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_quotes = false, has = false;
+    for (char ch : line) {
+        if (ch == '"') {
+            in_quotes = !in_quotes;
+            has = true;
+        } else if (!in_quotes && (ch == ' ' || ch == '\t')) {
+            if (has) out.push_back(cur);
+            cur.clear();
+            has = false;
+        } else {
+            cur += ch;
+            has = true;
+        }
+    }
+    if (has) out.push_back(cur);
+    return out;
+}
+
+// Черга: "render a.dem b.dem ..." (demos) або "queue список.txt" (рядок — демо і його параметри;
+// параметри з командного рядка — для всіх). Гра запускається один раз.
+static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
+    std::vector<Cli> lines;
+    if (!demos.empty()) {
+        for (const auto& d : demos) {
+            Cli item;
+            item.command = "render";
+            item.positional = {d};
+            lines.push_back(item);
+        }
+    } else {
+        if (common.positional.empty()) {
+            std::puts("Використання: gmdr-cli queue <список.txt> [спільні параметри]\n"
+                      "  Рядок списку: демо і його параметри, напр.\n"
+                      "    \"C:\\demos\\match.dem\" --start 5:00 --end 7:30 -o \"D:\\video\\бій.mp4\"\n"
+                      "  Порожні рядки і рядки з # пропускаються.");
+            return 1;
+        }
+        auto text = read_file_text(path_from_utf8(common.positional[0]));
+        if (!text) {
+            std::printf("Не вдалося прочитати %s\n", common.positional[0].c_str());
+            return 1;
+        }
+        if (text->rfind("\xEF\xBB\xBF", 0) == 0) text->erase(0, 3);   // BOM
+        for (const auto& raw : split(replace_all(*text, "\r", ""), '\n')) {
+            const std::string line = trim(raw);
+            if (line.empty() || line[0] == '#') continue;
+            auto args = split_command_line(line);
+            args.insert(args.begin(), {"gmdr-cli", "render"});
+            lines.push_back(parse_cli(args));
+        }
+    }
+    // -o для кількох демо — папка
+    fs::path out_dir;
+    if (common.has("--output")) {
+        const std::string o = common.get("--output");
+        std::error_code ec;
+        if (fs::is_directory(path_from_utf8(o), ec) || o.ends_with('\\') || o.ends_with('/')) {
+            out_dir = path_from_utf8(o);
+        } else {
+            std::puts("Для черги -o має бути папкою (куди класти відео); файл для окремого пункту — -o у його рядку.");
+            return 1;
+        }
+    }
+    std::vector<render::RenderSettings> items;
+    std::map<std::string, int> used_outputs;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        Cli merged = common;
+        merged.opts.erase("--output");
+        merged.positional.clear();
+        for (const auto& [k, v] : lines[i].opts) {
+            if (k == "--vopt" || k == "--exec") merged.opts[k].insert(merged.opts[k].end(), v.begin(), v.end());
+            else merged.opts[k] = v;
+        }
+        if (lines[i].positional.empty()) {
+            std::printf("Пункт %zu: не вказано демо\n", i + 1);
+            return 1;
+        }
+        const std::string demo_path = lines[i].positional[0];
+        render::RenderSettings s;
+        std::string err;
+        if (!load_base_settings(merged, s, err)) {
+            std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
+            return 1;
+        }
+        std::shared_ptr<demo::DemoAnalysis> analysis;
+        try {
+            analysis = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(demo_path)));
+        } catch (const std::exception& e) {
+            std::printf("Пункт %zu (%s): %s\n", i + 1, demo_path.c_str(), e.what());
+            return 1;
+        }
+        s.demo_path = demo_path;
+        s.markers = render::format_markers(render::load_demo_markers(app_data_dir() / "gmdr_markers.json", demo_path));
+        if (!apply_options(merged, s, analysis.get(), err)) {
+            std::printf("Пункт %zu: %s\n", i + 1, err.c_str());
+            return 1;
+        }
+        if (s.output_path.empty()) {
+            const std::string ext = s.container.empty() ? "mp4" : s.container;
+            s.output_path = out_dir.empty() ? render::default_output_path(demo_path, ext)
+                                            : path_to_utf8(out_dir / path_from_utf8(path_to_utf8(
+                                                  path_from_utf8(demo_path).stem()) + "." + ext));
+        }
+        // Те саме демо кілька разів без свого -o — різні файли
+        const int k = ++used_outputs[to_lower(s.output_path)];
+        if (k > 1) {
+            fs::path p = path_from_utf8(s.output_path);
+            s.output_path = path_to_utf8(p.parent_path() / path_from_utf8(std::format(
+                "{}_{}{}", path_to_utf8(p.stem()), k, path_to_utf8(p.extension()))));
+        }
+        std::printf("%zu. %s  %s → %s\n", i + 1, path_to_utf8(path_from_utf8(demo_path).filename()).c_str(),
+                    s.start_tick > 0 || s.end_tick > 0
+                        ? std::format("{}–{}", format_duration(std::max(0, s.start_tick) * analysis->tick_interval),
+                                      s.end_tick > 0 ? format_duration(s.end_tick * analysis->tick_interval) : "кінець").c_str()
+                        : "усе демо",
+                    s.output_path.c_str());
+        items.push_back(std::move(s));
+    }
+    if (items.empty()) {
+        std::puts("Черга порожня");
+        return 1;
+    }
+    render::QueueJob job(std::move(items));
+    return run_job(job);
+}
+
 static int cmd_encoders(const Cli& c) {
     const bool test = c.has("--test");
     std::printf("%-22s %-10s %-9s %s\n", "Кодек", "Формат", "Тип", test ? "Перевірка" : "Опис");
@@ -585,6 +729,8 @@ int main(int argc, char** argv) {
     if (c.command == "driver") return cmd_driver(c);
 
     if (c.command == "watch") return cmd_watch(c);
+    if (c.command == "queue") return cmd_queue(c, {});
+    if (c.command == "render" && c.positional.size() > 1) return cmd_queue(c, c.positional);
 
     if (c.command == "render" || c.command == "encode") {
         if (c.positional.empty()) {
@@ -592,16 +738,10 @@ int main(int argc, char** argv) {
             return 1;
         }
         render::RenderSettings s;
-        const fs::path default_cfg = app_data_dir() / "gmdr_settings.json";
         std::string err;
-        if (c.has("--config")) {
-            if (!render::load_settings(s, c.get("--config"), &err)) {
-                std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
-                return 1;
-            }
-        } else if (fs::exists(default_cfg)) {
-            render::load_settings(s, path_to_utf8(default_cfg), nullptr);
-            s.output_path.clear();
+        if (!load_base_settings(c, s, err)) {
+            std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
+            return 1;
         }
         std::shared_ptr<demo::DemoAnalysis> analysis;
         std::shared_ptr<voice::VoiceDecodeResult> voices;

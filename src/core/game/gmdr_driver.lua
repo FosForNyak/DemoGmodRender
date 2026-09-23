@@ -1,9 +1,12 @@
 -- ============================================================================
---  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.5
+--  GMod Demo Render — драйвер рендеру (стан меню GMod). Версія 1.6
 --
 --  Встановлюється програмою GMod Demo Render у garrysmod/lua/menu/.
 --  Скрипт НІЧОГО не робить, якщо немає файлу завдання data/gmdr/job.txt
 --  (його створює програма безпосередньо перед запуском гри).
+--
+--  Черга рендерів: якщо в завданні wait_next, після запису гра не закривається,
+--  а чекає наступного job.txt — так кілька фрагментів ідуть без перезапуску гри.
 --
 --  Видалити: кнопка "Видалити драйвер" у програмі або перевірка цілісності
 --  файлів гри в Steam.
@@ -12,16 +15,23 @@
 --  перевірити будь-яким інтерпретатором Lua.
 -- ============================================================================
 local JOB_FILE = "gmdr/job.txt"
-if not file.Exists( JOB_FILE, "DATA" ) then return end
 
-local raw = file.Read( JOB_FILE, "DATA" ) or ""
-file.Delete( JOB_FILE )
-local job = util.JSONToTable( raw )
-if type( job ) ~= "table" or not job.id then return end
-if job.created and ( os.time() - tonumber( job.created ) ) > 900 then
-	MsgN( "[GMDR] Завдання застаріло, пропускаю" )
-	return
+-- Прочитати і забрати файл завдання; nil — немає або застаріле
+local function ReadJob()
+	if not file.Exists( JOB_FILE, "DATA" ) then return nil end
+	local raw = file.Read( JOB_FILE, "DATA" ) or ""
+	file.Delete( JOB_FILE )
+	local j = util.JSONToTable( raw )
+	if type( j ) ~= "table" or not j.id then return nil end
+	if j.created and ( os.time() - tonumber( j.created ) ) > 900 then
+		MsgN( "[GMDR] Завдання застаріло, пропускаю" )
+		return nil
+	end
+	return j
 end
+
+local job = ReadJob()
+if not job then return end
 
 local STATUS_FILE = "gmdr/status_" .. job.id .. ".txt"
 local CANCEL_FILE = "gmdr/cancel_" .. job.id .. ".txt"
@@ -29,6 +39,7 @@ local MARKS_FILE = "gmdr/marks_" .. job.id .. ".txt"
 -- Режим перегляду: демо грає в реальному часі з потрібного місця, без запису;
 -- клавіші F9/F11/F6 позначають початок і кінець фрагмента та позначки для програми.
 local watch = job.mode == "watch"
+local lastJobPoll = 0
 local state, stateTime = "menu", SysTime()
 local startTick, lastTick, frames = -1, -1, 0
 local lastWrite, message = 0, ""
@@ -120,6 +131,27 @@ end
 
 local function Quit()
 	if not pcall( RunGameUICommand, "quit" ) then Cmd( "gmdr_quit", "quit" ) end
+end
+
+-- Черга: наступне завдання в уже запущеній грі
+local function StartJob( nj )
+	job = nj
+	watch = job.mode == "watch"
+	STATUS_FILE = "gmdr/status_" .. job.id .. ".txt"
+	CANCEL_FILE = "gmdr/cancel_" .. job.id .. ".txt"
+	MARKS_FILE = "gmdr/marks_" .. job.id .. ".txt"
+	startTick, lastTick, frames = -1, -1, 0
+	message, hideTries, seekDone = "", 0, false
+	lastSeenTick, tickMoves = -1, 0
+	savedNoFocus = nil
+	-- Конфіг нового завдання (налаштування рендеру) виконуємо самі: гру вже запущено. Його аліаси
+	-- gmdr_* мають ті самі назви, що й у попереднього, і перевірити, що exec спрацював, не можна —
+	-- тож команди йдуть напряму, а не через аліаси.
+	local cfg = "gmdr/job_" .. job.id .. ".cfg"
+	if not pcall( RunGameUICommand, "engine exec " .. cfg ) then pcall( RunConsoleCommand, "exec", cfg ) end
+	cfgLoaded = false
+	MsgN( "[GMDR] Наступне завдання черги: ", job.id )
+	SetState( "menu" )
 end
 
 -- ---- Перегляд: клавіші-позначки і підказка поверх гри ----
@@ -300,7 +332,25 @@ hook.Add( "DrawOverlay", "GMDR_Driver", function()
 		if job.quit and now - stateTime > 1.0 then
 			SetState( "quit", message )
 			Quit()
+		elseif job.wait_next and now - stateTime > 0.5 then
+			-- Черга: демо, що ще грає, зупиняємо — і чекаємо наступне завдання
+			if engine.IsPlayingDemo() then Cmd( nil, "disconnect" ) end
+			SetState( "waiting", message )
 		end
+		return
+	end
+
+	if state == "waiting" then
+		if file.Exists( CANCEL_FILE, "DATA" ) or now - stateTime > ( tonumber( job.wait_timeout ) or 600 ) then
+			SetState( "quit", "черга закінчилась" )
+			Quit()
+			return
+		end
+		Status()
+		if now - lastJobPoll < 0.25 then return end
+		lastJobPoll = now
+		local nj = ReadJob()
+		if nj then StartJob( nj ) end
 		return
 	end
 

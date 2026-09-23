@@ -16,6 +16,7 @@
 #include "../demo/analysis.hpp"
 #include "../game/gmod_install.hpp"
 #include "../game/lua_driver.hpp"
+#include "../game/process.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
 #include "settings.hpp"
@@ -79,6 +80,8 @@ public:
     virtual std::string name() const = 0;
     // Живе прев'ю кадрів, що кодуються.
     const PreviewSink& preview() const { return *preview_; }
+    // Писати прев'ю в чужий приймач (черга показує кадри поточного пункту). До start().
+    void share_preview(std::shared_ptr<PreviewSink> p) { preview_ = std::move(p); }
     // Кнопка "Показати гру": тимчасово повернути вікно гри на екран.
     virtual bool can_show_game() const { return false; }
     virtual void set_show_game(bool /*show*/) {}
@@ -140,12 +143,26 @@ std::vector<audio::VoiceCleanup> voice_cleanup_for(const RenderSettings& s,
                                                    const std::atomic<bool>& cancel);
 
 // ---- Рендер через гру ------------------------------------------------------------
+// Черга рендерів: гра, яку попередній пункт лишив відкритою (драйвер чекає наступне
+// завдання), і первинні копії config.cfg / rtx.conf — одні на всю чергу, у dir.
+struct GameHandoff {
+    std::unique_ptr<game::GameProcess> proc;
+    std::optional<game::GModInstall>   gmod;
+    std::filesystem::path              dir;       // garrysmod/gmdr_tmp/queue_<id>
+    std::vector<std::string>           job_ids;   // завдання драйвера всіх пунктів
+    std::string                        waiting_id;   // завдання, після якого гра чекає наступне
+    std::string                        launch_sig;   // з якими параметрами запущено гру (розмір вікна, RTX...)
+};
+
 class RenderJob final : public Job {
 public:
     // test_run: тестовий прогін — 3 секунди з початку фрагмента в тимчасовий файл зі
     // звітом по кроках, заміром швидкості і прогнозом часу й розміру всього рендеру.
+    // handoff/keep_game — пункт черги: узяти вже запущену гру і (keep_game) не закривати її
+    // після запису, а віддати наступному пункту.
     RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
-              std::shared_ptr<const voice::VoiceDecodeResult> voices, bool test_run = false);
+              std::shared_ptr<const voice::VoiceDecodeResult> voices, bool test_run = false,
+              std::shared_ptr<GameHandoff> handoff = nullptr, bool keep_game = false);
     std::string name() const override { return test_run_ ? "Тестовий прогін" : "Рендер демо"; }
     bool is_test_run() const { return test_run_; }
     bool can_show_game() const override;
@@ -172,10 +189,45 @@ private:
     std::string                                     id_;
     std::filesystem::path                           tmp_dir_;
     std::filesystem::path                           config_backup_;
+    std::filesystem::path                           rtx_backup_;
     std::filesystem::path                           stray_dir_;   // куди гра насправді писала кадри (якщо не в tmp)
     bool                                            job_written_ = false;
     bool                                            test_run_ = false;
     std::atomic<bool>                               show_game_{false};
+    std::shared_ptr<GameHandoff>                    handoff_;
+    bool                                            keep_game_ = false;
+};
+
+// ---- Черга рендерів ----------------------------------------------------------------
+// Кілька фрагментів чи демо підряд (наприклад, на ніч). Гра запускається один раз: після
+// кожного пункту драйвер у меню GMod чекає наступне завдання. Якщо пункт не вдався (чи гра
+// впала), черга йде далі — наступний пункт запустить гру заново.
+class QueueJob final : public Job {
+public:
+    struct ItemResult {
+        std::string output;
+        JobState    state = JobState::Idle;
+        std::string error;
+        double      seconds = 0;   // скільки тривав пункт
+    };
+    explicit QueueJob(std::vector<RenderSettings> items);
+    std::string name() const override { return "Черга рендерів"; }
+    bool can_show_game() const override { return true; }
+    void set_show_game(bool show) override;
+    size_t size() const { return items_.size(); }
+    int current_index() const { return current_.load(); }   // -1 — ще не почали
+    std::vector<ItemResult> results() const;
+
+protected:
+    void run() override;
+
+private:
+    std::vector<RenderSettings> items_;
+    std::atomic<int>            current_{-1};
+    std::atomic<bool>           show_game_{false};
+    mutable std::mutex          m_;
+    std::vector<ItemResult>     results_;
+    std::shared_ptr<RenderJob>  job_;   // поточний пункт
 };
 
 // ---- Перегляд демо в грі з вибраного місця ----------------------------------------

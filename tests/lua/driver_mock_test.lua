@@ -105,6 +105,7 @@ local function run_scenario(name, opts)
 	              load_timeout = 600, seek_tick = opts.seek_tick or -1, mode = opts.watch and "watch" or nil,
 	              tick_interval = TI }
 	if opts.watch then job.host_framerate = 0; job.quit = false end
+	if opts.queue or opts.queue_cancel then job.quit = false; job.wait_next = true end
 	files["gmdr/job.txt"] = json_encode(job)
 
 	local env = {}
@@ -146,6 +147,8 @@ local function run_scenario(name, opts)
 			S.tick = cmd == "gmdr_seek" and opts.seek_tick or tonumber(args[1])
 			S.seek_before_start = not S.recording
 		elseif cmd == "gmdr_restore" then S.restored = true
+		elseif cmd == "disconnect" then S.playing = false; S.tick = 0; S.loading_until = nil
+		elseif cmd == "exec" then S.exec_cfg = args[1]
 		elseif cmd == "quit" or cmd == "gmdr_quit" then S.quit = true end
 	end
 	env.RunConsoleCommand = function(cmd, ...) exec(cmd, { ... }) end
@@ -211,6 +214,21 @@ local function run_scenario(name, opts)
 			if S.tick >= p.tick and S.tick < p.tick + 5 then S.keys[p.key] = true end
 		end
 		if S.game_ui_at and S.tick >= S.game_ui_at then S.ui_visible = 1 end
+		-- Черга: програма пише наступне завдання, коли драйвер чекає
+		if (opts.queue or opts.queue_cancel) and not S.queued then
+			local cur = json_decode(files["gmdr/status_abc.txt"] or "{}")
+			if cur.state == "waiting" then
+				S.queued = true
+				if opts.queue_cancel then
+					files["gmdr/cancel_abc.txt"] = "1"
+				else
+					files["gmdr/job.txt"] = json_encode({ id = "def", created = os.time(), demo = "gmdr_tmp/def/demo",
+						movie = "gmdr_tmp/def/f", movie_flags = { "raw" }, host_framerate = opts.rate,
+						start_tick = opts.queue.start_tick, end_tick = opts.queue.end_tick or -1, seek_tick = -1,
+						quit = true, menu_delay = 3, load_timeout = 600, tick_interval = TI })
+				end
+			end
+		end
 		-- Гра у фоні (Alt+Tab): рушій щокадру знову відкриває своє меню; F9 в іншій програмі
 		S.unfocused = opts.unfocus and S.tick >= opts.unfocus[1] and S.tick < opts.unfocus[2] or false
 		if S.unfocused then
@@ -241,6 +259,24 @@ local function run_scenario(name, opts)
 		check(st.state == (opts.cancel_at and "quit" or "done"), "підсумковий статус (" .. tostring(st.state) .. ")")
 		check(S.hint_xalign == 1, "підказка по центру екрана (" .. tostring(S.hint_xalign) .. ")")
 		if opts.verbose then for _, l in ipairs(log) do print("     " .. l) end end
+		return
+	end
+	if opts.queue then
+		local st2 = json_decode(files["gmdr/status_def.txt"] or "{}")
+		check(S.queued, "після першого пункту драйвер чекає наступне завдання (waiting), гра відкрита")
+		check(S.starts == 2 and S.stops == 2, "два записи в одній запущеній грі (" .. S.starts .. ")")
+		check(S.exec_cfg == "gmdr/job_def.cfg", "конфіг наступного завдання виконано (" .. tostring(S.exec_cfg) .. ")")
+		check(S.start_at and S.start_at >= opts.queue.start_tick and S.start_at < opts.queue.start_tick + 2,
+			"другий запис почався на своєму start_tick (" .. tostring(S.start_at) .. ")")
+		check(st2.state == "quit" and S.quit, "після останнього пункту гра закрилась (" .. tostring(st2.state) .. ")")
+		check(not S.nofocus_during_recording, "fps_max_nofocus = 0 і під час другого запису")
+		check(cvars.fps_max_nofocus == 20, "fps_max_nofocus повернуто гравцю")
+		if opts.verbose then for _, l in ipairs(log) do print("     " .. l) end end
+		return
+	end
+	if opts.queue_cancel then
+		check(S.queued and S.starts == 1, "драйвер чекав наступне завдання")
+		check(S.quit and st.state == "quit", "скасування черги в очікуванні закриває гру (" .. tostring(st.state) .. ")")
 		return
 	end
 	check(S.quit, "гра закрита після завершення")
@@ -281,6 +317,12 @@ run_scenario("перемотування до далекого фрагмент�
 run_scenario("перемотування без конфігу (прямий demo_gototick)", { cfg_loaded = false, rate = 60, start_tick = 600, end_tick = 700, seek_tick = 400 })
 run_scenario("IsInGame() не працює під час демо", { cfg_loaded = true, rate = 60, start_tick = 50, no_ingame = true })
 
+run_scenario("черга: другий фрагмент без перезапуску гри", { cfg_loaded = true, rate = 60, start_tick = 100, end_tick = 300,
+	queue = { start_tick = 500, end_tick = 650 } })
+run_scenario("черга: другий фрагмент, startmovie заблоковано для Lua", { cfg_loaded = true, rate = 60, start_tick = 100,
+	end_tick = 300, queue = { start_tick = 200 }, blocked = { startmovie = true, playdemo = true, endmovie = true } })
+run_scenario("черга скасована, поки гра чекала", { cfg_loaded = true, rate = 60, start_tick = 100, end_tick = 300,
+	queue_cancel = true })
 run_scenario("перегляд у грі з позначками F9/F11/F6", { cfg_loaded = true, watch = true, start_tick = 300, seek_tick = 250,
 	press = { { tick = 320, key = 100, kind = "start" }, { tick = 400, key = 97, kind = "mark" }, { tick = 500, key = 102, kind = "end" } } })
 run_scenario("перегляд закрито з програми", { cfg_loaded = true, watch = true, start_tick = 300, seek_tick = 250,

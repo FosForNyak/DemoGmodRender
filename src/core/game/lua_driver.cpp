@@ -140,6 +140,7 @@ bool write_job_files(const GModInstall& g, const DriverJob& job, const std::stri
     j.set("end_tick", json::Value::number(job.end_tick));
     j.set("seek_tick", json::Value::number(job.seek_tick));
     j.set("quit", json::Value::boolean(job.quit_when_done));
+    j.set("wait_next", json::Value::boolean(job.wait_next));
     j.set("menu_delay", json::Value::number(job.menu_delay));
     j.set("load_timeout", json::Value::number(job.load_timeout));
     j.set("mode", json::Value::string(job.mode));

@@ -663,8 +663,10 @@ const char* const kCheckHints[kCheckCount] = {
 } // namespace
 
 RenderJob::RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
-                     std::shared_ptr<const voice::VoiceDecodeResult> voices, bool test_run)
-    : s_(std::move(s)), analysis_(std::move(analysis)), voices_(std::move(voices)), test_run_(test_run) {
+                     std::shared_ptr<const voice::VoiceDecodeResult> voices, bool test_run,
+                     std::shared_ptr<GameHandoff> handoff, bool keep_game)
+    : s_(std::move(s)), analysis_(std::move(analysis)), voices_(std::move(voices)), test_run_(test_run),
+      handoff_(std::move(handoff)), keep_game_(keep_game && handoff_ != nullptr) {
     update([](Progress& p) {
         p.checks.clear();
         for (int i = 0; i < kCheckCount; ++i) p.checks.push_back({kCheckNames[i], CheckItem::Pending, {}});
@@ -747,12 +749,25 @@ bool RenderJob::prepare(std::string* error) {
         if (error) *error = "Не вдалося створити тимчасову папку в папці гри: " + ec.message();
         return false;
     }
+    // Первинні копії config.cfg і rtx.conf. У черзі вони одні на всю чергу: поки гра відкрита,
+    // наступні пункти не мають копіювати вже змінений файл.
+    fs::path backup_dir = tmp_dir_;
+    if (handoff_) {
+        if (handoff_->dir.empty()) handoff_->dir = gmod_->garrysmod / "gmdr_tmp" / ("queue_" + make_unique_id());
+        fs::create_directories(handoff_->dir, ec);
+        backup_dir = handoff_->dir;
+        handoff_->gmod = gmod_;
+        handoff_->job_ids.push_back(id_);
+    }
     if (s_.rtx) {
         if (!game::is_rtx_install(*gmod_))
             log_warn("Увімкнено RTX, але в папці гри немає rtx.conf чи rtx-remix — це точно копія від RTXLauncher?");
         // Налаштування Remix для офлайн-рендеру; оригінал повернеться після рендеру (і після збою)
+        rtx_backup_ = backup_dir / "rtx.conf.bak";
         std::string rerr;
-        if (game::apply_rtx_render_profile(*gmod_, tmp_dir_ / "rtx.conf.bak", &rerr))
+        if (fs::exists(rtx_backup_, ec))
+            log_info("rtx.conf уже налаштовано для рендеру попереднім пунктом черги");
+        else if (game::apply_rtx_render_profile(*gmod_, rtx_backup_, &rerr))
             log_info("rtx.conf: на час рендеру — повна роздільна здатність (DLAA), без генерації кадрів і заставки");
         else
             log_warn("Не вдалося змінити rtx.conf ({}) — Remix рендеритиме з вашими налаштуваннями", rerr);
@@ -771,8 +786,8 @@ bool RenderJob::prepare(std::string* error) {
                                               "cl_showfps", "voice_scale", "cl_drawhud",
                                               "r_drawviewmodel", "sv_cheats"};
     auto originals = game::read_config_values(*gmod_, touched);
-    config_backup_ = tmp_dir_ / "config.cfg.bak";
-    game::backup_config(*gmod_, config_backup_);
+    config_backup_ = backup_dir / "config.cfg.bak";
+    if (!fs::exists(config_backup_, ec)) game::backup_config(*gmod_, config_backup_);
 
     auto fps = parse_rational(s_.fps);
     game::DriverJob job;
@@ -794,7 +809,8 @@ bool RenderJob::prepare(std::string* error) {
         const int32_t seek = job.start_tick - ticks(s_.rtx ? 10.0 : 5.0);
         if (seek > ticks(30.0)) job.seek_tick = seek;
     }
-    job.quit_when_done = s_.quit_game_when_done;
+    job.quit_when_done = keep_game_ ? false : s_.quit_game_when_done;
+    job.wait_next = keep_game_;
     job.menu_delay = s_.menu_delay;
     job.hide_hud = s_.hide_hud;
     job.hide_viewmodel = s_.hide_viewmodel;
@@ -822,12 +838,19 @@ void RenderJob::cleanup(bool game_closing) {
     const bool game_running = game_closing ? !game::GameProcess::wait_all_exited(game_names, 15000)
                                            : !game::GameProcess::find_by_name(game_names).empty();
     std::error_code ec;
-    if (!config_backup_.empty() && fs::exists(config_backup_, ec)) {
-        if (!game_running) game::restore_config(*gmod_, config_backup_);
+    if (!game_running) {
+        if (!config_backup_.empty() && fs::exists(config_backup_, ec)) {
+            game::restore_config(*gmod_, config_backup_);
+            if (handoff_) fs::remove(config_backup_, ec);   // наступний пункт черги зробить нову копію
+        }
+        if (!rtx_backup_.empty() && fs::exists(rtx_backup_, ec)) {
+            game::restore_rtx_profile(*gmod_, rtx_backup_);
+            if (handoff_) fs::remove(rtx_backup_, ec);
+        }
     }
-    if (!tmp_dir_.empty() && !game_running && fs::exists(tmp_dir_ / "rtx.conf.bak", ec))
-        game::restore_rtx_profile(*gmod_, tmp_dir_ / "rtx.conf.bak");
-    if (!s_.keep_temp_files && !tmp_dir_.empty() && !game_running) {
+    // Пункт черги віддає відкриту гру наступному: запис уже закінчено, тож свою тимчасову
+    // папку можна прибрати, хоч гра й працює
+    if (!s_.keep_temp_files && !tmp_dir_.empty() && (!game_running || keep_game_)) {
         fs::remove_all(tmp_dir_, ec);
         std::error_code ec2;
         if (fs::is_empty(tmp_dir_.parent_path(), ec2)) fs::remove(tmp_dir_.parent_path(), ec2);
@@ -951,11 +974,29 @@ void RenderJob::run() {
         // Так гру запускає сам RTXLauncher; файли гри в копії пропатчені, тож VAC вимкнено (-insecure)
         for (const char* a : {"-dxlevel", "90", "-nod3d9ex", "+mat_disable_d3d9ex", "1", "-insecure"}) args.push_back(a);
     }
+    // Параметри запуску без конфігу завдання: якщо в пункту черги вони інші, гру треба перезапустити
+    const std::string launch_sig = game::format_command_line(exe, args) + " | " + s_.extra_launch_args + " | " + s_.game_window;
     args.insert(args.end(), {"-condebug", "+exec", "gmdr/job_" + id_ + ".cfg"});
     for (const auto& a : split(s_.extra_launch_args, ' ')) args.push_back(trim(a));
-    log_info("Команда запуску: {}", game::format_command_line(exe, args));
-    auto proc = game::GameProcess::launch(exe, args, gmod_->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err,
-                                          window_mode != game::WindowMode::Normal);
+    if (handoff_ && handoff_->proc && handoff_->proc->running() && handoff_->launch_sig != launch_sig) {
+        log_info("Цей пункт черги потребує інших параметрів запуску гри (розмір вікна, RTX...) — перезапускаю гру");
+        game::request_cancel(*gmod_, handoff_->waiting_id);
+        if (!handoff_->proc->wait(30000)) handoff_->proc->terminate();
+        handoff_->proc.reset();
+        game::GameProcess::wait_all_exited({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}, 15000);
+        game::remove_job_files(*gmod_, handoff_->waiting_id);
+    }
+    if (handoff_) handoff_->launch_sig = launch_sig;
+    std::unique_ptr<game::GameProcess> proc;
+    if (handoff_ && handoff_->proc && handoff_->proc->running()) {
+        // Черга: гра вже запущена попереднім пунктом, драйвер чекає це завдання
+        proc = std::move(handoff_->proc);
+        log_info("Гра вже запущена (PID {}) — наступний пункт черги без перезапуску", proc->pid());
+    } else {
+        log_info("Команда запуску: {}", game::format_command_line(exe, args));
+        proc = game::GameProcess::launch(exe, args, gmod_->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err,
+                                         window_mode != game::WindowMode::Normal);
+    }
     if (!proc) {
         cleanup();
         set_check(kCheckLaunch, CheckItem::Failed, err);
@@ -1138,11 +1179,13 @@ void RenderJob::run() {
                     set_check(kCheckDriver, CheckItem::Ok);
                 }
                 if (st) {
-                    if (st->state == "recording" || st->state == "stopping" || st->state == "done" || st->state == "quit") {
+                    // "waiting" — черга: запис закінчено, гра чекає наступне завдання
+                    const bool finished = st->state == "done" || st->state == "quit" || st->state == "waiting";
+                    if (st->state == "recording" || st->state == "stopping" || finished) {
                         recording_seen = true;
                         set_check(kCheckDemo, CheckItem::Ok, std::format("тік {}", st->start_tick >= 0 ? st->start_tick : st->tick));
                     }
-                    if (st->state == "done" || st->state == "quit") producer_done = true;
+                    if (finished) producer_done = true;
                     if (st->state == "error") {
                         std::string hint;
                         if (st->message.find("не запустилося") != std::string::npos ||
@@ -1441,8 +1484,13 @@ void RenderJob::run() {
     set_stage("Завершення файлу");
     session.game_audio_finished();
     if (!session.started()) {
-        const bool leave_open = proc->running() && !s_.quit_game_when_done;
+        const bool hand_over = keep_game_ && proc->running();   // черга: гра піде наступному пункту
+        const bool leave_open = hand_over || (proc->running() && !s_.quit_game_when_done);
         if (proc->running() && !leave_open) proc->terminate();
+        if (hand_over) {
+            handoff_->proc = std::move(proc);
+            handoff_->waiting_id = id_;
+        }
         session_ptr.reset();
         cleanup(!leave_open);
         if (cancel_) {
@@ -1462,7 +1510,8 @@ void RenderJob::run() {
         fail("Не вдалося завершити файл: " + err);
         return;
     }
-    if (s_.quit_game_when_done && proc->running()) {
+    const bool hand_over = keep_game_ && proc->running();   // черга: гра чекає наступне завдання
+    if (!hand_over && s_.quit_game_when_done && proc->running()) {
         log_info("Чекаю, поки гра закриється...");
         if (!proc->wait(30000)) {
             log_warn("Гра не закрилась сама — закриваю примусово");
@@ -1474,7 +1523,11 @@ void RenderJob::run() {
     const PipelineStats pstats = session.stats();
     const bool fragmented = es.crash_safe && is_mov_family(s_.output_path, s_.container);
     session_ptr.reset();
-    cleanup(s_.quit_game_when_done);
+    if (hand_over) {
+        handoff_->proc = std::move(proc);
+        handoff_->waiting_id = id_;
+    }
+    cleanup(!hand_over && s_.quit_game_when_done);
     if (rp->skipped() > 0) log_warn("Пропущено кадрів: {}", rp->skipped());
     const auto chapters =
         s_.chapters ? chapters_for_range(parse_markers(s_.markers), video_start_tick,
@@ -1536,6 +1589,128 @@ void RenderJob::run() {
         log_info("Тестовий прогін: {}", head);
     }
     succeed(s_.output_path);
+}
+
+// ============================== Черга рендерів ======================================
+QueueJob::QueueJob(std::vector<RenderSettings> items) : items_(std::move(items)) {}
+
+void QueueJob::set_show_game(bool show) {
+    show_game_ = show;
+    std::lock_guard lock(m_);
+    if (job_) job_->set_show_game(show);
+}
+
+std::vector<QueueJob::ItemResult> QueueJob::results() const {
+    std::lock_guard lock(m_);
+    return results_;
+}
+
+void QueueJob::run() {
+    KeepAwake keep_awake;
+    const size_t n = items_.size();
+    if (n == 0) {
+        fail("Черга порожня");
+        return;
+    }
+    auto handoff = std::make_shared<GameHandoff>();
+    {
+        std::lock_guard lock(m_);
+        results_.assign(n, {});
+    }
+    int ok = 0;
+    for (size_t i = 0; i < n && !cancel_; ++i) {
+        current_ = static_cast<int>(i);
+        const RenderSettings& s = items_[i];
+        const std::string title = path_to_utf8(path_from_utf8(s.output_path.empty() ? s.demo_path : s.output_path).filename());
+        log_info("==== Черга: пункт {} з {} — {} ====", i + 1, n, title);
+        // Гру лишаємо відкритою для всіх, крім останнього пункту
+        auto job = std::make_shared<RenderJob>(s, nullptr, nullptr, false, handoff, i + 1 < n);
+        job->share_preview(preview_);
+        job->set_show_game(show_game_);
+        {
+            std::lock_guard lock(m_);
+            job_ = job;
+        }
+        const auto t0 = Clock::now();
+        job->start();
+        while (job->running()) {
+            if (kill_) job->kill();
+            else if (cancel_) job->cancel();
+            Progress p = job->progress();
+            p.stage = std::format("{} з {} · {}", i + 1, n, p.stage);
+            p.fraction = (static_cast<double>(i) + std::clamp(p.fraction, 0.0, 1.0)) / static_cast<double>(n);
+            update([&](Progress& q) { q = p; });
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        job->wait();
+        ItemResult r;
+        r.state = job->state();
+        r.output = job->result();
+        r.error = job->error();
+        r.seconds = std::chrono::duration<double>(Clock::now() - t0).count();
+        if (r.state == JobState::Succeeded) {
+            ++ok;
+        } else if (r.state == JobState::Failed) {
+            log_error("Черга: пункт {} не вдався — {}", i + 1, r.error.substr(0, r.error.find('\n')));
+            if (i + 1 < n && !cancel_) log_info("Черга: переходжу до наступного пункту");
+        }
+        std::lock_guard lock(m_);
+        results_[i] = r;
+        job_.reset();
+    }
+
+    // Гра могла лишитися відкритою (чергу скасовано посеред неї): просимо драйвер закрити її
+    if (handoff->proc && handoff->proc->running()) {
+        set_stage("Закриваю гру");
+        log_info("Черга закінчилась — закриваю гру");
+        if (handoff->gmod && !handoff->waiting_id.empty()) game::request_cancel(*handoff->gmod, handoff->waiting_id);
+        if (!handoff->proc->wait(30000)) {
+            log_warn("Гра не закрилась сама — закриваю примусово");
+            handoff->proc->terminate();
+        }
+    }
+    handoff->proc.reset();
+    if (handoff->gmod) {
+        const game::GModInstall& g = *handoff->gmod;
+        std::error_code ec;
+        const bool game_running = !game::GameProcess::wait_all_exited({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}, 15000);
+        if (!game_running && !handoff->dir.empty()) {
+            // Первинні копії, які лишились (гру закрито не останнім пунктом)
+            if (fs::exists(handoff->dir / "config.cfg.bak", ec)) game::restore_config(g, handoff->dir / "config.cfg.bak");
+            if (fs::exists(handoff->dir / "rtx.conf.bak", ec)) game::restore_rtx_profile(g, handoff->dir / "rtx.conf.bak");
+            fs::remove_all(handoff->dir, ec);
+            std::error_code ec2;
+            if (fs::is_empty(handoff->dir.parent_path(), ec2)) fs::remove(handoff->dir.parent_path(), ec2);
+        }
+        // Драйвер, поки чекав, міг знову записати стан уже прибраного завдання
+        if (!game_running)
+            for (const auto& id : handoff->job_ids) game::remove_job_files(g, id);
+    }
+
+    // Підсумок
+    std::string rep = std::format("Готово {} з {}:\n", ok, n);
+    {
+        std::lock_guard lock(m_);
+        for (size_t i = 0; i < n; ++i) {
+            const auto& r = results_[i];
+            const char* mark = r.state == JobState::Succeeded ? "✓" : r.state == JobState::Failed ? "✗"
+                             : r.state == JobState::Cancelled ? "–" : "·";
+            std::string what = r.state == JobState::Succeeded ? r.output
+                             : r.state == JobState::Failed    ? r.error.substr(0, r.error.find('\n'))
+                             : r.state == JobState::Cancelled ? "скасовано"
+                                                              : "не почато";
+            rep += std::format("  {} {}. {} — {}\n", mark, i + 1,
+                               path_to_utf8(path_from_utf8(items_[i].demo_path).filename()), what);
+        }
+    }
+    set_report(rep);
+    log_info("Черга: {}", rep);
+    if (cancel_) return;   // стан "скасовано" виставить Job::start
+    if (ok == 0) {
+        fail("Жоден пункт черги не вдався.\n\n" + rep);
+        return;
+    }
+    succeed(std::format("{} з {} відео готово", ok, n));
 }
 
 // ============================= EncodeFramesJob =====================================

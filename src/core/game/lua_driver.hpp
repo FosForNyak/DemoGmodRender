@@ -27,7 +27,7 @@
 namespace gmdr::game {
 
 const char* driver_lua_source();
-constexpr const char* kDriverVersion = "1.5";
+constexpr const char* kDriverVersion = "1.6";
 
 enum class DriverState { NotInstalled, Installed, Outdated };
 DriverState driver_state(const GModInstall& g);
@@ -44,6 +44,7 @@ struct DriverJob {
     int32_t     end_tick = -1;
     int32_t     seek_tick = -1;       // > 0: спершу швидко перемотати демо сюди (demo_gototick)
     bool        quit_when_done = true;
+    bool        wait_next = false;    // черга: після запису не закривати гру, чекати наступний job.txt
     double      menu_delay = 3.0;     // с: пауза після старту меню
     double      load_timeout = 600.0; // с
     bool        hide_hud = false;

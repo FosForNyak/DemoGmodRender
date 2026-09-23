@@ -9,6 +9,8 @@
 //     (так перевіряється синхронізація звуку і відео)
 //   * режим перегляду (mode = "watch"): "грає" демо вдесятеро швидше за реальний час,
 //     сам "натискає" F9/F6/F11 (позначки в marks_<id>.txt) і закривається, як гравець
+//   * черга (wait_next): після запису не закривається, а чекає наступний job.txt
+//     (стан "waiting"); кожен запуск дописується в garrysmod/fake_launches.txt
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
@@ -88,6 +90,9 @@ static std::vector<uint8_t> encode_jpeg(const frames::Image& img, int quality) {
     return out;
 }
 
+// Одне завдання драйвера. Повертає код виходу гри, або -1 — гра лишається відкритою (черга).
+static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, double max_fps, std::ofstream& con);
+
 int main(int argc, char** argv) {
     int w = 640, h = 360;
     double max_fps = 0;   // обмеження швидкості "гри" (0 — без обмеження)
@@ -100,14 +105,40 @@ int main(int argc, char** argv) {
     const fs::path gm = fs::current_path() / "garrysmod";
     std::ofstream con(gm / "console.log");
     con << "FakeGMod: старт " << w << "x" << h << "\n";
-    auto job_text = read_file_text(gm / "data" / "gmdr" / "job.txt");
+    std::ofstream(gm / "fake_launches.txt", std::ios::app) << w << "x" << h << "\n";
+    const fs::path job_file = gm / "data" / "gmdr" / "job.txt";
+    auto job_text = read_file_text(job_file);
     if (!job_text) {
         con << "FakeGMod: немає завдання, виходжу\n";
         std::fprintf(stderr, "fake_game: немає job.txt\n");
         return 3;
     }
-    fs::remove(gm / "data" / "gmdr" / "job.txt");
-    auto job = json::parse(*job_text);
+    for (int served = 1;; ++served) {
+        fs::remove(job_file);
+        auto job = json::parse(*job_text);
+        if (!job) return 5;
+        con << "FakeGMod: завдання " << served << " (" << (*job)["id"].as_string() << ")\n";
+        const int rc = run_job(gm, *job, w, h, max_fps, con);
+        if (rc >= 0) return rc;
+        // Черга: чекаємо наступне завдання, як драйвер у стані "waiting"
+        const fs::path status = gm / "data" / "gmdr" / ("status_" + (*job)["id"].as_string() + ".txt");
+        const fs::path cancel = gm / "data" / "gmdr" / ("cancel_" + (*job)["id"].as_string() + ".txt");
+        write_status(status, "waiting", 0, 0, -1, -1);
+        const auto t0 = std::chrono::steady_clock::now();
+        job_text.reset();
+        while (!job_text) {
+            if (fs::exists(cancel) || std::chrono::steady_clock::now() - t0 > std::chrono::seconds(60)) {
+                write_status(status, "quit", 0, 0, -1, -1, "черга закінчилась");
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            job_text = read_file_text(job_file);
+        }
+    }
+}
+
+static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, double max_fps, std::ofstream& con) {
+    const json::Value* job = &jobv;
     const std::string id = (*job)["id"].as_string();
     const fs::path status = gm / "data" / "gmdr" / ("status_" + id + ".txt");
     const fs::path cancel = gm / "data" / "gmdr" / ("cancel_" + id + ".txt");
@@ -232,6 +263,7 @@ int main(int argc, char** argv) {
     write_status(status, "done", last_tick, total, start_tick, last_tick);
     con << "FakeGMod: записано " << frame << " кадрів\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if ((*job)["wait_next"].as_bool(false)) return -1;
     write_status(status, "quit", last_tick, total, start_tick, last_tick);
     return 0;
 }

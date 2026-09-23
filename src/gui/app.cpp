@@ -140,6 +140,7 @@ void App::init(const std::vector<std::string>& args) {
         else log_warn("Не вдалося прочитати налаштування: {}", err);
     }
     whole_demo_ = s_.start_tick <= 0 && s_.end_tick <= 0;
+    load_queue();
 
     log_info("GMod Demo Render 1.1 — рендер демо Garry's Mod у відео");
     log_info("FFmpeg: libavcodec {}.{}.{}", LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
@@ -392,6 +393,27 @@ void App::poll() {
             }
             return;
         }
+        if (auto* qj = dynamic_cast<render::QueueJob*>(job_.get())) {
+            // Черга: підсумок по пунктах; готові прибираємо зі списку
+            finish_queue(*qj);
+            popup_checks_.clear();
+            popup_test_ok_ = false;
+            popup_title_ = job_->state() == render::JobState::Succeeded   ? "Черга завершена"
+                           : job_->state() == render::JobState::Cancelled ? "Чергу зупинено"
+                                                                          : "Черга: помилка";
+            popup_text_ = job_->report().empty() ? job_->error() : job_->report();
+            popup_result_.clear();
+            for (const auto& r : qj->results())
+                if (r.state == render::JobState::Succeeded && !r.output.empty()) {
+                    popup_result_ = path_to_utf8(path_from_utf8(r.output).parent_path());
+                    break;
+                }
+            popup_is_folder_ = true;
+            open_popup_ = true;
+            if (gmod_) driver_state_ = game::driver_state(*gmod_);
+            platform_flash_window();
+            return;
+        }
         const auto* render_job = dynamic_cast<render::RenderJob*>(job_.get());
         const bool test = render_job && render_job->is_test_run();
         popup_checks_.clear();
@@ -608,6 +630,11 @@ void App::draw_settings_tabs() {
     }
     if (ImGui::BeginTabItem("Чат", nullptr, flags(4))) {
         draw_tab_chat();
+        ImGui::EndTabItem();
+    }
+    const std::string queue_label = queue_.empty() ? "Черга###queue" : std::format("Черга ({})###queue", queue_.size());
+    if (ImGui::BeginTabItem(queue_label.c_str(), nullptr, flags(5))) {
+        draw_tab_queue();
         ImGui::EndTabItem();
     }
     ImGui::EndTabBar();

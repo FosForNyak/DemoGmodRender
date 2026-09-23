@@ -77,6 +77,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "рендер з обробкою звуку не вдався" }
           $r128 = & third_party\ffmpeg\bin\ffmpeg.exe -hide_banner -nostats -i $fx -map 0:a:0 -af ebur128=framelog=quiet -f null - 2>&1 | Out-String
           if ($r128 -notmatch "I:\s+(-?[\d\.]+) LUFS" -or [math]::Abs([double]$matches[1] + 14) -gt 1.5) { $r128; throw "гучність не -14 LUFS" }
+          # Черга: три фрагменти, гра запускається один раз
+          Remove-Item "$fake\garrysmod\fake_launches.txt" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force build\queue | Out-Null
+          & build\gmdr-cli.exe render build\td\test24.dem build\td\test20c.dem build\td\test2026.dem -o "$PWD\build\queue\" `
+              --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 3
+          if ($LASTEXITCODE -ne 0) { throw "черга не вдалася" }
+          if (@(Get-Content "$fake\garrysmod\fake_launches.txt").Count -ne 1) { throw "у черзі гра запускалась не один раз" }
+          if (@(Get-ChildItem build\queue -Filter *.mp4).Count -ne 3) { throw "черга: не всі відео" }
           # Перегляд у грі: імітатор сам "натискає" F9/F6/F11
           $watch = & build\gmdr-cli.exe watch build\td\test24.dem --from 2 --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" --menu-delay 1
           if ($LASTEXITCODE -ne 0) { throw "перегляд не вдався" }

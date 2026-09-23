@@ -118,6 +118,17 @@ private:
     // Прослуховування голосу гравця (уривок з початку фрагмента, з обробкою як у відео)
     void listen_voice(const voice::SpeakerTrack& sp);
     void poll_voice_clip();
+    // Черга рендерів (вкладка «Черга», gmdr_queue.json)
+    struct QueueEntry {
+        render::RenderSettings s;
+        double                 tick_interval = 0;   // для показу часу фрагмента
+    };
+    void draw_tab_queue();
+    void add_to_queue();
+    void start_queue();
+    void load_queue();
+    void save_queue();
+    void finish_queue(const render::QueueJob& q);
 
     // ---- стан ----
     render::RenderSettings                          s_;
@@ -166,6 +177,8 @@ private:
     float                                           tl_sel_from_ = 0;
     float                                           tl_ctx_time_ = 0;   // час під курсором для контекстного меню
     std::vector<render::Marker>                     markers_;
+
+    std::vector<QueueEntry>                         queue_;
 
     // Прослуховування голосу
     VoicePlayer                                     player_;
