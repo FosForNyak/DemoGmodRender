@@ -363,7 +363,7 @@ static int run_job(render::Job& job) {
         if (g_interrupts > handled_interrupts) {
             handled_interrupts = g_interrupts;
             if (handled_interrupts == 1) {
-                std::fprintf(stderr, tr("\nЗупиняю (ще раз Ctrl+C — перервати негайно)...\n"));
+                std::fprintf(stderr, "%s", tr("\nЗупиняю (ще раз Ctrl+C — перервати негайно)...\n"));
                 job.cancel();
             } else {
                 job.kill();
@@ -399,7 +399,7 @@ static int run_job(render::Job& job) {
         rc = 0;
         break;
     case render::JobState::Cancelled:
-        std::printf(tr("Скасовано\n"));
+        std::printf("%s", tr("Скасовано\n"));
         return 2;   // зупинили вручну — вимикати ПК не треба
     default:
         std::printf(tr("Помилка: %s\n"), job.error().c_str());
@@ -491,7 +491,7 @@ static int cmd_info(const Cli& c) {
     for (const auto& s : v.speakers)
         std::printf(tr("  %-20s %-40s %6.1f с  %s\n"), s.key.c_str(), s.display_name().c_str(), s.seconds,
                     s.is_local ? tr("<- це ви") : "");
-    if (v.speakers.empty()) std::printf(tr("  (немає)\n"));
+    if (v.speakers.empty()) std::printf("%s", tr("  (немає)\n"));
     for (const auto& w : v.warnings) std::printf("  ! %s\n", w.c_str());
     std::printf(tr("\nЧат і події: %zu повідомлень чату, %zu від сервера, %zu входів, %zu виходів\n"),
                 a.count_events(demo::DemoEventKind::Chat), a.count_events(demo::DemoEventKind::Server),
@@ -578,7 +578,7 @@ static int cmd_voice(const Cli& c) {
     }
     render::ExportVoicesJob job(s, a, v, path_from_utf8(c.get("--output")));
     const int r = run_job(job);
-    if (r == 0) std::printf(tr("Кожен файл починається з того самого моменту демо — у програмі монтажу кладіть їх на початок.\n"));
+    if (r == 0) std::printf("%s", tr("Кожен файл починається з того самого моменту демо — у програмі монтажу кладіть їх на початок.\n"));
     return r;
 }
 
