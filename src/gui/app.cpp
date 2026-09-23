@@ -266,6 +266,42 @@ void App::load_demo(const std::string& path_in) {
 
 bool App::job_running() const { return job_ && job_->running(); }
 
+void App::check_updates() {
+    log_info("Перевіряю оновлення на GitHub ({})...", kUpdateRepo);
+    update_future_ = std::async(std::launch::async, [] {
+        UpdateResult r;
+        r.release = fetch_latest_release(kUpdateRepo, &r.error);
+        return r;
+    });
+}
+
+void App::poll_update_check() {
+    if (!update_future_.valid() ||
+        update_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return;
+    const UpdateResult r = update_future_.get();
+    popup_checks_.clear();
+    popup_test_ok_ = false;
+    popup_is_folder_ = false;
+    popup_result_.clear();
+    if (r.release && compare_versions(r.release->version, GMDR_VERSION) > 0) {
+        popup_title_ = "Є нова версія " + r.release->version;
+        popup_text_ = std::format("У вас {}. Нова версія опублікована {}.", GMDR_VERSION, r.release->published);
+        if (!r.release->notes.empty()) popup_text_ += "\n\n" + r.release->notes;
+        popup_result_ = r.release->url;
+        log_info("Є нова версія {}: {}", r.release->version, r.release->url);
+    } else if (r.release) {
+        popup_title_ = "Оновлень немає";
+        popup_text_ = std::format("У вас остання версія ({}).", GMDR_VERSION);
+        log_info("Оновлень немає (остання — {})", r.release->version);
+    } else {
+        popup_title_ = "Не вдалося перевірити оновлення";
+        popup_text_ = r.error;
+        log_warn("Перевірка оновлень: {}", r.error);
+    }
+    open_popup_ = true;
+}
+
 void App::make_report() {
     const std::string path = save_file_dialog("Зберегти звіт про проблему", {{"ZIP-архів", "*.zip"}},
                                               render::default_report_name(), "zip");
@@ -403,6 +439,7 @@ void App::set_container(const std::string& ext) {
 
 void App::poll() {
     poll_voice_clip();
+    poll_update_check();
     // Аналіз демо завершився?
     if (analyze_job_ && !analyze_job_->running() && !analysis_) {
         if (analyze_job_->state() == render::JobState::Succeeded) {
@@ -653,6 +690,7 @@ void App::draw_menu_bar() {
     }
     if (ImGui::BeginMenu("Довідка")) {
         if (ImGui::MenuItem("Як це працює")) show_help_ = true;
+        if (ImGui::MenuItem("Перевірити оновлення", nullptr, false, !update_future_.valid())) check_updates();
         if (ImGui::MenuItem("Зібрати звіт про проблему...")) make_report();
         if (ImGui::MenuItem("Про програму")) show_about_ = true;
         ImGui::EndMenu();
@@ -968,7 +1006,13 @@ void App::draw_popups() {
             ImGui::SameLine();
         }
         if (!popup_result_.empty()) {
-            if (ends_with_i(popup_result_, ".zip")) {
+            if (popup_result_.rfind("https://", 0) == 0) {
+                if (ImGui::Button("Відкрити сторінку")) {
+                    open_path(popup_result_);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+            } else if (ends_with_i(popup_result_, ".zip")) {
                 if (ImGui::Button("Показати в папці")) {
                     show_in_folder(popup_result_);
                     ImGui::CloseCurrentPopup();

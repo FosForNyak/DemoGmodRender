@@ -30,6 +30,7 @@
 #include "core/util/zip_writer.hpp"
 #include "core/util/file_assoc.hpp"
 #include "core/util/power.hpp"
+#include "core/util/update_check.hpp"
 #include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -900,6 +901,22 @@ static void test_power_action() {
     CHECK(power_countdown_seconds() >= 1);
 }
 
+// Перевірка оновлень: порівняння версій і розбір відповіді GitHub (без мережі)
+static void test_update_check() {
+    std::printf("[update check]\n");
+    CHECK(compare_versions("1.2.0", "1.2") == 0);
+    CHECK(compare_versions("v1.10.0", "1.9.9") > 0);
+    CHECK(compare_versions("1.2.1", "1.10") < 0);
+    CHECK(compare_versions("2.0-beta", "1.99") > 0);
+    std::string err;
+    auto r = parse_latest_release(R"({"tag_name":"v1.3.0","html_url":"https://github.com/FosForNyak/DemoGmodRender/releases/tag/v1.3.0",
+        "published_at":"2026-10-01T12:00:00Z","body":"## Що нового\r\n\r\n- Швидше\r\n- Краще"})", &err);
+    CHECK(r && r->version == "1.3.0" && r->published == "2026-10-01" && r->url.ends_with("v1.3.0"));
+    CHECK(r && r->notes == "## Що нового\n- Швидше\n- Краще\n");
+    CHECK(!parse_latest_release(R"({"message":"Not Found"})", &err) && !err.empty());
+    CHECK(!parse_latest_release("не json", &err));
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1381,6 +1398,7 @@ int main(int argc, char** argv) {
     test_report_zip();
     test_dem_association();
     test_power_action();
+    test_update_check();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

@@ -32,6 +32,7 @@
 #include "core/render/settings.hpp"
 #include "core/util/log.hpp"
 #include "core/util/power.hpp"
+#include "core/util/update_check.hpp"
 #include "voice_player.hpp"
 
 namespace gmdr::gui {
@@ -136,6 +137,13 @@ private:
     void on_job_finished(render::JobState state, const std::string& title, const std::string& text, bool test_run);
     void draw_power_countdown();
     void draw_after_done_combo();
+    // Довідка → «Перевірити оновлення» (запит у фоні)
+    struct UpdateResult {
+        std::optional<ReleaseInfo> release;
+        std::string                error;
+    };
+    void check_updates();
+    void poll_update_check();
 
     // ---- стан ----
     render::RenderSettings                          s_;
@@ -192,6 +200,7 @@ private:
     bool                                            power_countdown_ = false;
     double                                          power_deadline_ = 0;   // ImGui::GetTime()
     double                                          tray_update_t_ = -10;
+    std::future<UpdateResult>                       update_future_;
 
     // Прослуховування голосу
     VoicePlayer                                     player_;

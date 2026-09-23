@@ -23,6 +23,7 @@
 #include "core/util/file_util.hpp"
 #include "core/util/log.hpp"
 #include "core/util/power.hpp"
+#include "core/util/update_check.hpp"
 #include "core/util/strings.hpp"
 #include "core/voice/voice_decoder.hpp"
 
@@ -79,6 +80,7 @@ static void print_usage() {
   gmdr-cli report [-o файл.zip]                звіт про проблему: журнал, налаштування, система,
                                                консоль GMod (нічого не надсилається — лише файл)
   gmdr-cli --version                           версія програми
+  gmdr-cli update                              чи вийшла нова версія (запит до GitHub Releases)
   gmdr-cli driver install|uninstall|status     драйвер у меню GMod
 
 Відео:
@@ -795,6 +797,19 @@ int main(int argc, char** argv) {
 
     if (c.command == "info") return cmd_info(c);
     if (c.command == "report") return cmd_report(c);
+    if (c.command == "update") {
+        std::string err;
+        auto r = fetch_latest_release(kUpdateRepo, &err);
+        if (!r) {
+            std::printf("Не вдалося перевірити оновлення: %s\n", err.c_str());
+            return 1;
+        }
+        if (compare_versions(r->version, GMDR_VERSION) > 0)
+            std::printf("Є нова версія %s (у вас %s): %s\n", r->version.c_str(), GMDR_VERSION, r->url.c_str());
+        else
+            std::printf("У вас остання версія (%s)\n", GMDR_VERSION);
+        return 0;
+    }
     if (c.command == "voice") return cmd_voice(c);
     if (c.command == "encoders") return cmd_encoders(c);
     if (c.command == "driver") return cmd_driver(c);
