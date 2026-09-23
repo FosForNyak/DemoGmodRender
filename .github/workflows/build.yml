@@ -30,6 +30,10 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON
           cmake --build build
 
+      - name: whisper-cli (розпізнавання мовлення)
+        shell: pwsh
+        run: ./scripts/get_whisper.ps1 -Dest build\whisper
+
       - name: Синтетичні демо для тестів
         shell: pwsh
         run: |
@@ -137,6 +141,21 @@ jobs:
             if ([math]::Abs($d - 6) -gt 0.1) { throw "після збою ($m): очікувалось 6 с відео, а не $d" }
           }
           Remove-Item Env:FAKE_DEMO_CLOCK, Env:GMDR_TEST_WATCHDOG
+          # Розпізнавання мовлення: імітатор whisper-cli ("фраза N" на кожну ділянку звуку і "галюцинація"
+          # в тиші) — репліки мають стати на свої місця в часі демо, а галюцинація — відкинутись
+          Set-Content "$PWD\build\fake_model.bin" "x"
+          $wargs = @("--whisper-cli", "$PWD\build\gmdr-fakewhisper.exe", "--whisper-model", "$PWD\build\fake_model.bin")
+          $tr = & build\gmdr-cli.exe transcribe build\td\test24.dem --force @wargs 2>$null | Out-String
+          $tr
+          foreach ($want in @("[00:02.0] Recorder", "[00:04.0] Friend: фраза 1", "[00:07.5] Friend: фраза 2", "[00:10.0] LateJoiner: фраза 1")) {
+            if (-not $tr.Contains($want)) { throw "розпізнавання: немає «$want»" }
+          }
+          if ($tr -match "Субтитры") { throw "галюцинація Whisper не відфільтрована" }
+          $sp = "$PWD\build\out_speech.mp4"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $sp --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --speech-srt @wargs
+          if ($LASTEXITCODE -ne 0) { throw "рендер із текстом розмов не вдався" }
+          if (-not (Select-String -Path ($sp -replace '\.mp4$', '.srt') -Pattern "Friend: фраза" -Quiet)) { throw "у субтитрах немає тексту розмов" }
           # Черга: три фрагменти, гра запускається один раз
           Remove-Item "$fake\garrysmod\fake_launches.txt" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force build\queue | Out-Null
@@ -158,6 +177,7 @@ jobs:
             build/gmdr-cli.exe
             build/*.dll
             build/rnnoise-voice.rnnn
+            build/whisper/
             third_party/ffmpeg/LICENSE.txt
 
   linux-gcc:

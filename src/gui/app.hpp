@@ -77,6 +77,12 @@ private:
     void draw_tab_game();
     void draw_tab_range();
     void draw_tab_chat();
+    // Розпізнавання мовлення (вкладка «Чат»): стан whisper, запуск, завантаження моделі
+    void draw_speech_controls();
+    void draw_model_popup();
+    void refresh_whisper_status(bool force = false);
+    void start_transcribe(bool again);
+    bool job_has_fraction_only() const;   // збереження голосів, розпізнавання, завантаження
     void draw_markers_list();
     void draw_timeline(float height);
     void draw_info_panel();
@@ -224,6 +230,14 @@ private:
     std::string chat_search_;
     bool        chat_show_chat_ = true, chat_show_server_ = true, chat_show_joins_ = true, chat_only_range_ = false;
     int         chat_selected_ = -1;
+    bool        chat_show_speech_ = true;
+    // Розшифровка розмов поточного демо (speech::load_transcript)
+    std::optional<speech::Transcript> transcript_;
+    bool                              whisper_ok_ = false;
+    std::string                       whisper_status_;
+    double                            whisper_checked_at_ = -100;
+    bool                              open_model_popup_ = false;
+    int                               model_choice_ = 0;
 
     // Попапи
     std::string popup_title_, popup_text_, popup_result_;

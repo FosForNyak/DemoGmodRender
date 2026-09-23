@@ -164,6 +164,8 @@ if(GMDR_BUILD_TESTS)
     gmdr_copy_voice_model(gmdr-tests)
     add_executable(gmdr-fakegame tests/fake_game.cpp)
     target_link_libraries(gmdr-fakegame PRIVATE gmdr_core)
+    add_executable(gmdr-fakewhisper tests/fake_whisper.cpp)
+    target_link_libraries(gmdr-fakewhisper PRIVATE gmdr_core)
 endif()
 
 # ---- Фазер ----------------------------------------------------------------------

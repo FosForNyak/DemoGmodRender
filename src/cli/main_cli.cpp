@@ -18,6 +18,7 @@
 #include "core/render/markers.hpp"
 #include "core/render/report.hpp"
 #include "core/render/settings.hpp"
+#include "core/render/subtitles.hpp"
 #include "core/render/versions.hpp"
 #include "core/util/crash_dump.hpp"
 #include "core/util/file_util.hpp"
@@ -68,6 +69,9 @@ static void print_usage() {
 Використання:
   gmdr-cli info <demo.dem> [--json] [--chat]   інформація про демо і голоси (--chat — увесь чат)
   gmdr-cli voice <demo.dem> -o <папка>         зберегти голоси гравців у WAV
+  gmdr-cli transcribe <demo.dem> [-o файл]     розпізнати мовлення гравців (whisper.cpp, локально):
+                                               .txt — репліки з часом, .srt — субтитри, .json — усе
+  gmdr-cli whisper [--download N]              де whisper-cli і моделі; завантажити модель N (1 — найточніша)
   gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
   gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
   gmdr-cli render a.dem b.dem ... -o <папка>   черга: кілька демо підряд, гра запускається один раз
@@ -118,6 +122,9 @@ static void print_usage() {
   --edit-package         пакет для монтажу: окремі WAV (гра, кожен гравець, мікрофон) і проєкт XML
                          для Premiere / DaVinci Resolve у теці «назва_монтаж» поруч із відео
   --chat-srt             субтитри з чатом гри (.srt; разом із --srt — .chat.srt)
+  --speech-srt           у субтитрах — текст розмов (розпізнане мовлення; вмикає --srt)
+  --language auto|uk|ru|en...   мова розмов для розпізнавання (типово — визначити самому)
+  --whisper-cli ФАЙЛ  --whisper-model ФАЙЛ    whisper-cli і модель ggml-*.bin (типово — у теці whisper)
   --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
   --no-chapters          не записувати розділи
   --mic ФАЙЛ  --mic-offset СЕКУНД  --mic-volume 1.0
@@ -168,7 +175,7 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
                                "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game",
-                               "--speaker-overlay", "--version", "--edit-package"};
+                               "--speaker-overlay", "--version", "--edit-package", "--speech-srt", "--force"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -274,6 +281,10 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--srt")) s.subtitles_srt = true;
     if (c.has("--speaker-overlay")) s.speaker_overlay = true;
     if (c.has("--edit-package")) s.edit_package = true;
+    if (c.has("--speech-srt")) s.speech_subtitles = s.subtitles_srt = true;
+    if (c.has("--language")) s.whisper_language = c.get("--language");
+    if (c.has("--whisper-cli")) s.whisper_cli = c.get("--whisper-cli");
+    if (c.has("--whisper-model")) s.whisper_model = c.get("--whisper-model");
     if (c.has("--speed")) {
         const auto v = parse_double(c.get("--speed"));
         if (!v || *v < 0.1 || *v > 16) { err = "--speed: від 0.1 до 16 (0.5 — удвічі повільніше, 4 — учетверо швидше)"; return false; }
@@ -580,6 +591,105 @@ static bool load_base_settings(const Cli& c, render::RenderSettings& s, std::str
     return true;
 }
 
+// Розпізнати мовлення гравців і показати/зберегти репліки
+static int cmd_transcribe(const Cli& c) {
+    if (c.positional.empty()) {
+        std::puts("Використання: gmdr-cli transcribe <demo.dem> [-o файл.txt|.srt|.json] [--language uk]\n"
+                  "                      [--start ЧАС] [--end ЧАС] [--voice-keys ...] [--force]\n"
+                  "                      [--whisper-cli ФАЙЛ] [--whisper-model ФАЙЛ]\n"
+                  "Потрібні whisper-cli і модель (тека whisper поруч із програмою). --force — розпізнати заново.");
+        return 1;
+    }
+    auto a = std::make_shared<demo::DemoAnalysis>();
+    try {
+        *a = demo::analyze_demo(path_from_utf8(c.positional[0]));
+    } catch (const std::exception& e) {
+        std::printf("Помилка: %s\n", e.what());
+        return 1;
+    }
+    auto v = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*a));
+    render::RenderSettings s;
+    std::string err;
+    load_base_settings(c, s, err);   // мова і шляхи whisper — як у програмі
+    s.demo_path = c.positional[0];
+    s.voice_mode = "all";
+    s.start_tick = 0;
+    s.end_tick = -1;
+    if (!apply_options(c, s, a.get(), err)) {
+        std::printf("Помилка: %s\n", err.c_str());
+        return 1;
+    }
+    if (c.has("--force")) {
+        std::error_code ec;
+        fs::remove(speech::transcript_path(s.demo_path), ec);
+    }
+    const bool range = c.has("--start") || c.has("--end");
+    render::TranscribeJob job(s, a, v, range);
+    const int rc = run_job(job);
+    const auto tr = job.transcript();
+    if (rc != 0 || !tr) return rc;
+    const double ti = a->tick_interval;
+    const double from = range && s.start_tick > 0 ? s.start_tick * ti : 0.0;
+    const double to = range && s.end_tick > 0 ? s.end_tick * ti : 1e18;
+    std::vector<speech::Line> lines;
+    for (const auto& l : tr->lines)
+        if (l.start >= from && l.start < to) lines.push_back(l);
+    std::string text;
+    for (const auto& l : lines) text += std::format("[{}] {}: {}\n", format_duration(l.start), l.speaker, l.text);
+    if (!c.has("--output")) {
+        std::fputs(text.c_str(), stdout);
+        return 0;
+    }
+    const fs::path out = path_from_utf8(c.get("--output"));
+    const std::string ext = to_lower(path_to_utf8(out.extension()));
+    std::string body = text;
+    if (ext == ".srt") {
+        const double end = to < 1e17 ? to : a->last_tick * ti;
+        body = render::make_transcript_srt(lines, {}, from, end - from);
+    } else if (ext == ".json") {
+        speech::Transcript part = *tr;
+        part.lines = lines;
+        body = speech::transcript_to_json(part);
+    }
+    if (!write_file_text(out, body, &err)) {
+        std::printf("Не вдалося записати %s: %s\n", path_to_utf8(out).c_str(), err.c_str());
+        return 1;
+    }
+    std::printf("Реплік: %zu — %s\n", lines.size(), path_to_utf8(out).c_str());
+    return 0;
+}
+
+// Стан розпізнавання мовлення і завантаження моделі
+static int cmd_whisper(const Cli& c) {
+    const auto& models = speech::known_models();
+    if (c.has("--download")) {
+        const std::string want = c.get("--download");
+        const speech::ModelInfo* m = nullptr;
+        for (size_t i = 0; i < models.size(); ++i)
+            if (want == std::to_string(i + 1) || iequals(want, models[i].file)) m = &models[i];
+        if (!m) {
+            std::printf("Невідома модель «%s» — див. список: gmdr-cli whisper\n", want.c_str());
+            return 1;
+        }
+        render::DownloadJob job(speech::model_url(m->file), speech::models_download_dir() / m->file,
+                                std::string("модель ") + m->file);
+        return run_job(job);
+    }
+    std::string why;
+    const auto tools = speech::find_whisper("", "", &why);
+    if (tools) std::printf("whisper-cli: %s\nМодель:      %s\n", path_to_utf8(tools->cli).c_str(), path_to_utf8(tools->model).c_str());
+    else std::printf("Розпізнавання недоступне: %s\n", why.c_str());
+    std::printf("\nМоделі (завантажити: gmdr-cli whisper --download N; тека %s):\n",
+                path_to_utf8(speech::models_download_dir()).c_str());
+    for (size_t i = 0; i < models.size(); ++i) {
+        std::error_code ec;
+        const bool have = fs::exists(speech::models_download_dir() / models[i].file, ec);
+        std::printf("  %zu. %-30s %5d МБ  %s%s\n", i + 1, models[i].file, models[i].size_mb, models[i].label,
+                    have ? "  [є]" : "");
+    }
+    return tools ? 0 : 1;
+}
+
 // Рядок файлу черги -> аргументи (лапки групують, як у командному рядку).
 static std::vector<std::string> split_command_line(const std::string& line) {
     std::vector<std::string> out;
@@ -829,6 +939,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (c.command == "voice") return cmd_voice(c);
+    if (c.command == "transcribe") return cmd_transcribe(c);
+    if (c.command == "whisper") return cmd_whisper(c);
     if (c.command == "encoders") return cmd_encoders(c);
     if (c.command == "driver") return cmd_driver(c);
 

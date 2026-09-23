@@ -19,7 +19,8 @@ namespace gmdr::render {
     X(mic_offset) X(mic_volume) X(voice_level) X(voice_denoise) X(voice_denoise_players) X(duck_game) \
     X(loudness_target) X(output_path) X(container) X(faststart) X(crash_safe)                         \
     X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files) \
-    X(extra_versions) X(notify_when_done) X(minimize_to_tray) X(speaker_overlay) X(edit_package) X(library_dirs) X(speed) X(speed_audio)
+    X(extra_versions) X(notify_when_done) X(minimize_to_tray) X(speaker_overlay) X(edit_package) X(library_dirs) X(speed) X(speed_audio) \
+    X(speech_subtitles) X(whisper_language) X(whisper_model) X(whisper_cli)
 
 namespace {
 json::Value to_value(const std::string& v) { return json::Value::string(v); }

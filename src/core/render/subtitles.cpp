@@ -115,4 +115,49 @@ std::string make_chat_srt(const std::vector<demo::DemoEvent>& events, int32_t st
     return out;
 }
 
+std::string make_transcript_srt(const std::vector<speech::Line>& lines, const std::vector<std::string>& keys,
+                                double origin, double duration, double delay, double speed) {
+    constexpr size_t kMaxLines = 3;
+    constexpr double kMinShow = 1.2;   // коротку репліку тримаємо довше — щоб устигнути прочитати
+    if (speed <= 0) speed = 1.0;
+    struct Cue {
+        double      a, b;
+        std::string text;
+    };
+    std::vector<Cue> cues;
+    std::vector<double> bounds;
+    for (const auto& l : lines) {
+        if (!keys.empty() && std::find(keys.begin(), keys.end(), l.speaker_key) == keys.end()) continue;
+        const double a = (l.start - origin + delay) / speed;
+        const double b = std::max((l.end - origin + delay) / speed, a + kMinShow);
+        if (b <= 0 || a >= duration || l.text.empty()) continue;
+        cues.push_back({std::max(0.0, a), std::min(duration, b), l.speaker + ": " + l.text});
+        bounds.push_back(cues.back().a);
+        bounds.push_back(cues.back().b);
+    }
+    std::sort(bounds.begin(), bounds.end());
+    bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+    std::string out, cur;
+    int index = 0;
+    double cur_a = 0;
+    auto flush = [&](double t) {
+        if (!cur.empty() && t - cur_a >= 0.05)
+            out += std::format("{}\n{} --> {}\n{}\n\n", ++index, srt_timestamp(cur_a), srt_timestamp(t), cur);
+    };
+    for (const double t : bounds) {
+        std::vector<const Cue*> active;
+        for (const auto& c : cues)
+            if (c.a <= t && c.b > t) active.push_back(&c);
+        if (active.size() > kMaxLines) active.erase(active.begin(), active.end() - kMaxLines);
+        std::string text;
+        for (const auto* c : active) text += (text.empty() ? "" : "\n") + c->text;
+        if (text == cur) continue;
+        flush(t);
+        cur = text;
+        cur_a = t;
+    }
+    if (!bounds.empty()) flush(bounds.back());
+    return out;
+}
+
 } // namespace gmdr::render

@@ -382,6 +382,11 @@ void App::start_encode_frames(const std::string& dir) {
     job_->start();
 }
 
+bool App::job_has_fraction_only() const {
+    return dynamic_cast<render::ExportVoicesJob*>(job_.get()) || dynamic_cast<render::TranscribeJob*>(job_.get()) ||
+           dynamic_cast<render::DownloadJob*>(job_.get());
+}
+
 void App::export_voices(const std::string& dir) {
     if (!voices_ || !analysis_) return;
     if (job_running()) {
@@ -448,6 +453,7 @@ void App::poll() {
             if (analysis_) {
                 platform_set_title("GMod Demo Render — " + path_to_utf8(path_from_utf8(s_.demo_path).filename()));
                 load_markers_for_demo();
+                transcript_ = speech::load_transcript(s_.demo_path);
                 chat_selected_ = -1;
                 if (s_.end_tick > analysis_->last_tick) s_.end_tick = -1;
                 if (std::getenv("GMDR_TEST_AUTOSTART")) start_render();   // лише для автотестів
@@ -497,8 +503,35 @@ void App::poll() {
             on_job_finished(job_->state(), popup_title_, popup_text_, false);
             return;
         }
+        if (auto* tj = dynamic_cast<render::TranscribeJob*>(job_.get())) {
+            // Розпізнавання мовлення: репліки одразу з'являються у вкладці «Чат»
+            if (tj->state() == render::JobState::Succeeded) {
+                transcript_ = tj->transcript();
+                log_info("Розпізнано реплік: {} — вони у вкладці «Чат»", transcript_ ? transcript_->lines.size() : 0);
+            } else if (tj->state() == render::JobState::Failed) {
+                popup_title_ = "Розпізнавання мовлення: помилка";
+                popup_text_ = tj->error();
+                popup_result_.clear();
+                popup_checks_.clear();
+                open_popup_ = true;
+            }
+            platform_flash_window();
+            return;
+        }
+        if (auto* dj = dynamic_cast<render::DownloadJob*>(job_.get())) {
+            refresh_whisper_status(true);
+            if (dj->state() == render::JobState::Failed) {
+                popup_title_ = "Завантаження: помилка";
+                popup_text_ = dj->error();
+                popup_result_.clear();
+                popup_checks_.clear();
+                open_popup_ = true;
+            }
+            return;
+        }
         const auto* render_job = dynamic_cast<render::RenderJob*>(job_.get());
         const bool test = render_job && render_job->is_test_run();
+        if (render_job && s_.speech_subtitles) transcript_ = speech::load_transcript(s_.demo_path);   // могли дорозпізнати
         popup_checks_.clear();
         popup_test_ok_ = false;
         switch (job_->state()) {
@@ -781,7 +814,7 @@ void App::update_taskbar() {
         fr = p.fraction;
         st = p.game_paused && p.disk_low ? TaskbarState::Error
              : p.game_paused            ? TaskbarState::Paused
-             : p.frames > 0 || dynamic_cast<render::ExportVoicesJob*>(job_.get()) ? TaskbarState::Normal
+             : p.frames > 0 || job_has_fraction_only() ? TaskbarState::Normal
                                           : TaskbarState::Indeterminate;
     } else if (analyze_job_ && analyze_job_->running()) {
         st = TaskbarState::Normal;

@@ -9,6 +9,7 @@
 #include "core/audio/voice_clean.hpp"
 #include "core/audio/voice_preview.hpp"
 #include "core/audio/wav.hpp"
+#include "core/speech/transcribe.hpp"
 #include "core/demo/analysis.hpp"
 #include "core/demo/bitreader.hpp"
 #include "core/demo/chat.hpp"
@@ -1314,6 +1315,86 @@ static void test_game_audio_segments() {
     fs::remove_all(dir, ec);
 }
 
+// Розпізнавання мовлення без whisper: фрази -> стиснуте аудіо -> час демо, розбір JSON,
+// фільтр "галюцинацій", покриття відрізків і субтитри з текстом
+static void test_speech() {
+    std::printf("[speech]\n");
+    voice::SpeakerTrack t;
+    t.key = "steam:1";
+    auto seg = [](double a, double b) {
+        voice::VoiceSegment g;
+        g.start = std::llround(a * 48000);
+        g.length = std::llround(b * 48000) - g.start;
+        return g;
+    };
+    t.segments = {seg(1.0, 2.0), seg(2.3, 3.0), seg(10.0, 10.2), seg(20.0, 21.5)};
+    const auto p = speech::plan_pieces(t);   // пауза 0.3 с зливається, 0.2 с мовлення — відкинуто
+    CHECK(p.size() == 2);
+    if (p.size() == 2) {
+        CHECK_NEAR(p[0].compact, 0.0, 1e-9);
+        CHECK_NEAR(p[0].demo, 1.0, 1e-9);
+        CHECK_NEAR(p[0].length, 2.0, 1e-9);
+        CHECK_NEAR(p[1].compact, 3.0, 1e-9);   // 2 с фрази + 1 с тиші
+        CHECK_NEAR(p[1].demo, 20.0, 1e-9);
+        CHECK_NEAR(speech::compact_to_demo(p, 0.5), 1.5, 1e-9);
+        CHECK_NEAR(speech::compact_to_demo(p, 3.2), 20.2, 1e-9);
+        CHECK_NEAR(speech::compact_to_demo(p, 2.2), 3.0, 1e-9);   // у паузі — кінець попередньої фрази
+        CHECK(speech::piece_at(p, 2.7) == 1);
+    }
+    const auto pr = speech::plan_pieces(t, 0.8, 0.3, 1.0, 2.5, 21.0);   // лише відрізок 2.5..21 с
+    CHECK(pr.size() == 2 && std::abs(pr[0].demo - 2.5) < 1e-9 && std::abs(pr[0].length - 0.5) < 1e-9 &&
+          std::abs(pr[1].length - 1.0) < 1e-9);
+
+    std::string err;
+    const auto segs = speech::parse_whisper_json(
+        R"({"result":{"language":"ru"},"transcription":[{"offsets":{"from":100,"to":1800},"text":" Привіт усім"},)"
+        R"({"offsets":{"from":2100,"to":2900},"text":" Субтитры сделал DimaTorzok"},)"
+        R"({"offsets":{"from":1500,"to":3800},"text":" через паузу"},)"
+        R"({"offsets":{"from":3000,"to":4400},"text":" Друга  фраза"}]})", &err);
+    CHECK(err.empty() && segs.size() == 4);
+    const auto lines = speech::segments_to_lines(segs, p, t.key, "Гравець");
+    CHECK(lines.size() == 3);
+    if (lines.size() == 3) {
+        CHECK(lines[0].text == "Привіт усім" && std::abs(lines[0].start - 1.1) < 1e-9 && std::abs(lines[0].end - 2.8) < 1e-9);
+        CHECK(std::abs(lines[1].end - 3.0) < 1e-9);   // сегмент через паузу обрізано кінцем фрази
+        CHECK(lines[2].text == "Друга фраза" && std::abs(lines[2].start - 20.0) < 1e-9 && lines[2].speaker == "Гравець");
+    }
+    CHECK(speech::parse_whisper_json("{}", &err).empty() && !err.empty());
+    for (const char* noise : {"", " ... ", "[музыка]", "(Смех)", "♪ ♪", "Редактор субтитров А.Семкин Корректор А.Егорова",
+                              "ДЯКУЮ ЗА ПЕРЕГЛЯД!", "Thanks for watching!"})
+        CHECK(speech::is_noise_text(noise));
+    CHECK(!speech::is_noise_text("Привіт, як справи?"));
+    CHECK(!speech::is_noise_text("ok"));
+
+    // Покриття і злиття: новий відрізок доповнює, повторний — замінює репліки
+    speech::Transcript tr;
+    tr.covered = {{"k", 0, 10}};
+    tr.lines = {{3, 4, "k", "K", "старе"}, {5, 6, "q", "Q", "інший"}};
+    CHECK(speech::covers(tr, "k", 2, 8) && !speech::covers(tr, "k", 5, 12) && !speech::covers(tr, "q", 0, 1));
+    speech::Transcript fresh;
+    fresh.covered = {{"k", 10, 20}};
+    fresh.lines = {{12, 13, "k", "K", "нове"}};
+    speech::merge_transcript(tr, fresh);
+    CHECK(speech::covers(tr, "k", 0, 20) && tr.covered.size() == 1 && tr.lines.size() == 3);
+    speech::Transcript again;
+    again.covered = {{"k", 0, 10}};
+    again.lines = {{3.5, 4, "k", "K", "виправлене"}};
+    speech::merge_transcript(tr, again);
+    CHECK(tr.lines.size() == 3 && tr.lines[0].text == "виправлене" && tr.lines[1].text == "інший");
+    const auto back = speech::transcript_from_json(speech::transcript_to_json(tr));
+    CHECK(back && back->lines.size() == 3 && back->lines[0].text == "виправлене" && back->covered.size() == 1 &&
+          speech::covers(*back, "k", 0, 20));
+
+    // Субтитри з текстом: репліки накладаються, коротка тримається 1.2 с; фільтр гравців
+    const std::vector<speech::Line> sl = {{5.0, 5.5, "a", "A", "раз"}, {5.8, 7.0, "b", "B", "два"}};
+    const std::string srt = render::make_transcript_srt(sl, {}, 4.0, 60.0);
+    CHECK(srt.find("00:00:01,000 --> 00:00:01,800\nA: раз\n") != std::string::npos);
+    CHECK(srt.find("00:00:01,800 --> 00:00:02,200\nA: раз\nB: два\n") != std::string::npos);
+    CHECK(srt.find("00:00:02,200 --> 00:00:03,000\nB: два\n") != std::string::npos);
+    const std::string only_b = render::make_transcript_srt(sl, {"b"}, 4.0, 60.0, 0.0, 0.5);   // ×0.5
+    CHECK(only_b.find("A:") == std::string::npos && only_b.find("00:00:03,600 --> 00:00:06,000\nB: два\n") != std::string::npos);
+}
+
 // Уповільнення/прискорення: ланцюжки atempo, тривалість і висота тону, субтитри в часі відео
 static void test_speed() {
     std::printf("[speed]\n");
@@ -1623,6 +1704,7 @@ int main(int argc, char** argv) {
     test_audio_filters();
     test_speed();
     test_game_audio_segments();
+    test_speech();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

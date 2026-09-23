@@ -92,6 +92,10 @@ struct RenderSettings {
     bool        subtitles_srt = false;    // субтитри "хто говорить" (.srt поруч із відео)
     bool        speaker_overlay = false;  // підписи "хто говорить" прямо на кадрі
     bool        edit_package = false;     // пакет для монтажу: окремі WAV + проєкт XML (Premiere, DaVinci)
+    bool        speech_subtitles = false; // у субтитрах — текст розмов (розпізнане мовлення, whisper.cpp)
+    std::string whisper_language = "auto";   // мова розмов: auto, uk, ru, en...
+    std::string whisper_model;            // файл моделі ggml-*.bin (порожньо — найкраща знайдена)
+    std::string whisper_cli;              // whisper-cli (порожньо — поруч із програмою)
     bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"

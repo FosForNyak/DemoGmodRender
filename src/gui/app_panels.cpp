@@ -407,7 +407,7 @@ void App::draw_progress() {
     }
     const auto p = job_->progress();
     std::string text = p.stage;
-    const bool fraction_only = dynamic_cast<render::ExportVoicesJob*>(job_.get()) != nullptr;
+    const bool fraction_only = job_has_fraction_only();
     if (p.fraction >= 0 && (p.frames > 0 || fraction_only || job_->state() == render::JobState::Succeeded))
         text += std::format("  {:.1f}%", p.fraction * 100);
     ImGui::ProgressBar(static_cast<float>(std::clamp(p.fraction, 0.0, 1.0)), ImVec2(-1, 0), text.c_str());
@@ -425,8 +425,7 @@ void App::draw_progress() {
     if (p.elapsed > 0) stats += (stats.empty() ? "" : "  |  ") + std::string("Минуло: ") + format_duration(p.elapsed);
     ImGui::TextColored(kColDim, "%s", stats.c_str());
     // Що зробити, коли рендер чи черга закінчиться (вимкнути ПК / сон)
-    if (job_->running() && !dynamic_cast<render::WatchJob*>(job_.get()) &&
-        !dynamic_cast<render::ExportVoicesJob*>(job_.get())) {
+    if (job_->running() && !dynamic_cast<render::WatchJob*>(job_.get()) && !job_has_fraction_only()) {
         ImGui::SameLine();
         ImGui::TextColored(kColDim, "  |  Потім:");
         ImGui::SameLine();

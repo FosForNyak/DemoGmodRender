@@ -7,6 +7,7 @@
 #include "../game/rtx.hpp"
 #include "../media/muxer.hpp"
 #include "../util/file_util.hpp"
+#include "../util/http_download.hpp"
 #include "../util/log.hpp"
 #include "../util/power.hpp"
 #include "../util/strings.hpp"
@@ -274,16 +275,26 @@ std::vector<SpeakerSubtitleSource> subtitle_sources(const RenderSettings& s,
     return src;
 }
 
+// transcript — розпізнане мовлення: тоді в субтитрах текст розмов, а не лише імена
 void write_speaker_subtitles(const RenderSettings& s, const std::vector<const voice::SpeakerTrack*>& speakers,
-                             int64_t origin_sample, double duration) {
+                             int64_t origin_sample, double duration, const speech::Transcript* transcript = nullptr) {
     if (s.output_path.find('%') != std::string::npos) return;   // послідовність зображень
-    const std::string srt =
-        make_speaker_srt(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay, video_speed(s));
+    std::string srt;
+    if (transcript) {
+        std::vector<std::string> keys;
+        for (const auto& src : subtitle_sources(s, speakers)) keys.push_back(src.track->key);
+        srt = make_transcript_srt(transcript->lines, keys, static_cast<double>(origin_sample) / voice::kVoiceRate,
+                                  duration, s.voice_delay, video_speed(s));
+    } else {
+        srt = make_speaker_srt(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay, video_speed(s));
+    }
     fs::path path = path_from_utf8(s.output_path);
     path.replace_extension(".srt");
     std::string err;
-    if (write_file_text(path, srt, &err)) log_info("Субтитри «хто говорить»: {}", path_to_utf8(path));
-    else log_warn("Не вдалося записати субтитри: {}", err);
+    if (write_file_text(path, srt, &err))
+        log_info("Субтитри {}: {}", transcript ? "з текстом розмов" : "«хто говорить»", path_to_utf8(path));
+    else
+        log_warn("Не вдалося записати субтитри: {}", err);
 }
 
 // Підписи «хто говорить» на кадрі; nullptr — нема кого показувати або немає шрифту
@@ -701,6 +712,117 @@ void ExportVoicesJob::run() {
     succeed(path_to_utf8(dir_));
 }
 
+// ============================ Розпізнавання мовлення ===================================
+std::optional<speech::Transcript> ensure_transcript(const RenderSettings& s,
+                                                    const std::vector<const voice::SpeakerTrack*>& speakers,
+                                                    double from, double to, const speech::Progress& progress,
+                                                    const std::atomic<bool>* cancel, std::string* error) {
+    speech::Transcript stored = speech::load_transcript(s.demo_path).value_or(speech::Transcript{});
+    std::vector<std::pair<const voice::SpeakerTrack*, std::string>> need;
+    for (const auto& src : subtitle_sources(s, speakers)) {
+        const double end = to >= 0 ? to : static_cast<double>(src.track->end_sample()) / voice::kVoiceRate;
+        if (!speech::covers(stored, src.track->key, std::max(0.0, from), end)) need.push_back({src.track, src.name});
+    }
+    if (need.empty()) return stored;
+    std::string why;
+    const auto tools = speech::find_whisper(s.whisper_cli, s.whisper_model, &why);
+    if (!tools) {
+        if (error) *error = why;
+        return std::nullopt;
+    }
+    log_info("Розпізнавання мовлення: {} гравц(ів), модель {}, мова {}", need.size(), path_to_utf8(tools->model.filename()),
+             s.whisper_language.empty() ? "auto" : s.whisper_language);
+    speech::Options opt;
+    opt.language = s.whisper_language.empty() ? "auto" : s.whisper_language;
+    opt.from = std::max(0.0, from);
+    opt.to = to;
+    const fs::path work = app_data_dir() / "whisper_tmp" / make_unique_id();
+    auto fresh = speech::transcribe(need, *tools, opt, work, progress, cancel, error);
+    std::error_code ec;
+    fs::remove_all(work, ec);
+    if (fs::is_empty(work.parent_path(), ec)) fs::remove(work.parent_path(), ec);
+    if (!fresh) return std::nullopt;
+    speech::merge_transcript(stored, *fresh);
+    std::string serr;
+    if (!speech::save_transcript(s.demo_path, stored, &serr)) log_warn("Не вдалося зберегти розшифровку: {}", serr);
+    return stored;
+}
+
+TranscribeJob::TranscribeJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
+                             std::shared_ptr<const voice::VoiceDecodeResult> voices, bool range_only)
+    : s_(std::move(s)), analysis_(std::move(analysis)), voices_(std::move(voices)), range_only_(range_only) {}
+
+std::optional<speech::Transcript> TranscribeJob::transcript() const {
+    std::lock_guard lock(tr_mutex_);
+    return transcript_;
+}
+
+void TranscribeJob::run() {
+    if (!analysis_ || !voices_) {
+        fail("Спершу відкрийте демо");
+        return;
+    }
+    RenderSettings sel = s_;
+    sel.audio = true;
+    if (sel.voice_mode == "none") sel.voice_mode = "all";
+    const auto speakers = select_speakers(sel, *voices_);
+    if (speakers.empty()) {
+        fail("У демо немає голосів гравців");
+        return;
+    }
+    const double ti = analysis_->tick_interval;
+    const double from = range_only_ && s_.start_tick > 0 ? s_.start_tick * ti : 0.0;
+    const double to = range_only_ && s_.end_tick > 0 ? s_.end_tick * ti : -1.0;
+    set_stage("Розпізнавання мовлення", 0);
+    std::string err;
+    auto tr = ensure_transcript(sel, speakers, from, to, [&](double f, const std::string& what) { set_stage(what, f); },
+                                &cancel_, &err);
+    if (cancel_) {
+        update([](Progress& p) { p.stage = "Скасовано"; });
+        return;
+    }
+    if (!tr) {
+        fail("Не вдалося розпізнати мовлення: " + err);
+        return;
+    }
+    {
+        std::lock_guard lock(tr_mutex_);
+        transcript_ = tr;
+    }
+    log_info("Розшифровка: {} реплік — {}", tr->lines.size(), path_to_utf8(speech::transcript_path(s_.demo_path)));
+    succeed(path_to_utf8(speech::transcript_path(s_.demo_path)));
+}
+
+DownloadJob::DownloadJob(std::string url, fs::path dest, std::string what)
+    : url_(std::move(url)), dest_(std::move(dest)), what_(std::move(what)) {}
+
+void DownloadJob::run() {
+    set_stage("Завантаження: " + what_, 0);
+    log_info("Завантажую {} з {}", what_, url_);
+    std::string err;
+    auto last = Clock::now() - std::chrono::seconds(1);
+    const bool ok = download_file(
+        url_, dest_,
+        [&](uint64_t done, uint64_t total) {
+            if (Clock::now() - last < std::chrono::milliseconds(200)) return;
+            last = Clock::now();
+            set_stage(std::format("Завантаження: {} — {} з {}", what_, format_bytes(done),
+                                  total > 0 ? format_bytes(total) : std::string("?")),
+                      total > 0 ? static_cast<double>(done) / static_cast<double>(total) : 0.0);
+        },
+        &cancel_, &err);
+    if (cancel_) {
+        update([](Progress& p) { p.stage = "Скасовано"; });
+        return;
+    }
+    if (!ok) {
+        fail("Не вдалося завантажити " + what_ + ": " + err);
+        return;
+    }
+    log_info("Завантажено: {} ({})", path_to_utf8(dest_), format_bytes(file_size_or_zero(dest_)));
+    succeed(path_to_utf8(dest_));
+}
+
 // =============================== RenderJob ========================================
 namespace {
 // Кроки, які показуються в тестовому прогоні (і в журналі звичайного рендеру)
@@ -1012,6 +1134,21 @@ void RenderJob::run() {
         p.demo_total = A.last_tick;
         p.expected_seconds = expected_seconds;
     });
+
+    // Текст розмов у субтитрах: розпізнати мовлення фрагмента до запуску гри (якщо ще ні)
+    std::optional<speech::Transcript> transcript;
+    if (s_.speech_subtitles && s_.subtitles_srt && !test_run_ && !speakers.empty()) {
+        set_stage("Розпізнавання мовлення", 0);
+        transcript = ensure_transcript(s_, speakers, range_start * static_cast<double>(A.tick_interval) - 1,
+                                       range_end * static_cast<double>(A.tick_interval) + 1,
+                                       [&](double f, const std::string& what) { set_stage("Розпізнавання мовлення: " + what, f); },
+                                       &cancel_, &err);
+        if (cancel_) {
+            update([](Progress& p) { p.stage = "Скасовано"; });
+            return;
+        }
+        if (!transcript) log_warn("Мовлення не розпізнано ({}) — у субтитрах будуть лише імена", err);
+    }
 
     // ---- 2. Підготовка гри ----
     set_stage(test_run_ ? "Тестовий прогін: підготовка гри" : "Підготовка гри", 0);
@@ -1485,7 +1622,8 @@ void RenderJob::run() {
                 }
                 if (s_.subtitles_srt && !speakers.empty()) {
                     // Субтитри пишемо одразу: відрізок і голоси вже відомі
-                    write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, expected_seconds);
+                    write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, expected_seconds,
+                                            transcript ? &*transcript : nullptr);
                 }
                 if (s_.speaker_overlay && !speakers.empty())
                     session.set_overlay(make_overlay(s_, speakers, spec.voice_origin_sample, expected_seconds, img.width,
@@ -2194,8 +2332,11 @@ void EncodeFramesJob::run() {
                 return;
             }
             session.game_audio_finished();   // файл WAV уже повний
-            if (s_.subtitles_srt && !speakers.empty())
-                write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, total_out / fps_v);
+            if (s_.subtitles_srt && !speakers.empty()) {
+                // Готові кадри: розшифровку беремо лише збережену (розпізнавати тут нема коли)
+                const auto tr = s_.speech_subtitles ? speech::load_transcript(s_.demo_path) : std::nullopt;
+                write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, total_out / fps_v, tr ? &*tr : nullptr);
+            }
             update([&](Progress& p) {
                 p.video_desc = session.video_description();
                 p.audio_desc = session.audio_description();

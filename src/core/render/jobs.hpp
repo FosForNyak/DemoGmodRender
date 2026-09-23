@@ -19,6 +19,7 @@
 #include "../game/gmod_install.hpp"
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
+#include "../speech/transcribe.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
 #include "settings.hpp"
@@ -301,6 +302,52 @@ private:
     std::shared_ptr<const voice::VoiceDecodeResult> voices_;
     std::filesystem::path                           dir_;
 };
+
+// ---- Розпізнавання мовлення -----------------------------------------------------------
+// Репліки гравців (whisper.cpp) стають рядками чату й субтитрами. Відрізок — фрагмент з
+// налаштувань (range_only) або все демо. Уже розпізнане повторно не розпізнається, а
+// результат зберігається для демо (speech::save_transcript).
+class TranscribeJob final : public Job {
+public:
+    TranscribeJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
+                  std::shared_ptr<const voice::VoiceDecodeResult> voices, bool range_only = false);
+    std::string name() const override { return "Розпізнавання мовлення"; }
+    // Уся розшифровка демо (після завершення)
+    std::optional<speech::Transcript> transcript() const;
+
+protected:
+    void run() override;
+
+private:
+    RenderSettings                                  s_;
+    std::shared_ptr<const demo::DemoAnalysis>       analysis_;
+    std::shared_ptr<const voice::VoiceDecodeResult> voices_;
+    bool                                            range_only_ = false;
+    mutable std::mutex                              tr_mutex_;
+    std::optional<speech::Transcript>               transcript_;
+};
+
+// Завантаження файлу з прогресом (модель розпізнавання мовлення) — лише на прохання користувача.
+class DownloadJob final : public Job {
+public:
+    DownloadJob(std::string url, std::filesystem::path dest, std::string what);
+    std::string name() const override { return "Завантаження"; }
+
+protected:
+    void run() override;
+
+private:
+    std::string           url_;
+    std::filesystem::path dest_;
+    std::string           what_;
+};
+
+// Розпізнати мовлення гравців на відрізку [from, to] (с), якщо його ще не розпізнано, і
+// зберегти. Повертає всю розшифровку демо; nullopt — помилка (error) або скасування.
+std::optional<speech::Transcript> ensure_transcript(const RenderSettings& s,
+                                                    const std::vector<const voice::SpeakerTrack*>& speakers,
+                                                    double from, double to, const speech::Progress& progress,
+                                                    const std::atomic<bool>* cancel, std::string* error);
 
 // Автовизначення префікса кадрів у папці (найчисленніша група name####.tga).
 std::string detect_frame_prefix(const std::filesystem::path& dir, int64_t* count = nullptr);

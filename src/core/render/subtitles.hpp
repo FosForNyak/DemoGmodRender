@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../demo/chat.hpp"
+#include "../speech/transcribe.hpp"
 #include "../voice/voice_decoder.hpp"
 
 namespace gmdr::render {
@@ -31,6 +32,12 @@ std::string make_speaker_srt(const std::vector<SpeakerSubtitleSource>& speakers,
 // секунд, одночасно до 4 останніх рядків (як у чаті гри). Для відео з прихованим HUD.
 std::string make_chat_srt(const std::vector<demo::DemoEvent>& events, int32_t start_tick, int32_t end_tick,
                           double tick_interval, double duration);
+
+// Субтитри з текстом розмов (розпізнане мовлення): "Ім'я: текст", одночасно до 3 реплік.
+// origin — секунда демо першого кадру відео; keys — чиї репліки (порожньо — усіх);
+// delay — зсув голосу (с, у часі демо), speed — швидкість відео.
+std::string make_transcript_srt(const std::vector<speech::Line>& lines, const std::vector<std::string>& keys,
+                                double origin, double duration, double delay = 0.0, double speed = 1.0);
 
 // Час у форматі SRT: 01:02:03,456
 std::string srt_timestamp(double seconds);
