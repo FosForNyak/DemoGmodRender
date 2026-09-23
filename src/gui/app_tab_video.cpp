@@ -110,7 +110,51 @@ void App::draw_tab_video() {
         }
         help_marker("180° — класичний кіно-вигляд (розмиття впродовж половини кадру). 360° — максимальне розмиття.");
         if (fps_r)
-            ImGui::TextColored(kColDim, "Гра рендеритиме %.0f кадрів/с часу демо", fps_r->value() * s_.motion_blur);
+            ImGui::TextColored(kColDim, "Гра рендеритиме %.0f кадрів/с часу демо", fps_r->value() * s_.motion_blur / s_.speed);
+    }
+
+    // ---- Швидкість: уповільнення / прискорення ----
+    label("Швидкість відео", lw);
+    {
+        static const struct { double v; const char* label; } kSpeeds[] = {
+            {0.25, "×0.25 — учетверо повільніше"}, {0.5, "×0.5 — удвічі повільніше"}, {0.75, "×0.75"},
+            {1.0, "×1 — звичайна"}, {1.5, "×1.5"}, {2.0, "×2 — удвічі швидше"}, {4.0, "×4"}, {8.0, "×8 — таймлапс"}};
+        std::string cur = std::format("×{:g}", s_.speed);
+        for (const auto& sp : kSpeeds)
+            if (std::abs(sp.v - s_.speed) < 1e-6) cur = sp.label;
+        ImGui::SetNextItemWidth(ww * 0.55f);
+        if (ImGui::BeginCombo("##speed", cur.c_str())) {
+            for (const auto& sp : kSpeeds)
+                if (ImGui::Selectable(sp.label, std::abs(sp.v - s_.speed) < 1e-6)) {
+                    s_.speed = sp.v;
+                    changed = true;
+                }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(fs_ * 5.0f);
+        float sp = static_cast<float>(s_.speed);
+        if (ImGui::InputFloat("##speedcustom", &sp, 0, 0, "%.2f")) {
+            s_.speed = std::clamp(static_cast<double>(sp), 0.1, 16.0);
+            changed = true;
+        }
+        help_marker("Уповільнення (slow motion): гра рендерить демо з меншим кроком часу, тож кожен кадр чесний, "
+                    "а не домальований. ×0.5 — удвічі повільніше, рендер удвічі довший. Прискорення (таймлапс) — "
+                    "навпаки. З motion blur прискорення виглядає плавно.");
+        if (std::abs(s_.speed - 1.0) > 1e-6) {
+            label("Звук при цьому", lw);
+            if (ImGui::RadioButton("розтягнути", s_.speed_audio != "mute")) {
+                s_.speed_audio = "stretch";
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("без звуку", s_.speed_audio == "mute")) {
+                s_.speed_audio = "mute";
+                changed = true;
+            }
+            help_marker("Розтягнути — звук гри, голоси і мікрофон сповільнюються чи прискорюються разом з відео, а "
+                        "висота тону лишається тією самою (фільтр atempo). Без звуку — для монтажу під музику.");
+        }
     }
 
     ImGui::SeparatorText("Кодек і формат");

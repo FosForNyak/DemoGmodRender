@@ -248,6 +248,9 @@ bool is_mov_family(const std::string& path, const std::string& container) {
 }
 
 // Субтитри "хто говорить" поруч із відео (те саме ім'я, розширення .srt).
+// Швидкість відео з налаштувань (1 — звичайна; 0.5 — уповільнення вдвічі)
+double video_speed(const RenderSettings& s) { return s.speed > 0 ? std::clamp(s.speed, 0.1, 16.0) : 1.0; }
+
 // Мовці для субтитрів і підписів на кадрі (вимкнені гравці — без підпису)
 std::vector<SpeakerSubtitleSource> subtitle_sources(const RenderSettings& s,
                                                     const std::vector<const voice::SpeakerTrack*>& speakers) {
@@ -261,7 +264,8 @@ std::vector<SpeakerSubtitleSource> subtitle_sources(const RenderSettings& s,
 void write_speaker_subtitles(const RenderSettings& s, const std::vector<const voice::SpeakerTrack*>& speakers,
                              int64_t origin_sample, double duration) {
     if (s.output_path.find('%') != std::string::npos) return;   // послідовність зображень
-    const std::string srt = make_speaker_srt(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay);
+    const std::string srt =
+        make_speaker_srt(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay, video_speed(s));
     fs::path path = path_from_utf8(s.output_path);
     path.replace_extension(".srt");
     std::string err;
@@ -279,7 +283,8 @@ std::unique_ptr<SpeakerOverlay> make_overlay(const RenderSettings& s, const std:
     }
     auto ov = std::make_unique<SpeakerOverlay>();
     std::string err;
-    if (!ov->init(SpeakerOverlay::speakers_for(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay),
+    if (!ov->init(SpeakerOverlay::speakers_for(subtitle_sources(s, speakers), origin_sample, duration, s.voice_delay,
+                                               video_speed(s)),
                   frame_w, frame_h, font, &err)) {
         log_info("Підписи «хто говорить»: {}", err);
         return nullptr;
@@ -290,8 +295,9 @@ std::unique_ptr<SpeakerOverlay> make_overlay(const RenderSettings& s, const std:
 
 void write_chat_subtitles(const RenderSettings& s, const demo::DemoAnalysis& a, int32_t start_tick, double duration) {
     if (s.output_path.find('%') != std::string::npos || a.tick_interval <= 0) return;
-    const int32_t end_tick = start_tick + static_cast<int32_t>(std::ceil(duration / a.tick_interval));
-    const std::string srt = make_chat_srt(a.events, start_tick, end_tick, a.tick_interval, duration);
+    const double vti = a.tick_interval / video_speed(s);   // тривалість тіку у відео
+    const int32_t end_tick = start_tick + static_cast<int32_t>(std::ceil(duration / vti));
+    const std::string srt = make_chat_srt(a.events, start_tick, end_tick, vti, duration);
     if (srt.empty()) {
         log_info("Субтитри чату: у фрагменті немає повідомлень");
         return;
@@ -836,7 +842,8 @@ bool RenderJob::prepare(std::string* error) {
         job.movie_flags = {"jpeg", "jpeg_quality", std::to_string(std::clamp(s_.jpeg_quality, 1, 100)), "wav"};
     else
         job.movie_flags = {"raw"};
-    job.host_framerate = fps->value() * std::clamp(s_.motion_blur, 1, 256);
+    // Кадр відео = 1/FPS секунди демо, помножене на швидкість (уповільнення — менший крок)
+    job.host_framerate = fps->value() * std::clamp(s_.motion_blur, 1, 256) / video_speed(s_);
     job.start_tick = std::max(0, s_.start_tick);
     job.end_tick = s_.end_tick;
     // Далекий фрагмент: швидко перемотуємо до точки за кілька секунд до нього (останні
@@ -927,9 +934,13 @@ void RenderJob::run() {
     // Повний відрізок (для прогнозу в тестовому прогоні) і відрізок цього запуску
     const int32_t full_start = std::max(0, s_.start_tick);
     const int32_t full_end = s_.end_tick > 0 ? std::min(s_.end_tick, A.last_tick) : A.last_tick;
-    const double full_seconds = std::max(0, full_end - full_start) * static_cast<double>(A.tick_interval);
+    const double vspeed = video_speed(s_);
+    const double vti = A.tick_interval / vspeed;   // тривалість тіку у відео (з уповільненням — довша)
+    if (std::abs(vspeed - 1.0) > 1e-6)
+        log_info("Швидкість ×{:g}: {}", vspeed, vspeed < 1 ? "уповільнення" : "прискорення");
+    const double full_seconds = std::max(0, full_end - full_start) * vti;
     if (test_run_) {
-        const int32_t test_ticks = static_cast<int32_t>(std::llround(kTestSeconds / A.tick_interval));
+        const int32_t test_ticks = static_cast<int32_t>(std::llround(kTestSeconds / vti));
         s_.end_tick = std::min(A.last_tick, full_start + test_ticks);
         s_.manual_mode = false;
         s_.quit_game_when_done = true;
@@ -963,7 +974,7 @@ void RenderJob::run() {
     int rh = s_.render_height > 0 ? s_.render_height : s_.height;
     const int32_t range_start = std::max(0, s_.start_tick);
     const int32_t range_end = s_.end_tick > 0 ? std::min(s_.end_tick, A.last_tick) : A.last_tick;
-    const double expected_seconds = std::max(0, range_end - range_start) * static_cast<double>(A.tick_interval);
+    const double expected_seconds = std::max(0, range_end - range_start) * vti;
     if (s_.target_size_mb > 0 && expected_seconds > 0) {
         const double size_seconds = test_run_ ? full_seconds : expected_seconds;
         es.video.bitrate = bitrate_for_target_size(s_.target_size_mb, size_seconds, s_.audio ? es.audio.bitrate : 0);
@@ -1360,6 +1371,8 @@ void RenderJob::run() {
                 spec.voice_cleanup = voice_fx;
                 spec.duck_game = s_.duck_game;
                 spec.loudness_target = s_.loudness_target;
+                spec.speed = vspeed;
+                spec.speed_mute = s_.speed_audio == "mute";
                 if (!session.begin(img.width, img.height, spec, &err)) {
                     fatal("Не вдалося почати кодування: " + err);
                     return;
@@ -1582,8 +1595,7 @@ void RenderJob::run() {
     if (rp->skipped() > 0) log_warn("Пропущено кадрів: {}", rp->skipped());
     const auto chapters =
         s_.chapters ? chapters_for_range(parse_markers(s_.markers), video_start_tick,
-                                         video_start_tick + static_cast<int32_t>(std::llround(secs / A.tick_interval)),
-                                         A.tick_interval)
+                                         video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti)
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
     if (!test_run_) make_after_render(s_, extras_done);
@@ -1601,8 +1613,7 @@ void RenderJob::run() {
         pr.video_has_audio = es.audio_enabled;
         for (const auto& st : stems) pr.stems.push_back({st.title, path_to_utf8(fs::absolute(path_from_utf8(st.path)))});
         pr.markers = chapters_for_range(parse_markers(s_.markers), video_start_tick,
-                                        video_start_tick + static_cast<int32_t>(std::llround(secs / A.tick_interval)),
-                                        A.tick_interval);
+                                        video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti);
         const fs::path xml = path_from_utf8(es.stems_dir) / path_from_utf8(pr.name + ".xml");
         std::string werr;
         if (write_file_text(xml, make_fcp7_xml(pr), &werr))

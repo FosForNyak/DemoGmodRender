@@ -30,7 +30,7 @@ public:
 
     // Відрізки мовлення для відео (як у субтитрах: близькі фрази злиті, короткі уривки відкинуто).
     static std::vector<Speaker> speakers_for(const std::vector<SpeakerSubtitleSource>& src, int64_t origin_sample,
-                                             double duration, double delay);
+                                             double duration, double delay, double speed = 1.0);
     // Системний шрифт з кирилицею; порожньо — не знайдено.
     static std::string find_font();
 

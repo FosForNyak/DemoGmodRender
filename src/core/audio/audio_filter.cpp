@@ -209,6 +209,22 @@ std::string denoise_filter(double noise_db) {
     return std::format("afftdn=nr=12:nf={}:tn=1", nf);
 }
 
+std::string tempo_filter(double speed) {
+    std::string chain;
+    double s = std::clamp(speed, 0.01, 100.0);
+    auto add = [&](double v) { chain += (chain.empty() ? "" : ",") + std::format("atempo={:.6f}", v); };
+    while (s < 0.5) {
+        add(0.5);
+        s /= 0.5;
+    }
+    while (s > 2.0) {
+        add(2.0);
+        s /= 2.0;
+    }
+    if (std::abs(s - 1.0) > 1e-6 || chain.empty()) add(s);
+    return chain;
+}
+
 std::string duck_filter() {
     return "[in0][in1]sidechaincompress=threshold=0.02:ratio=5:attack=20:release=400:knee=3";
 }

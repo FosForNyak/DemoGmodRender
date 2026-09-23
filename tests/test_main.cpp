@@ -1260,6 +1260,54 @@ static double rms_db(const std::vector<float>& x, double from_s, double to_s, si
     return 10.0 * std::log10(s / std::max<size_t>(1, b - a) + 1e-20);
 }
 
+// Уповільнення/прискорення: ланцюжки atempo, тривалість і висота тону, субтитри в часі відео
+static void test_speed() {
+    std::printf("[speed]\n");
+    CHECK(audio::tempo_filter(1.0) == "atempo=1.000000");
+    CHECK(audio::tempo_filter(0.5) == "atempo=0.500000");
+    CHECK(audio::tempo_filter(0.25) == "atempo=0.500000,atempo=0.500000");
+    CHECK(audio::tempo_filter(4) == "atempo=2.000000,atempo=2.000000");
+    CHECK(audio::tempo_filter(0.3) == "atempo=0.500000,atempo=0.600000");
+    CHECK(audio::tempo_filter(8) == "atempo=2.000000,atempo=2.000000,atempo=2.000000");
+    constexpr int R = 48000;
+    const double kPi = 3.14159265358979323846;
+    std::vector<float> tone(2 * R);
+    for (size_t i = 0; i < tone.size(); ++i) tone[i] = static_cast<float>(0.5 * std::sin(2 * kPi * 440 * i / R));
+    for (double sp : {0.5, 0.25, 2.0}) {
+        audio::AudioFilterChain c;
+        std::string err;
+        CHECK(c.open(audio::tempo_filter(sp), 1, 1, &err));
+        for (size_t at = 0; at < tone.size(); at += 4096)
+            c.push(0, tone.data() + at, std::min<size_t>(4096, tone.size() - at), &err);
+        CHECK(c.finish(&err));
+        // 2 с демо -> 2/sp с відео
+        CHECK_NEAR(static_cast<double>(c.out_end() - c.out_start()) / R, 2.0 / sp, 0.05);
+        // Висота тону та сама: 220 перетинів нуля вгору за пів секунди всередині
+        int ups = 0;
+        const int64_t a = c.out_start() + R / 8;
+        for (int64_t p = a; p < a + R / 2; ++p) ups += c.out_at(p - 1)[0] < 0 && c.out_at(p)[0] >= 0;
+        CHECK(std::abs(ups - 220) <= 3);
+    }
+    // Репліка 1.0–2.0 с демо при ×0.5 — 2.0–4.0 с відео; затримка голосу 0.5 с теж удвічі довша
+    voice::SpeakerTrack a;
+    voice::VoiceSegment g;
+    g.start = 1 * 48000;
+    g.length = 1 * 48000;
+    a.segments = {g};
+    CHECK(render::make_speaker_srt({{&a, "A"}}, 0, 10.0, 0.0, 0.5).find("00:00:02,000 --> 00:00:04,000\nA\n") !=
+          std::string::npos);
+    CHECK(render::make_speaker_srt({{&a, "A"}}, 0, 10.0, 0.5, 0.5).find("00:00:03,000 --> 00:00:05,000\nA\n") !=
+          std::string::npos);
+    CHECK(render::make_speaker_srt({{&a, "A"}}, 0, 10.0, 0.0, 2.0).find("00:00:00,500 --> 00:00:01,000\nA\n") !=
+          std::string::npos);
+    // Налаштування зберігаються
+    render::RenderSettings rs;
+    rs.speed = 0.25;
+    rs.speed_audio = "mute";
+    const auto back = render::RenderSettings::from_json(rs.to_json());
+    CHECK(back.speed == 0.25 && back.speed_audio == "mute");
+}
+
 static void test_audio_filters() {
     std::printf("[audio filters]\n");
     constexpr int R = 48000;
@@ -1519,6 +1567,7 @@ int main(int argc, char** argv) {
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();
+    test_speed();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

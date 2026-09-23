@@ -23,8 +23,9 @@ struct SpeakerSubtitleSource {
 // початку відео; duration — тривалість відео (с); delay — зсув голосу (с).
 // Близькі фрази одного гравця (паузи < 0.6 с) об'єднуються; кілька гравців
 // одночасно — "Ім'я1, Ім'я2".
+// speed — швидкість відео (0.5 — уповільнення: репліки й затримка голосу розтягуються разом зі звуком).
 std::string make_speaker_srt(const std::vector<SpeakerSubtitleSource>& speakers, int64_t origin_sample,
-                             double duration, double delay = 0.0);
+                             double duration, double delay = 0.0, double speed = 1.0);
 
 // Субтитри чату: повідомлення з фрагмента [start_tick, end_tick) — кожне видно кілька
 // секунд, одночасно до 4 останніх рядків (як у чаті гри). Для відео з прихованим HUD.

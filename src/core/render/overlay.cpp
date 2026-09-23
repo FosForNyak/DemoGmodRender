@@ -59,7 +59,8 @@ void rgb_to_yuv(const frames::Image& img, double r, double g, double b, double& 
 } // namespace
 
 std::vector<SpeakerOverlay::Speaker> SpeakerOverlay::speakers_for(const std::vector<SpeakerSubtitleSource>& src,
-                                                                   int64_t origin_sample, double duration, double delay) {
+                                                                   int64_t origin_sample, double duration, double delay,
+                                                                   double speed) {
     std::vector<Speaker> out;
     for (const auto& s : src) {
         if (!s.track) continue;
@@ -73,8 +74,8 @@ std::vector<SpeakerOverlay::Speaker> SpeakerOverlay::speakers_for(const std::vec
             ca = cb = -1;
         };
         for (const auto& seg : s.track->segments) {
-            const double a = (seg.start - origin_sample) / static_cast<double>(voice::kVoiceRate) + delay;
-            const double b = (seg.end() - origin_sample) / static_cast<double>(voice::kVoiceRate) + delay;
+            const double a = ((seg.start - origin_sample) / static_cast<double>(voice::kVoiceRate) + delay) / speed;
+            const double b = ((seg.end() - origin_sample) / static_cast<double>(voice::kVoiceRate) + delay) / speed;
             if (b <= 0 || a >= duration) continue;
             if (ca >= 0 && a - cb < kMergeGap) {
                 cb = std::max(cb, b);

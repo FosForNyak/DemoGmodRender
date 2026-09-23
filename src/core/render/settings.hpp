@@ -45,6 +45,8 @@ struct RenderSettings {
     int         height = 1080;
     std::string fps = "60";
     int         motion_blur = 1;          // під-кадрів на кадр (1 — вимкнено)
+    double      speed = 1.0;              // 0.5 — уповільнення вдвічі, 4 — прискорення вчетверо
+    std::string speed_audio = "stretch";  // звук при зміні швидкості: stretch (atempo) / mute
     double      shutter = 180.0;
     std::string video_codec = "libx264";
     std::string pix_fmt = "auto";

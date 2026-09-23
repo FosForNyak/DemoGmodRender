@@ -322,7 +322,9 @@ void FilteredInput::produce_until(int64_t end, int64_t avail) {
     while (!failed_ && ready_end() < end && fed_ < avail) {
         feed_chunk(static_cast<size_t>(std::min<int64_t>(4096, avail - fed_)));
         // Джерело нескінченне (тиша після кінця), а фільтр нічого не віддає — щось не так
-        if (avail == INT64_MAX && fed_ > end + 10LL * kMixRate) fail("фільтр не віддає звук");
+        if (avail == INT64_MAX && fed_ > static_cast<int64_t>(static_cast<double>(end) * std::max(1.0, input_rate_)) +
+                                             10LL * kMixRate)
+            fail("фільтр не віддає звук");
     }
 }
 

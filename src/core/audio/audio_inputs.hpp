@@ -143,6 +143,8 @@ public:
     void own(std::unique_ptr<AudioInput> in) { owned_.push_back(std::move(in)); }
     // Почати обробку з позиції pos, а не з 0 (до першого читання). Раніше — тиша.
     void start_at(int64_t pos) { fed_ = buf_start_ = gated_end_ = origin_ = pos; }
+    // Фільтр змінює темп (atempo): на секунду результату йде input_rate секунд входу
+    void set_input_rate(double r) { input_rate_ = r; }
     std::string name() const override { return name_; }
     int64_t available() override;
     void mix(int64_t pos, float* out, size_t frames, float gain) override;
@@ -168,6 +170,7 @@ private:
     std::vector<float>                       buf_;             // результат (ch_ каналів) від buf_start_
     int64_t                                  buf_start_ = 0;
     int64_t                                  gated_end_ = 0;   // до цієї позиції гейт уже відпрацював
+    double                                   input_rate_ = 1.0;
     std::vector<float>                       tmp_, mono_;
 };
 

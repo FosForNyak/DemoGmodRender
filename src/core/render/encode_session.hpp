@@ -73,6 +73,8 @@ struct AudioSourcesSpec {
     std::vector<audio::VoiceCleanup>        voice_cleanup;         // обробка кожного голосу (порожньо — без)
     bool                                    duck_game = false;     // приглушувати гру, коли говорять
     double                                  loudness_target = 0;   // LUFS загального міксу; 0 — не змінювати
+    double                                  speed = 1.0;           // швидкість відео (0.5 — уповільнення); звук — atempo
+    bool                                    speed_mute = false;    // при зміні швидкості — без звуку
 };
 
 // Маленька копія поточного кадру для живого прев'ю у вікні програми.

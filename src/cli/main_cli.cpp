@@ -90,6 +90,8 @@ static void print_usage() {
   --fps N                частота кадрів: 24, 30, 59.94, 60, 120, 240, 60000/1001 ...
   --motion-blur N        під-кадрів на кадр для розмиття руху (1 — вимкнено)
   --shutter ГРАДУСИ      кут затвора для motion blur (типово 180)
+  --speed N              швидкість: 0.5 — уповільнення вдвічі, 0.25 — вчетверо, 4 — прискорення (0.1..16)
+  --speed-audio stretch|mute   звук при зміні швидкості: розтягнути (висота тону та сама) або без звуку
   --codec НАЗВА          libx264, libx265, libsvtav1, libvpx-vp9, prores_ks, ffv1, png,
                          h264_nvenc, hevc_nvenc, av1_nvenc, h264_amf, hevc_amf, h264_qsv ...
   --bit-depth 8|10|12    бітність, --chroma 420|422|444, --pix-fmt ФОРМАТ
@@ -272,6 +274,16 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--srt")) s.subtitles_srt = true;
     if (c.has("--speaker-overlay")) s.speaker_overlay = true;
     if (c.has("--edit-package")) s.edit_package = true;
+    if (c.has("--speed")) {
+        const auto v = parse_double(c.get("--speed"));
+        if (!v || *v < 0.1 || *v > 16) { err = "--speed: від 0.1 до 16 (0.5 — удвічі повільніше, 4 — учетверо швидше)"; return false; }
+        s.speed = *v;
+    }
+    if (c.has("--speed-audio")) {
+        const std::string v = c.get("--speed-audio");
+        if (v != "stretch" && v != "mute") { err = "--speed-audio: stretch (розтягнути) або mute (без звуку)"; return false; }
+        s.speed_audio = v;
+    }
     if (c.has("--accurate-color")) s.accurate_color = true;
     if (c.has("--no-crash-safe")) s.crash_safe = false;
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");

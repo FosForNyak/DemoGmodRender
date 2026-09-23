@@ -125,8 +125,33 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                  s_.shutter_degrees, blender_->used_samples());
 
     // ---- Звук ----
-    if (s_.audio_enabled) {
+    // Уповільнення/прискорення: звук гри, голоси й мікрофон записані в часі демо — розтягуємо
+    // їх (atempo, висота тону та сама) до часу відео; або відео без звуку
+    const bool tempo = std::abs(spec.speed - 1.0) > 1e-6;
+    if (s_.audio_enabled && tempo && spec.speed_mute) log_info("Швидкість ×{:g}: відео без звуку", spec.speed);
+    else if (s_.audio_enabled && tempo) log_info("Швидкість ×{:g}: звук розтягнуто (atempo), висота тону та сама", spec.speed);
+    if (s_.audio_enabled && !(tempo && spec.speed_mute)) {
         std::vector<std::unique_ptr<audio::AudioInput>> inputs;
+        // Джерело в часі демо -> у часі відео. Джерело переходить у володіння обгортки: мікшер
+        // відкидає прочитане за позицією у відео, а джерелу потрібна позиція в демо.
+        auto in_video_time = [&](audio::AudioInput* in, bool mono) -> audio::AudioInput* {
+            if (!tempo || !in) return in;
+            auto it = std::find_if(inputs.begin(), inputs.end(), [&](const auto& p) { return p.get() == in; });
+            if (it == inputs.end()) return in;
+            auto f = std::make_unique<audio::FilteredInput>(
+                in->name(), std::vector<std::vector<audio::TrackSource>>{{{in, 1.0f}}}, mono);
+            std::string ferr;
+            if (!f->open(audio::tempo_filter(spec.speed), nullptr, &ferr)) {
+                log_warn("{}: не вдалося змінити темп ({}) — звук без розтягування", in->name(), ferr);
+                return in;
+            }
+            f->set_input_rate(spec.speed);
+            f->own(std::move(*it));
+            inputs.erase(it);
+            audio::AudioInput* out = f.get();
+            inputs.push_back(std::move(f));
+            return out;
+        };
         std::vector<audio::AudioTrackPlan> tracks;
         audio::AudioTrackPlan mix;
         mix.title = "Мікс";
@@ -139,6 +164,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             game_input_ = g.get();
             game = g.get();
             inputs.push_back(std::move(g));
+            game = in_video_time(game, false);
         }
         for (size_t i = 0; i < spec.voices.size(); ++i) {
             const audio::VoiceCleanup* cl = i < spec.voice_cleanup.size() ? &spec.voice_cleanup[i] : nullptr;
@@ -167,6 +193,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 }
             }
             if (vi) inputs.push_back(std::move(vi));
+            v = in_video_time(v, true);
             voices.push_back(v);
             voice_gains.push_back(gain);
         }
@@ -177,6 +204,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             } else {
                 mic = m.get();
                 inputs.push_back(std::move(m));
+                mic = in_video_time(mic, false);
             }
         }
         // Гра стихає, коли хтось говорить: другий вхід компресора — сума голосів

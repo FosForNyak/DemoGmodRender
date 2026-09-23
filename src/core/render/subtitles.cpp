@@ -13,7 +13,7 @@ std::string srt_timestamp(double seconds) {
 }
 
 std::string make_speaker_srt(const std::vector<SpeakerSubtitleSource>& speakers, int64_t origin_sample,
-                             double duration, double delay) {
+                             double duration, double delay, double speed) {
     constexpr double kMergeGap = 0.6;     // паузи коротші — та сама репліка
     constexpr double kMinLength = 0.25;   // коротші уривки не показуємо
     const double rate = voice::kVoiceRate;
@@ -33,8 +33,8 @@ std::string make_speaker_srt(const std::vector<SpeakerSubtitleSource>& speakers,
             cur_a = cur_b = -1;
         };
         for (const auto& seg : t->segments) {
-            const double a = (seg.start - origin_sample) / rate + delay;
-            const double b = (seg.end() - origin_sample) / rate + delay;
+            const double a = ((seg.start - origin_sample) / rate + delay) / speed;
+            const double b = ((seg.end() - origin_sample) / rate + delay) / speed;
             if (b <= 0 || a >= duration) continue;
             if (cur_a >= 0 && a - cur_b < kMergeGap) {
                 cur_b = std::max(cur_b, b);

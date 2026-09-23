@@ -74,6 +74,9 @@ std::filesystem::path voice_denoise_model();
 std::string denoise_filter(double noise_db);
 // Приглушення першого входу (гра) другим (голоси).
 std::string duck_filter();
+// Зміна темпу без зміни висоти тону (atempo; ланцюжок для швидкостей поза 0.5..2 — щоб
+// працювало й зі старими FFmpeg). speed 0.5 — удвічі повільніше.
+std::string tempo_filter(double speed);
 // Фінальна гучність за EBU R128 (I — ціль у LUFS). Порожньо, якщо target >= 0 (вимкнено).
 std::string loudness_filter(double target_lufs);
 

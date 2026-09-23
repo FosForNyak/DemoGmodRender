@@ -831,8 +831,9 @@ std::string App::best_gpu_codec(const char* family) const {
 double App::fragment_seconds() const {
     if (!analysis_) return 0;
     const int32_t last = analysis_->last_tick;
+    // Тривалість відео: фрагмент демо з урахуванням уповільнення/прискорення
     return std::max(0, (s_.end_tick > 0 ? s_.end_tick : last) - std::max(0, s_.start_tick)) *
-           static_cast<double>(analysis_->tick_interval);
+           static_cast<double>(analysis_->tick_interval) / (s_.speed > 0 ? s_.speed : 1.0);
 }
 
 void App::apply_preset(int index) {
