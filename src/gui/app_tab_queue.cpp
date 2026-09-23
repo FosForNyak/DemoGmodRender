@@ -55,6 +55,23 @@ void App::add_to_queue() {
     QueueEntry q;
     q.s = s_;
     q.tick_interval = analysis_->tick_interval;
+    push_queue_entry(std::move(q));
+}
+
+// З бібліотеки: ціле демо з поточними налаштуваннями відео і звуку
+void App::add_demo_to_queue(const std::string& demo) {
+    QueueEntry q;
+    q.s = s_;
+    q.s.demo_path = demo;
+    q.s.start_tick = 0;
+    q.s.end_tick = -1;
+    if (q.s.voice_mode == "selected") q.s.voice_mode = "all";   // вибрані гравці — з іншого демо
+    q.s.markers = render::format_markers(render::load_demo_markers(app_data_dir() / "gmdr_markers.json", demo));
+    q.s.output_path = render::default_output_path(demo, current_container());
+    push_queue_entry(std::move(q));
+}
+
+void App::push_queue_entry(QueueEntry q) {
     // Той самий файл уже в черзі (той самий демо без іншої назви) — не перезаписувати
     auto taken = [&](const std::string& p) {
         return std::any_of(queue_.begin(), queue_.end(), [&](const QueueEntry& e) { return to_lower(e.s.output_path) == to_lower(p); });
@@ -113,7 +130,8 @@ void App::draw_tab_queue() {
     const auto results = running ? running->results() : std::vector<render::QueueJob::ItemResult>{};
     ImGui::TextWrapped("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
                        "пункту вона не закривається, а одразу вмикає наступне демо.");
-    ImGui::TextColored(kColDim, "Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» внизу.");
+    ImGui::TextColored(kColDim, "Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» внизу. "
+                                "Ціле демо — правим кліком на вкладці «Демо».");
     ImGui::Spacing();
     if (queue_.empty()) {
         ImGui::TextColored(kColDim, "Черга порожня.");

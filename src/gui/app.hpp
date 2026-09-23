@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "core/audio/voice_preview.hpp"
+#include "core/demo/library.hpp"
 #include "core/game/gmod_install.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/render/jobs.hpp"
@@ -127,6 +128,13 @@ private:
     };
     void draw_tab_queue();
     void add_to_queue();
+    void add_demo_to_queue(const std::string& demo_path);   // ціле демо з поточними налаштуваннями
+    void push_queue_entry(QueueEntry q);
+    // Вкладка «Демо» (бібліотека)
+    void draw_tab_library();
+    std::vector<std::string> library_dirs() const;
+    void rescan_library();
+    void poll_library();
     void start_queue();
     void load_queue();
     void save_queue();
@@ -194,6 +202,10 @@ private:
     std::vector<render::Marker>                     markers_;
 
     std::vector<QueueEntry>                         queue_;
+    std::vector<demo::LibraryEntry>                 library_;
+    std::future<std::vector<demo::LibraryEntry>>    library_future_;
+    bool                                            library_scanned_ = false;
+    std::string                                     library_search_;
 
     // Після завершення рендеру/черги (лише на цей запуск програми, не зберігається)
     PowerAction                                     after_done_ = PowerAction::None;

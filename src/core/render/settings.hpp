@@ -101,6 +101,7 @@ struct RenderSettings {
     // ---- Програма (вікно) ----
     bool        notify_when_done = true;  // сповіщення Windows, коли рендер чи черга закінчились
     bool        minimize_to_tray = false; // згорнуте вікно — лише значком у треї
+    std::string library_dirs;             // бібліотека демо: ваші теки (через ;), тека гри — завжди
 
     json::Value to_json() const;
     static RenderSettings from_json(const json::Value& j);

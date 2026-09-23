@@ -13,6 +13,7 @@
 #include "core/demo/bitreader.hpp"
 #include "core/demo/chat.hpp"
 #include "core/demo/game_events.hpp"
+#include "core/demo/library.hpp"
 #include "core/demo/string_tables.hpp"
 #include "core/frames/blender.hpp"
 #include "core/frames/image_decode.hpp"
@@ -763,7 +764,7 @@ static void test_derived_outputs() {
     const fs::path dir = fs::temp_directory_path() / "gmdr_test_derived";
     fs::remove_all(dir);
     fs::create_directories(dir);
-    const std::string video = path_to_utf8(dir / "кліп.mp4");
+    const std::string video = path_to_utf8(dir / path_from_utf8("кліп.mp4"));
     // 2 с відео 160×90, 30 кадрів/с: смуга, що рухається
     {
         media::Muxer mux;
@@ -797,23 +798,23 @@ static void test_derived_outputs() {
         CHECK(enc.flush(sink, &err) && mux.finish(&err));
     }
     std::string err;
-    const std::string jpg = path_to_utf8(dir / "кліп.jpg");
+    const std::string jpg = path_to_utf8(dir / path_from_utf8("кліп.jpg"));
     CHECK(render::make_thumbnail(video, jpg, -1, 1280, 720, &err));
     media::MediaFileInfo info;
     CHECK(media::probe_media_file(jpg, info, &err) && info.has_video);
-    const std::string gif = path_to_utf8(dir / "кліп.gif");
+    const std::string gif = path_to_utf8(dir / path_from_utf8("кліп.gif"));
     CHECK(render::make_animation(video, gif, render::AnimFormat::Gif, 1.0, 480, 10, &err));
     CHECK(media::probe_media_file(gif, info, &err) && info.has_video);
     if (avcodec_find_encoder_by_name("libwebp_anim")) {
-        const std::string webp = path_to_utf8(dir / "кліп.webp");
+        const std::string webp = path_to_utf8(dir / path_from_utf8("кліп.webp"));
         CHECK(render::make_animation(video, webp, render::AnimFormat::WebP, 1.0, 640, 10, &err));
         auto bytes = read_file_bytes(path_from_utf8(webp));
         CHECK(bytes && bytes->size() > 100 && std::memcmp(bytes->data(), "RIFF", 4) == 0 &&
               std::memcmp(bytes->data() + 8, "WEBPVP8X", 8) == 0);
     }
     // Не відео — помилка з поясненням, а не падіння
-    write_file_text(dir / "не_відео.mp4", "hello");
-    CHECK(!render::make_thumbnail(path_to_utf8(dir / "не_відео.mp4"), jpg, -1, 640, 360, &err) && !err.empty());
+    write_file_text(dir / path_from_utf8("не_відео.mp4"), "hello");
+    CHECK(!render::make_thumbnail(path_to_utf8(dir / path_from_utf8("не_відео.mp4")), jpg, -1, 640, 360, &err) && !err.empty());
     fs::remove_all(dir);
 }
 
@@ -823,14 +824,14 @@ static void test_report_zip() {
     namespace fs = std::filesystem;
     const char* check = "123456789";
     CHECK(crc32(reinterpret_cast<const uint8_t*>(check), 9) == 0xCBF43926u);
-    const fs::path zp = fs::temp_directory_path() / "gmdr_test_звіт.zip";
+    const fs::path zp = fs::temp_directory_path() / path_from_utf8("gmdr_test_звіт.zip");
     {
         ZipWriter z;
         std::string err;
         CHECK(z.open(zp, &err));
         CHECK(z.add("журнал.txt", "рядок 1\nрядок 2\n"));
         CHECK(z.add("порожній.txt", ""));
-        CHECK(!z.add_file("немає.txt", fs::temp_directory_path() / "gmdr_такого_файлу_нема"));
+        CHECK(!z.add_file("немає.txt", fs::temp_directory_path() / path_from_utf8("gmdr_такого_файлу_нема")));
         CHECK(z.close(&err));
     }
     auto bytes = read_file_bytes(zp);
@@ -864,7 +865,7 @@ static void test_report_zip() {
 // одноразовій машині) і в окремий розділ HKCU\Software\GModDemoRenderTest, не в справжній Classes.
 static void test_dem_association() {
     std::printf("[dem association]\n");
-    const std::filesystem::path exe = std::filesystem::path("C:/Програми/GMDR") / "gmdr.exe";
+    const std::filesystem::path exe = path_from_utf8("C:/Програми/GMDR/gmdr.exe");
     const auto vals = dem_association_values(exe);
     bool cmd_ok = false, openwith = false;
     for (const auto& v : vals) {
@@ -883,7 +884,7 @@ static void test_dem_association() {
     CHECK(!dem_association_registered(exe, root));
     CHECK(register_dem_association(exe, &err, root));
     CHECK(dem_association_registered(exe, root));
-    CHECK(!dem_association_registered(std::filesystem::path("D:/інша/gmdr.exe"), root));   // інша копія програми
+    CHECK(!dem_association_registered(path_from_utf8("D:/інша/gmdr.exe"), root));   // інша копія програми
     CHECK(unregister_dem_association(&err, root));
     CHECK(!dem_association_registered(exe, root));
     RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\GModDemoRenderTest");
@@ -995,6 +996,40 @@ static void test_edit_package() {
     };
     CHECK(count("<track>") == 4);   // відео, мікс з відео, два WAV
     CHECK(count("<clipitem ") == 4 && count("</clipitem>") == 4);
+}
+
+// Бібліотека демо: заголовки, підтеки, пошук; не-демо — у списку з поясненням
+static void test_demo_library(const std::filesystem::path& demos) {
+    std::printf("[demo library]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_library";
+    fs::remove_all(dir);
+    const fs::path old = dir / path_from_utf8("старі");   // кирилиця в шляхах — лише через UTF-8
+    fs::create_directories(old / "2025");
+    std::error_code ec;
+    fs::copy_file(demos / "test24.dem", dir / path_from_utf8("бій.dem"), ec);
+    fs::copy_file(demos / "test20c.dem", old / "2025" / path_from_utf8("раунд.DEM"), ec);
+    write_file_text(dir / path_from_utf8("не демо.dem"), "просто текст");
+    write_file_text(dir / path_from_utf8("нотатки.txt"), "не демо");
+    const auto lib = demo::scan_demo_library({dir, old});   // та сама тека двічі — без дублікатів
+    CHECK(lib.size() == 3);
+    int ok = 0, bad = 0;
+    for (const auto& e : lib) {
+        if (e.error.empty() && e.map == "gm_construct" && e.seconds > 1 && e.size > 1000) ++ok;
+        if (!e.error.empty() && e.name == "не демо.dem") ++bad;
+    }
+    CHECK(ok == 2 && bad == 1);
+    if (ok != 2 || bad != 1)
+        for (const auto& x : lib)
+            std::printf("  %s | %s | %.1f | %llu | %s\n", x.name.c_str(), x.map.c_str(), x.seconds,
+                        static_cast<unsigned long long>(x.size), x.error.c_str());
+    demo::LibraryEntry e;
+    e.name = "match_final.dem";
+    e.map = "gm_construct";
+    e.server = "Test Server [UA]";
+    CHECK(demo::library_match(e, "construct final") && demo::library_match(e, "") && !demo::library_match(e, "flatgrass"));
+    CHECK(demo::library_match(e, "SERVER"));   // без урахування регістру
+    fs::remove_all(dir);
 }
 
 static void test_driver_cfg() {
@@ -1490,6 +1525,7 @@ int main(int argc, char** argv) {
         if (std::filesystem::exists(dir / "test20c.dem")) test_demo(dir / "test20c.dem", 20);
         if (std::filesystem::exists(dir / "test2026.dem")) test_demo(dir / "test2026.dem", 24, true);
         if (std::filesystem::exists(dir / "test24.dem")) test_fuzz_demo(dir / "test24.dem");
+        if (std::filesystem::exists(dir / "test24.dem") && std::filesystem::exists(dir / "test20c.dem")) test_demo_library(dir);
     }
     std::printf("\nПройдено: %d, провалено: %d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

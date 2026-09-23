@@ -755,6 +755,10 @@ void App::draw_settings_tabs() {
         draw_tab_queue();
         ImGui::EndTabItem();
     }
+    if (ImGui::BeginTabItem("Демо", nullptr, flags(6))) {
+        draw_tab_library();
+        ImGui::EndTabItem();
+    }
     ImGui::EndTabBar();
     forced_tab = -1;
     // GMDR_TEST_SCROLL=0..1 — прокрутити панель налаштувань (частка від кінця) у перших кадрах
