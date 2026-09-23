@@ -499,7 +499,9 @@ def main():
              'pe_bits': pe_bits,
              'chat': [{'tick': 100, 'who': 'Friend', 'text': 'Привіт усім'}, {'tick': 200, 'who': 'Recorder Юзер', 'text': 'gg 100%'},
                       {'tick': 650, 'who': 'LateJoiner', 'text': 'bye'}]}
-    json.dump(truth, open(truth_path, 'w'), ensure_ascii=False, indent=1)
+    # Явно UTF-8: на Windows типове кодування (cp1252 у CI) не вміщує кирилицю з імен і чату
+    with open(truth_path, 'w', encoding='utf-8') as f:
+        json.dump(truth, f, ensure_ascii=False, indent=1)
     print(f'OK: {out_path} ({len(header) + len(demo)} байт, {total_ticks} тіків)')
 
 
