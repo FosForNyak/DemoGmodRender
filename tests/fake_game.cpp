@@ -11,6 +11,10 @@
 //     сам "натискає" F9/F6/F11 (позначки в marks_<id>.txt) і закривається, як гравець
 //   * черга (wait_next): після запису не закривається, а чекає наступний job.txt
 //     (стан "waiting"); кожен запуск дописується в garrysmod/fake_launches.txt
+//   * FAKE_CRASH_AT=N / FAKE_HANG_AT=N — на N-му кадрі запису "впасти" (кадр недописаний)
+//     чи "зависнути"; лише один раз (далі є garrysmod/fake_crashed.txt), з FAKE_CRASH_REPEAT=1 — щоразу
+//   * FAKE_DEMO_CLOCK=1 — спалахи й біпи на цілих секундах ЧАСУ ДЕМО, а не від початку
+//     запису (так видно, що після перезапуску гри відео продовжилось без зсуву)
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
@@ -211,6 +215,14 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
     int last_tick = start_tick;
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<float> abuf;
+    const auto env_int = [](const char* n) {
+        const char* e = std::getenv(n);
+        return e ? std::atoi(e) : -1;
+    };
+    const int crash_at = env_int("FAKE_CRASH_AT"), hang_at = env_int("FAKE_HANG_AT");
+    const fs::path crashed_mark = gm / "fake_crashed.txt";
+    const bool may_fail = (crash_at >= 0 || hang_at >= 0) && (std::getenv("FAKE_CRASH_REPEAT") || !fs::exists(crashed_mark));
+    const double clock0 = std::getenv("FAKE_DEMO_CLOCK") ? start_tick * ti : 0.0;   // час демо першого кадру
     con << "FakeGMod: запис, host_framerate " << rate << "\n";
     for (;;) {
         const double t = frame / rate;                           // час від початку запису
@@ -218,7 +230,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         if (tick >= end_tick || fs::exists(cancel)) break;
         last_tick = tick;
         // ---- Кадр ----
-        const bool flash = std::floor(t) != std::floor((frame - 1) / rate) && frame > 0;
+        const bool flash = std::floor(clock0 + t) != std::floor(clock0 + (frame - 1) / rate) && (frame > 0 || clock0 > 0);
         const int shift = static_cast<int>(t * 200) % w;
         for (int y = 0; y < h; ++y) {
             uint8_t* row = img.row(0, y);
@@ -232,6 +244,21 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         }
         const std::string name = std::format("{}{:04d}.{}", movie_path.string(), frame, jpeg ? "jpg" : "tga");
         auto bytes = jpeg ? encode_jpeg(img, 90) : frames::encode_tga(img, true, false);
+        if (may_fail && (frame == crash_at || frame == hang_at)) {
+            std::ofstream(crashed_mark) << frame;
+            if (frame == crash_at) {
+                // Недописаний кадр і WAV без закритого заголовка — як після справжнього збою
+                std::ofstream f(name, std::ios::binary);
+                f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size() / 3));
+                f.close();
+                con << "FakeGMod: імітую збій на кадрі " << frame << "\n";
+                con.flush();
+                std::_Exit(7);
+            }
+            con << "FakeGMod: імітую зависання на кадрі " << frame << "\n";
+            con.flush();
+            for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
         {
             std::ofstream f(name, std::ios::binary);
             f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -242,7 +269,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         audio_carry -= n;
         abuf.assign(static_cast<size_t>(n) * 2, 0.0f);
         for (int i = 0; i < n; ++i) {
-            const double ts = static_cast<double>(audio_pos + i) / 44100.0;
+            const double ts = clock0 + static_cast<double>(audio_pos + i) / 44100.0;
             float v = 0.05f * static_cast<float>(std::sin(2 * 3.14159265358979323846 * 220 * ts));   // тихий фон
             if (ts >= 1.0 && std::fmod(ts, 1.0) < 0.05) v = 0.5f * static_cast<float>(std::sin(2 * 3.14159265358979323846 * 1000 * ts));
             abuf[static_cast<size_t>(i) * 2] = v;

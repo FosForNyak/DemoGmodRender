@@ -120,6 +120,23 @@ jobs:
           $st
           if (@($st | Where-Object { $_ -like "audio,*" }).Count -ne 0) { throw "×2 без звуку: є звукова доріжка" }
           if ([math]::Abs([double](($st | Where-Object { $_ -like "video,*" }) -split ",")[1] - 2) -gt 0.1) { throw "×2: очікувалось 2 с відео" }
+          # Продовження після збою: гра "падає" на 60-му кадрі і "зависає" на 45-му (сторож — 3 с);
+          # програма перезапускає її з того самого місця, і відео виходить цілим
+          $env:FAKE_DEMO_CLOCK = "1"
+          $env:GMDR_TEST_WATCHDOG = "3"
+          foreach ($m in @("CRASH", "HANG")) {
+            Remove-Item "$fake\garrysmod\fake_crashed.txt" -ErrorAction SilentlyContinue
+            Set-Item "Env:FAKE_$($m)_AT" $(if ($m -eq "CRASH") { "60" } else { "45" })
+            $out = "$PWD\build\out_$m.mp4"
+            $log = & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+                --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 7 2>&1 | Out-String
+            $rc = $LASTEXITCODE
+            Remove-Item "Env:FAKE_$($m)_AT"
+            if ($rc -ne 0 -or $log -notmatch "знову записує") { $log; throw "продовження після збою ($m) не спрацювало" }
+            $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $out)
+            if ([math]::Abs($d - 6) -gt 0.1) { throw "після збою ($m): очікувалось 6 с відео, а не $d" }
+          }
+          Remove-Item Env:FAKE_DEMO_CLOCK, Env:GMDR_TEST_WATCHDOG
           # Черга: три фрагменти, гра запускається один раз
           Remove-Item "$fake\garrysmod\fake_launches.txt" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force build\queue | Out-Null

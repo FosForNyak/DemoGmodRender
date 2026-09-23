@@ -55,6 +55,10 @@ public:
     void set_finished() override;
     bool has_file() const { return opened_; }
     int  source_rate() const { return reader_.sample_rate(); }
+    // Гру перезапущено після збою: далі звук — з нового WAV, чий перший семпл припадає на
+    // позицію source_pos (кадри 48 кГц у часі джерела, від першого кадру відео). Недописаний
+    // хвіст старого файлу відкидається, пропуск між ними — тиша.
+    void start_segment(std::filesystem::path wav_path, int64_t source_pos);
 
 private:
     void pull();
@@ -64,6 +68,7 @@ private:
     bool                  finished_ = false;
     bool                  opened_ = false;
     bool                  drained_ = false;
+    bool                  exact_path_ = false;  // не шукати інший .wav (після перезапуску гри)
     int64_t               offset_ = 0;          // у кадрах 48 кГц
     WavReader             reader_;
     media::SwrPtr         swr_;

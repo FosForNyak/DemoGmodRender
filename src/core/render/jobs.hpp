@@ -7,6 +7,8 @@
 
 #include <atomic>
 #include <filesystem>
+#include <format>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,6 +54,7 @@ struct Progress {
     bool        game_running = false;
     bool        game_paused = false;
     bool        disk_low = false;      // гру призупинено: закінчується місце на диску
+    int         game_restarts = 0;     // скільки разів гру перезапущено після збою
     bool        game_hidden = false;   // вікно гри за межами екрана / позаду інших
     std::string driver_state;
     std::string video_desc, audio_desc;
@@ -175,12 +178,16 @@ protected:
 
 private:
     bool prepare(std::string* error);
+    // Завдання для драйвера: демо з тіку start_tick (після збою гри — з місця, де урвалися кадри).
+    bool write_game_job(int32_t start_tick, std::string* error);
     // game_closing: гру щойно закрито — дочекатися, поки зникнуть і її допоміжні процеси
     // (браузер CEF у GMod — теж gmod.exe), інакше config.cfg не відновився б.
     void cleanup(bool game_closing = true);
     void set_check(int index, CheckItem::State state, const std::string& detail = {});
-    // Унікальний префікс файлів кадрів: gmdr_<id>_0000.tga ...
-    std::string movie_prefix() const { return "gmdr_" + id_ + "_"; }
+    // Унікальний префікс файлів кадрів: gmdr_<id>_0000.tga ...; після перезапуску гри —
+    // gmdr_<id>_r1_0000.tga (нова нумерація, інакше гра перезаписала б старі файли)
+    std::string base_prefix() const { return "gmdr_" + id_ + "_"; }
+    std::string movie_prefix() const { return segment_ > 0 ? std::format("{}r{}_", base_prefix(), segment_) : base_prefix(); }
 
     RenderSettings                                  s_;
     std::shared_ptr<const demo::DemoAnalysis>       analysis_;
@@ -192,6 +199,9 @@ private:
     std::filesystem::path                           rtx_backup_;
     std::filesystem::path                           stray_dir_;   // куди гра насправді писала кадри (якщо не в tmp)
     bool                                            job_written_ = false;
+    std::string                                     demo_for_game_;      // шлях демо для playdemo
+    std::map<std::string, std::string>              config_originals_;   // значення з config.cfg до рендеру
+    int                                             segment_ = 0;        // скільки разів гру перезапущено після збою
     bool                                            test_run_ = false;
     std::atomic<bool>                               show_game_{false};
     std::shared_ptr<GameHandoff>                    handoff_;

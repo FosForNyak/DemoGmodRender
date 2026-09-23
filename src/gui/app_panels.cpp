@@ -439,6 +439,13 @@ void App::draw_progress() {
         ImGui::SameLine();
         ImGui::TextColored(kColWarn, "  [гра на паузі — кодер наздоганяє]");
     }
+    if (p.game_restarts > 0) {
+        ImGui::SameLine();
+        ImGui::TextColored(kColWarn, "  [гру перезапущено після збою: %d]", p.game_restarts);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Гра впала чи зависла, і програма перезапустила її з того самого місця демо.\n"
+                              "Відео дописується в той самий файл без шва — деталі в журналі.");
+    }
     if (!p.video_desc.empty()) ImGui::TextColored(kColDim, "%s  •  %s", p.video_desc.c_str(), p.audio_desc.c_str());
     // Час етапів конвеєра — щоб було видно, що гальмує
     if (p.frames > 0) {

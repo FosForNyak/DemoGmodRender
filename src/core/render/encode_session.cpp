@@ -513,6 +513,11 @@ void EncodeSession::game_audio_finished() {
     if (game_input_) game_input_->set_finished();
 }
 
+void EncodeSession::game_audio_new_segment(const std::filesystem::path& wav, double demo_seconds) {
+    std::lock_guard lock(audio_mutex_);
+    if (game_input_) game_input_->start_segment(wav, std::llround(std::max(0.0, demo_seconds) * kMixRate));
+}
+
 bool EncodeSession::finish(std::string* error) {
     if (!started_ || finished_) return true;
     // Незавершена група motion blur

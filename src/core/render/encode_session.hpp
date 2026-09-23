@@ -119,6 +119,9 @@ public:
     bool pump_audio(std::string* error);
     // Позначити, що гра більше не пише звук (WAV завершено).
     void game_audio_finished();
+    // Гру перезапущено після збою: звук гри далі — з wav, що починається на demo_seconds
+    // (секунди часу демо від першого кадру відео).
+    void game_audio_new_segment(const std::filesystem::path& wav, double demo_seconds);
 
     bool finish(std::string* error);
     void abort();

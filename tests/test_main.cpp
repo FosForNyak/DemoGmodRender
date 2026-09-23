@@ -1260,6 +1260,60 @@ static double rms_db(const std::vector<float>& x, double from_s, double to_s, si
     return 10.0 * std::log10(s / std::max<size_t>(1, b - a) + 1e-20);
 }
 
+// Звук гри після перезапуску гри: недописаний хвіст старого WAV відкидається, новий файл —
+// рівно з потрібної позиції, пропуск між ними — тиша; старе ще можна дозміксувати
+static void test_game_audio_segments() {
+    std::printf("[game audio segments]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_segments";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    auto write_wav = [&](const fs::path& p, double seconds, float value) {
+        audio::WavWriter w;
+        w.open(p, 48000, 2, audio::WavWriter::Format::Float32);
+        std::vector<float> v(static_cast<size_t>(seconds * 48000) * 2, value);
+        w.write(v.data(), v.size() / 2);
+        w.close();
+    };
+    write_wav(dir / "a.wav", 1.0, 0.25f);   // гра встигла записати 1 с і впала
+    write_wav(dir / "b.wav", 1.0, 0.5f);    // перезапущена гра
+    std::vector<float> out(200);
+    auto at = [&](audio::GameAudioInput& in, int64_t pos) {
+        std::fill(out.begin(), out.end(), 0.0f);
+        in.mix(pos, out.data(), 100, 1.0f);
+        return static_cast<double>(out[0]);
+    };
+    {
+        audio::GameAudioInput in(dir / "a.wav", true, 0.0);
+        CHECK(in.available() == 48000);
+        in.start_segment(dir / "b.wav", 38400);   // новий запуск — з 0.8 с: хвіст 0.2 с відкинуто
+        CHECK(in.available() == 38400 + 48000);
+        CHECK_NEAR(at(in, 1000), 0.25, 1e-6);
+        CHECK_NEAR(at(in, 38300), 0.25, 1e-6);
+        CHECK_NEAR(at(in, 38400), 0.5, 1e-6);
+        CHECK_NEAR(at(in, 38400 + 47000), 0.5, 1e-6);
+    }
+    {
+        audio::GameAudioInput in(dir / "a.wav", true, 0.0);
+        in.available();
+        in.start_segment(dir / "b.wav", 60000);   // новий запуск пізніше, ніж скінчився старий
+        CHECK(in.available() == 60000 + 48000);
+        CHECK_NEAR(at(in, 50000), 0.0, 1e-9);
+        CHECK_NEAR(at(in, 60000), 0.5, 1e-6);
+    }
+    {
+        // Нового WAV ще немає: доступне лишається зі старого (і його можна дозміксувати), а чужий
+        // .wav у тій самій папці не підхоплюється
+        audio::GameAudioInput in(dir / "a.wav", true, 0.0);
+        in.available();
+        in.start_segment(dir / "c.wav", 48000);
+        CHECK(in.available() == 48000);
+        CHECK_NEAR(at(in, 40000), 0.25, 1e-6);
+    }
+    fs::remove_all(dir, ec);
+}
+
 // Уповільнення/прискорення: ланцюжки atempo, тривалість і висота тону, субтитри в часі відео
 static void test_speed() {
     std::printf("[speed]\n");
@@ -1568,6 +1622,7 @@ int main(int argc, char** argv) {
     test_chat_and_markers();
     test_audio_filters();
     test_speed();
+    test_game_audio_segments();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

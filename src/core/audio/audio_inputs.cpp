@@ -21,6 +21,7 @@ void GameAudioInput::pull() {
     if (!opened_) {
         std::error_code ec;
         if (!std::filesystem::exists(path_, ec)) {
+            if (exact_path_) return;
             // Запасний варіант: будь-який .wav у тій самій папці (якщо гра назвала файл інакше)
             bool found = false;
             for (std::filesystem::directory_iterator it(path_.parent_path(), ec), end; !ec && it != end; it.increment(ec)) {
@@ -86,13 +87,13 @@ int64_t GameAudioInput::available() {
         return INT64_MAX;   // після кінця — тиша
     }
     pull();
-    if (!opened_) return 0;
+    // Після перезапуску гри новий WAV ще не з'явився — доступне те, що лишилось від старого
+    if (!opened_) return exact_path_ ? std::max<int64_t>(0, produced_ + offset_) : 0;
     // Позиція у часі відео = час джерела + offset
     return produced_ + offset_ < 0 ? 0 : produced_ + offset_;
 }
 
 void GameAudioInput::mix(int64_t pos, float* out, size_t frames, float gain) {
-    if (!opened_) return;
     const int64_t buf_frames = static_cast<int64_t>(buf_.size() / 2);
     for (size_t i = 0; i < frames; ++i) {
         const int64_t src = pos + static_cast<int64_t>(i) - offset_ - buf_start_;
@@ -115,6 +116,24 @@ void GameAudioInput::discard_before(int64_t pos) {
 void GameAudioInput::set_finished() {
     finished_ = true;
     pull();
+}
+
+void GameAudioInput::start_segment(std::filesystem::path wav_path, int64_t source_pos) {
+    if (opened_) pull();   // дочитати все, що встигло записатися до збою
+    const int64_t had = produced_;
+    if (source_pos < buf_start_) {
+        buf_.clear();
+        buf_start_ = source_pos;
+    } else {
+        buf_.resize(static_cast<size_t>(source_pos - buf_start_) * 2, 0.0f);   // обрізати хвіст або доповнити тишею
+    }
+    produced_ = source_pos;
+    log_debug("Звук гри: новий файл з позиції {:.3f} с ({} {:.0f} мс)", source_pos / static_cast<double>(kMixRate),
+              had > source_pos ? "відкинуто" : "тиші", std::abs(had - source_pos) * 1000.0 / kMixRate);
+    path_ = std::move(wav_path);
+    swr_.reset();
+    opened_ = drained_ = finished_ = false;
+    exact_path_ = true;
 }
 
 // ============================== VoiceInput ======================================
