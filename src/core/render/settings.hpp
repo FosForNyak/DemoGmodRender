@@ -32,6 +32,7 @@ struct RenderSettings {
     bool        mute_engine_voice = true; // вимкнути голос у грі (його додамо самі, чистіше)
     double      menu_delay = 3.0;
     bool        high_priority = true;
+    int         parallel_games = 1;       // скільки копій гри рендерять фрагмент частинами одночасно (-multirun)
     std::string game_window = "offscreen";  // де вікно гри: offscreen (за межами екрана) / behind (позаду інших) / normal
     bool        mute_game_sound = true;   // вимкнути звук GMod у мікшері Windows на час рендеру (на відео не впливає)
     bool        rtx = false;              // копія GMod RTX від RTXLauncher (свої параметри запуску, довший розгін)

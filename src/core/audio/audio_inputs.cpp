@@ -55,6 +55,7 @@ void GameAudioInput::pull() {
     if (finished_) reader_.set_live(false);
     // Читаємо все, що вже записано
     for (;;) {
+        if (read_ahead_ > 0 && !finished_ && produced_ - mix_hi_ > read_ahead_) break;
         const size_t chunk = 8192;
         raw_.resize(chunk * static_cast<size_t>(reader_.channels()));
         const size_t got = reader_.read(raw_.data(), chunk);
@@ -95,6 +96,7 @@ int64_t GameAudioInput::available() {
 }
 
 void GameAudioInput::mix(int64_t pos, float* out, size_t frames, float gain) {
+    mix_hi_ = std::max(mix_hi_, pos + static_cast<int64_t>(frames) - offset_);
     const int64_t buf_frames = static_cast<int64_t>(buf_.size() / 2);
     for (size_t i = 0; i < frames; ++i) {
         const int64_t src = pos + static_cast<int64_t>(i) - offset_ - buf_start_;
@@ -105,6 +107,7 @@ void GameAudioInput::mix(int64_t pos, float* out, size_t frames, float gain) {
 }
 
 void GameAudioInput::discard_before(int64_t pos) {
+    mix_hi_ = std::max(mix_hi_, pos - offset_);
     const int64_t src = pos - offset_ - buf_start_;
     const int64_t buf_frames = static_cast<int64_t>(buf_.size() / 2);
     if (src <= 48000 || buf_frames == 0) return;   // тримаємо невеликий запас

@@ -31,6 +31,10 @@ public:
     bool supports_codec(const std::string& encoder_name) const;
 
     int  add_stream(AVCodecContext* enc, const std::string& title, const std::string& language = {});
+    // Потік для вже закодованих пакетів (склеювання частин без перекодування). enc_time_base —
+    // у якому часі будуть pts пакетів для write_packet.
+    int  add_stream_copy(const AVCodecParameters* par, AVRational enc_time_base, AVRational framerate,
+                         const std::string& title);
     // fragmented: MP4/MOV пишеться фрагментами — файл відкривається, навіть якщо
     // запис обірвався (збій гри, вимкнення ПК). MKV такий і так.
     bool write_header(bool faststart, bool fragmented, std::string* error);

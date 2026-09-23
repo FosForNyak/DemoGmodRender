@@ -172,8 +172,16 @@ std::vector<DriverMark> read_marks(const GModInstall& g, const std::string& id) 
     return out;
 }
 
+bool job_file_pending(const GModInstall& g, const std::string& id) {
+    auto text = read_file_text(data_dir(g) / "job.txt");
+    if (!text) return false;
+    auto j = json::parse(*text);
+    return !j || !j->is_object() || (*j)["id"].as_string() == id;   // незрозумілий файл — вважаємо своїм
+}
+
 void remove_job_files(const GModInstall& g, const std::string& id) {
-    remove_file_quiet(data_dir(g) / "job.txt");
+    // job.txt — лише якщо це завдання саме цього рендеру (паралельно може чекати завдання іншої копії гри)
+    if (job_file_pending(g, id)) remove_file_quiet(data_dir(g) / "job.txt");
     remove_file_quiet(data_dir(g) / ("marks_" + id + ".txt"));
     remove_file_quiet(data_dir(g) / ("status_" + id + ".txt"));
     remove_file_quiet(data_dir(g) / ("cancel_" + id + ".txt"));

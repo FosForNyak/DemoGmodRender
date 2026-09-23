@@ -29,6 +29,9 @@ LogLevel min_log_level();
 
 void log_message(LogLevel level, const std::string& text);
 
+// Префікс для всіх повідомлень цього потоку (кілька копій гри в паралельному рендері).
+void set_thread_log_prefix(std::string prefix);
+
 const char* log_level_name(LogLevel level);
 
 template <class... Args>

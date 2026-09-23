@@ -60,6 +60,9 @@ public:
     // позицію source_pos (кадри 48 кГц у часі джерела, від першого кадру відео). Недописаний
     // хвіст старого файлу відкидається, пропуск між ними — тиша.
     void start_segment(std::filesystem::path wav_path, int64_t source_pos);
+    // Читати не далі ніж на seconds наперед від того, що вже змішано (для готових великих
+    // файлів — щоб не тримати в пам'яті весь звук; 0 — без обмеження).
+    void set_read_ahead(double seconds) { read_ahead_ = static_cast<int64_t>(seconds * media::kMixRate); }
 
 private:
     void pull();
@@ -76,6 +79,8 @@ private:
     std::vector<float>    buf_;                 // стерео, починається з buf_start_
     int64_t               buf_start_ = 0;       // позиція (у "часі джерела") першого кадру буфера
     int64_t               produced_ = 0;        // скільки кадрів 48 кГц вироблено всього
+    int64_t               read_ahead_ = 0;      // 0 — читати все, що є
+    int64_t               mix_hi_ = 0;          // до якої позиції джерела вже змішано
     std::vector<float>    raw_;
 };
 

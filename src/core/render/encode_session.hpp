@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -38,6 +39,7 @@ struct ExtraOutput {
     std::string                 container;     // порожньо — за розширенням
     media::VideoEncoderSettings video;
     media::AudioEncoderSettings audio;
+    std::vector<std::string>    video_parts;   // склеювання: готові частини цієї версії (див. EncodeSettings)
 };
 
 struct EncodeSettings {
@@ -53,6 +55,10 @@ struct EncodeSettings {
     bool                        crash_safe = false;        // MP4/MOV фрагментами (відкривається навіть після збою)
     std::vector<ExtraOutput>    extras;                    // додаткові версії
     std::string                 stems_dir;                 // пакет для монтажу: окремі WAV кожного джерела (UTF-8)
+    // Склеювання паралельного рендеру: відео — готові частини (той самий кодек і контейнер),
+    // їх пакети копіюються підряд без перекодування (copy_video), а звук міксується заново
+    // на всю довжину. Порожньо — звичайне кодування кадрів.
+    std::vector<std::string>    video_parts;
 };
 
 // Які джерела звуку змішувати
@@ -75,6 +81,11 @@ struct AudioSourcesSpec {
     double                                  loudness_target = 0;   // LUFS загального міксу; 0 — не змінювати
     double                                  speed = 1.0;           // швидкість відео (0.5 — уповільнення); звук — atempo
     bool                                    speed_mute = false;    // при зміні швидкості — без звуку
+    // Звук гри з кількох WAV (частини паралельного рендеру, перезапуски гри): файл і секунда часу
+    // демо від першого кадру відео, на яку припадає його перший семпл. Перший — одразу, решта —
+    // коли до них дійде відео (copy_video). Порожньо — лише game_wav.
+    std::vector<std::pair<std::filesystem::path, double>> game_segments;
+    double                                  game_read_ahead = 0;   // с; готові файли — не читати все наперед
 };
 
 // Маленька копія поточного кадру для живого прев'ю у вікні програми.
@@ -126,6 +137,11 @@ public:
     bool finish(std::string* error);
     void abort();
 
+    // Склеювання (EncodeSettings::video_parts): скопіювати пакети відео всіх частин підряд, звук —
+    // паралельно з відео. progress(частка 0..1) — час від часу; cancel — перервати.
+    bool copy_video(const std::atomic<bool>* cancel, const std::function<void(double)>& progress, std::string* error);
+    bool copy_mode() const { return !s_.video_parts.empty(); }
+
     int64_t     subframes_in() const { return subframes_in_; }
     int64_t     frames_encoded() const { return frames_out_.load(); }
     double      video_seconds() const;
@@ -158,6 +174,7 @@ private:
         bool                                 finished = false;
     };
     bool open_extra(Extra& e, bool with_audio, std::string* error);
+    void start_due_segments();   // під audio_mutex_
     void fail_extra(Extra& e, const std::string& error);
 
     bool encode_video_frame(const frames::Image& img, std::string* error);
@@ -180,6 +197,8 @@ private:
     std::unique_ptr<frames::MotionBlender>    blender_;
     std::unique_ptr<audio::AudioMixer>        mixer_;
     audio::GameAudioInput*                    game_input_ = nullptr;
+    std::vector<std::pair<std::filesystem::path, double>> segments_;   // ще не розпочаті WAV гри
+    double                                    speed_ = 1.0;
     std::vector<std::unique_ptr<media::AudioEncoder>> audio_encoders_;
     std::vector<int>                          audio_streams_;
     std::unique_ptr<audio::WavWriter>         side_wav_;   // для послідовності зображень

@@ -387,6 +387,58 @@ void finalize_output(const RenderSettings& s, bool fragmented, int64_t frames, d
 
 } // namespace
 
+namespace {
+// Коротша частина не варта ще одного запуску гри (для автотестів: GMDR_TEST_MIN_PART=секунди)
+double min_part_seconds() {
+    const char* e = std::getenv("GMDR_TEST_MIN_PART");
+    return e ? std::max(0.5, std::atof(e)) : 20.0;
+}
+
+// Паралельний рендер: частини склеюються пакетами, тож контейнер має зберігати їх як є
+bool parallel_container_ok(const RenderSettings& s) {
+    if (s.output_path.find('%') != std::string::npos) return false;   // послідовність зображень
+    std::string c = to_lower(s.container);
+    if (c.empty()) {
+        c = to_lower(path_to_utf8(path_from_utf8(s.output_path).extension()));
+        if (!c.empty() && c[0] == '.') c = c.substr(1);
+    }
+    return c == "mp4" || c == "mov" || c == "m4v" || c == "mkv" || c == "matroska" || c == "webm";
+}
+
+// Проєкт для Premiere / DaVinci Resolve: відео, окремі WAV і позначки на одній шкалі
+void write_edit_project(const RenderSettings& s, const EncodeSettings& es, int64_t frames,
+                        const std::vector<EncodeSession::StemFile>& stems, const std::vector<Chapter>& markers) {
+    EditProject pr;
+    const fs::path out = fs::absolute(path_from_utf8(s.output_path));
+    pr.name = path_to_utf8(out.stem());
+    pr.video_path = path_to_utf8(out);
+    pr.width = es.video.width > 0 ? es.video.width : s.width;
+    pr.height = es.video.height > 0 ? es.video.height : s.height;
+    pr.fps_num = es.video.fps.num;
+    pr.fps_den = es.video.fps.den;
+    pr.frames = frames;
+    pr.video_has_audio = es.audio_enabled;
+    for (const auto& st : stems) pr.stems.push_back({st.title, path_to_utf8(fs::absolute(path_from_utf8(st.path)))});
+    pr.markers = markers;
+    const fs::path xml = path_from_utf8(es.stems_dir) / path_from_utf8(pr.name + ".xml");
+    std::string werr;
+    if (write_file_text(xml, make_fcp7_xml(pr), &werr))
+        log_info("{}", trf("Пакет для монтажу: {} (відкрийте в Premiere Pro або DaVinci Resolve: File → Import)", path_to_utf8(xml)));
+    else
+        log_warn("{}", trf("Не вдалося записати проєкт для монтажу: {}", werr));
+}
+
+// Перемістити файл (між дисками — копією)
+bool move_file(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    fs::rename(from, to, ec);
+    if (!ec) return true;
+    if (!copy_file_overwrite(from, to, nullptr)) return false;
+    fs::remove(from, ec);
+    return true;
+}
+} // namespace
+
 int64_t bitrate_for_target_size(double target_mb, double seconds, int64_t audio_bitrate) {
     if (target_mb <= 0 || seconds <= 0) return 0;
     // 4% запасу на контейнер і коливання бітрейту
@@ -538,6 +590,7 @@ void recover_leftovers(const game::GModInstall& g) {
         fs::remove_all(it->path(), ec);
     }
     fs::remove(tmp, ec);
+    fs::remove(g.garrysmod / "data" / "gmdr" / "job.txt", ec);   // гра не запущена — нічиє завдання вже не потрібне
 }
 
 // =============================== AnalyzeJob =======================================
@@ -918,7 +971,8 @@ std::optional<game::GModInstall> resolve_game(RenderSettings& s, bool need_drive
 } // namespace
 
 bool RenderJob::prepare(std::string* error) {
-    gmod_ = resolve_game(s_, !s_.manual_mode, error);
+    // Копія гри паралельного рендеру: гру знайшов і драйвер встановив основний рендер
+    gmod_ = part_ ? part_->gmod : resolve_game(s_, !s_.manual_mode, error);
     if (!gmod_) return false;
 
     id_ = make_unique_id();
@@ -957,9 +1011,13 @@ bool RenderJob::prepare(std::string* error) {
     if (free_space > 0 && free_space < (3ull << 30))
         log_warn("{}", trf("На диску з грою мало місця — зменште «Черга кадрів на диску» або звільніть місце"));
 
-    const auto demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, error);
-    if (!demo_for_game) return false;
-    demo_for_game_ = *demo_for_game;
+    if (part_ && !part_->demo_for_game.empty()) {
+        demo_for_game_ = part_->demo_for_game;
+    } else {
+        const auto demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, error);
+        if (!demo_for_game) return false;
+        demo_for_game_ = *demo_for_game;
+    }
 
     // Налаштування, які ми змінимо, — щоб потім повернути
     const std::vector<std::string> touched = {"host_framerate", "snd_fixed_rate", "fps_max", "mat_vsync",
@@ -967,6 +1025,8 @@ bool RenderJob::prepare(std::string* error) {
                                               "cl_showfps", "voice_scale", "cl_drawhud",
                                               "r_drawviewmodel", "sv_cheats"};
     config_originals_ = game::read_config_values(*gmod_, touched);
+    // Копія гри: config.cfg зберіг основний рендер, а завдання пишеться при запуску (по черзі з іншими копіями)
+    if (part_) return true;
     config_backup_ = backup_dir / "config.cfg.bak";
     if (!fs::exists(config_backup_, ec)) game::backup_config(*gmod_, config_backup_);
     return write_game_job(std::max(0, s_.start_tick), error);
@@ -1020,8 +1080,11 @@ void RenderJob::cleanup(bool game_closing) {
             if (starts_with_i(path_to_utf8(it->path().filename()), base_prefix())) fs::remove(it->path(), ec);
     }
     const std::vector<std::string> game_names = {"gmod.exe", "hl2.exe", "gmod", "hl2_linux"};
-    const bool game_running = game_closing ? !game::GameProcess::wait_all_exited(game_names, 15000)
-                                           : !game::GameProcess::find_by_name(game_names).empty();
+    // Копія гри паралельного рендеру свою гру вже дочекалась, а інші копії можуть ще працювати;
+    // config.cfg поверне основний рендер, коли закриються всі
+    const bool game_running = part_          ? false
+                              : game_closing ? !game::GameProcess::wait_all_exited(game_names, 15000)
+                                             : !game::GameProcess::find_by_name(game_names).empty();
     std::error_code ec;
     if (!game_running) {
         if (!config_backup_.empty() && fs::exists(config_backup_, ec)) {
@@ -1044,8 +1107,22 @@ void RenderJob::cleanup(bool game_closing) {
     }
 }
 
+// Що run() уже підготував (аналіз голосу, розпізнане мовлення, налаштування кодування) для
+// паралельного рендеру
+struct RenderJob::ParallelInput {
+    std::vector<PartPlan>                   parts;
+    std::vector<const voice::SpeakerTrack*> speakers;
+    std::vector<audio::VoiceCleanup>        voice_fx;
+    const speech::Transcript*               transcript = nullptr;
+    EncodeSettings                          es;
+    int32_t                                 range_start = 0, range_end = 0;
+    double                                  expected_seconds = 0;
+    double                                  vti = 0;   // тривалість тіку у відео
+};
+
 void RenderJob::run() {
     KeepAwake keep_awake;   // ПК не засне посеред рендеру
+    if (part_) set_thread_log_prefix(trf("[частина {}] ", part_->plan.index + 1));
     std::string err;
     // ---- 1. Аналіз ----
     if (!analysis_) {
@@ -1066,7 +1143,7 @@ void RenderJob::run() {
     std::vector<const voice::SpeakerTrack*> speakers;
     if (voices_) speakers = select_speakers(s_, *voices_);
     std::vector<audio::VoiceCleanup> voice_fx;
-    if (!speakers.empty() && needs_voice_cleanup(s_)) {
+    if (!part_ && !speakers.empty() && needs_voice_cleanup(s_)) {   // копії гри звук не міксують
         set_stage(tr("Аналіз голосу гравців"));
         voice_fx = voice_cleanup_for(s_, speakers, cancel_);
     }
@@ -1114,15 +1191,27 @@ void RenderJob::run() {
     int rh = s_.render_height > 0 ? s_.render_height : s_.height;
     const int32_t range_start = std::max(0, s_.start_tick);
     const int32_t range_end = s_.end_tick > 0 ? std::min(s_.end_tick, A.last_tick) : A.last_tick;
-    const double expected_seconds = std::max(0, range_end - range_start) * vti;
+    const double expected_seconds = part_ ? part_->plan.frames * es.video.fps.den / static_cast<double>(es.video.fps.num)
+                                          : std::max(0, range_end - range_start) * vti;
     if (s_.target_size_mb > 0 && expected_seconds > 0) {
-        const double size_seconds = test_run_ ? full_seconds : expected_seconds;
+        const double size_seconds = part_ ? part_->size_seconds : test_run_ ? full_seconds : expected_seconds;
         es.video.bitrate = bitrate_for_target_size(s_.target_size_mb, size_seconds, s_.audio ? es.audio.bitrate : 0);
         log_info("{}", trf("Цільовий розмір {:.0f} МБ на {}: бітрейт відео {:.2f} Мбіт/с", s_.target_size_mb,
                  format_duration(size_seconds), es.video.bitrate / 1e6));
     }
     // Додаткові версії (Discord, вертикальна...) — у тестовому прогоні не потрібні
-    if (!test_run_) es.extras = make_extra_outputs(s_.extra_versions, es, expected_seconds);
+    if (!test_run_) es.extras = make_extra_outputs(s_.extra_versions, es, part_ ? part_->size_seconds : expected_seconds);
+    if (part_) {
+        // Копія гри пише лише відео своєї частини (і частини додаткових версій); звук, субтитри
+        // й решта — після склеювання
+        es.audio_enabled = false;
+        es.faststart = false;
+        for (size_t i = 0; i < es.extras.size(); ++i) {
+            const std::string ext = path_to_utf8(path_from_utf8(es.extras[i].output_path).extension());
+            es.extras[i].output_path =
+                path_to_utf8(part_->dir / path_from_utf8(std::format("part{}_v{}{}", part_->plan.index + 1, i + 1, ext)));
+        }
+    }
     // Пакет для монтажу: окремі WAV у теці "назва_монтаж" поруч із відео (проєкт XML — після рендеру)
     if (s_.edit_package && !test_run_ && s_.output_path.find('%') == std::string::npos) {
         const fs::path out = path_from_utf8(s_.output_path);
@@ -1149,6 +1238,36 @@ void RenderJob::run() {
             return;
         }
         if (!transcript) log_warn("{}", trf("Мовлення не розпізнано ({}) — у субтитрах будуть лише імена", err));
+    }
+
+    // ---- Паралельний рендер кількома копіями гри ----
+    if (!part_ && s_.parallel_games > 1) {
+        std::string why;
+        if (test_run_) why = tr("тестовий прогін");
+        else if (handoff_) why = tr("пункт черги");
+        else if (s_.manual_mode) why = tr("ручний режим");
+        else if (s_.rtx) why = tr("RTX");
+        else if (!parallel_container_ok(s_)) why = tr("формат файлу — лише MP4, MOV, MKV або WebM");
+        ParallelInput in;
+        if (why.empty()) {
+            const double fps_v = es.video.fps.num / static_cast<double>(es.video.fps.den);
+            in.parts = plan_parts(range_start, range_end, static_cast<double>(A.tick_interval), vspeed / fps_v,
+                                  std::min(s_.parallel_games, 4), std::llround(fps_v * min_part_seconds()));
+            if (in.parts.size() < 2) why = trf("фрагмент коротший за {:.0f} с", 2 * min_part_seconds());
+        }
+        if (why.empty()) {
+            in.speakers = speakers;
+            in.voice_fx = voice_fx;
+            in.transcript = transcript ? &*transcript : nullptr;
+            in.es = es;
+            in.range_start = range_start;
+            in.range_end = range_end;
+            in.expected_seconds = expected_seconds;
+            in.vti = vti;
+            run_parallel(in);
+            return;
+        }
+        if (!test_run_) log_info("{}", trf("Паралельний рендер не використовується ({}) — рендерить одна копія гри", why));
     }
 
     // ---- 2. Підготовка гри ----
@@ -1190,6 +1309,25 @@ void RenderJob::run() {
     const std::string launch_sig = game::format_command_line(exe, args) + " | " + s_.extra_launch_args + " | " + s_.game_window;
     args.insert(args.end(), {"-condebug", "+exec", "gmdr/job_" + id_ + ".cfg"});
     for (const auto& a : split(s_.extra_launch_args, ' ')) args.push_back(trim(a));
+    if (part_) args.push_back("-multirun");   // кілька копій гри одночасно
+    // Запуск гри. Копія паралельного рендеру пише своє завдання лише під замком черги запусків
+    // і чекає, поки драйвер її гри його забере, — інакше дві копії взяли б те саме job.txt.
+    auto launch_game = [&](int32_t job_tick) -> std::unique_ptr<game::GameProcess> {
+        std::unique_lock<std::mutex> gate;
+        if (part_) {
+            gate = std::unique_lock(part_->gate->m);
+            if (!write_game_job(job_tick, &err)) return nullptr;
+        }
+        log_info("{}", trf("Команда запуску: {}", game::format_command_line(exe, args)));
+        auto p = game::GameProcess::launch(exe, args, gmod_->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err,
+                                           window_mode != game::WindowMode::Normal);
+        if (p && part_) {
+            const auto t0 = Clock::now();
+            while (game::job_file_pending(*gmod_, id_) && p->running() && !kill_ && Clock::now() - t0 < std::chrono::minutes(3))
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return p;
+    };
     if (handoff_ && handoff_->proc && handoff_->proc->running() && handoff_->launch_sig != launch_sig) {
         log_info("{}", trf("Цей пункт черги потребує інших параметрів запуску гри (розмір вікна, RTX...) — перезапускаю гру"));
         game::request_cancel(*gmod_, handoff_->waiting_id);
@@ -1205,9 +1343,7 @@ void RenderJob::run() {
         proc = std::move(handoff_->proc);
         log_info("{}", trf("Гра вже запущена (PID {}) — наступний пункт черги без перезапуску", proc->pid()));
     } else {
-        log_info("{}", trf("Команда запуску: {}", game::format_command_line(exe, args)));
-        proc = game::GameProcess::launch(exe, args, gmod_->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err,
-                                         window_mode != game::WindowMode::Normal);
+        proc = launch_game(std::max(0, s_.start_tick));
     }
     if (!proc) {
         cleanup();
@@ -1367,22 +1503,29 @@ void RenderJob::run() {
         return e ? std::max(1, std::atoi(e)) : s_.rtx ? 90 : 30;
     }());
     int restarts = 0;
+    // Час демо першого кадру відео: тік, з якого гра почала запис, а в частині паралельного
+    // рендеру — місце цієї частини в сітці кадрів усього фрагмента
+    double video_t0 = range_start * ti;
+    const double record_end_t = part_ ? part_->plan.first_time + static_cast<double>(part_->plan.frames) * sub_dt * es.motion_blur_samples
+                                      : range_end * ti;
+    const int64_t part_subframes = part_ ? part_->plan.frames * es.motion_blur_samples : INT64_MAX;
     int64_t pushed = 0;                // під-кадрів передано в кодер (з усіх запусків гри)
     bool resync = false;               // чекаємо перший кадр після перезапуску
     int32_t resume_tick = -1;
     int64_t drop_subframes = 0;        // зайві під-кадри на початку нового запуску
     double segment_video_start = 0;    // з якої секунди відео пише поточний запуск гри
     bool gave_up = false;              // гру не вдалося відновити — зберігаємо відрендерене
-    auto next_demo_time = [&] { return video_start_tick * ti + static_cast<double>(pushed) * sub_dt; };
+    auto next_demo_time = [&] { return video_t0 + static_cast<double>(pushed) * sub_dt; };
     auto can_restart = [&] {
         if (test_run_ || s_.manual_mode || cancel_ || kill_ || !session.started() || restarts >= kMaxRestarts) return false;
-        return next_demo_time() < range_end * ti - 2 * sub_dt;   // інакше фрагмент уже записано
+        return next_demo_time() < record_end_t - 2 * sub_dt;   // інакше фрагмент уже записано
     };
     auto restart_game = [&](const std::string& why) -> bool {
         ++restarts;
         if (proc->suspended()) proc->resume();
         if (proc->running()) proc->terminate();
-        game::GameProcess::wait_all_exited(kGameProcessNames, 15000);
+        if (part_) proc->wait(15000);   // інші копії гри не чіпаємо
+        else game::GameProcess::wait_all_exited(kGameProcessNames, 15000);
         // Дочитуємо цілі кадри, що встигли записатися (урваний останній читач відкине)
         rp->set_producer_done();
         for (const auto until = Clock::now() + std::chrono::seconds(30); Clock::now() < until;) {
@@ -1401,7 +1544,7 @@ void RenderJob::run() {
         log_warn("{}", trf("{} Перезапускаю гру і продовжую з {} відео (тік {}) — спроба {} з {}", why,
                  format_duration(session.video_seconds()), resume_tick, restarts, kMaxRestarts));
         ++segment_;
-        if (!write_game_job(resume_tick, &err)) {
+        if (!part_ && !write_game_job(resume_tick, &err)) {
             log_warn("{}", trf("Не вдалося записати завдання для гри: {}", err));
             return false;
         }
@@ -1409,9 +1552,7 @@ void RenderJob::run() {
         so.prefix = movie_prefix();
         reader_ptr = std::make_unique<frames::FrameSequenceReader>(so);
         rp = reader_ptr.get();
-        log_info("{}", trf("Команда запуску: {}", game::format_command_line(exe, args)));
-        auto p2 = game::GameProcess::launch(exe, args, gmod_->root, {{"SteamAppId", "4000"}, {"SteamGameId", "4000"}}, &err,
-                                            window_mode != game::WindowMode::Normal);
+        auto p2 = launch_game(resume_tick);
         if (!p2) {
             log_warn("{}", trf("Не вдалося перезапустити гру: {}", err));
             return false;
@@ -1494,7 +1635,7 @@ void RenderJob::run() {
                 }
             }
             if (!proc->running()) {
-                if (!recording_seen && !attached_after_relaunch && now - t_launch < std::chrono::seconds(90)) {
+                if (!part_ && !recording_seen && !attached_after_relaunch && now - t_launch < std::chrono::seconds(90)) {
                     // Гра могла перезапуститися через Steam — шукаємо новий процес (не дочірній CEF)
                     auto pids = game::GameProcess::find_by_name({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}, true);
                     if (!pids.empty()) {
@@ -1524,13 +1665,15 @@ void RenderJob::run() {
                                       "відкривається в грі вручну.", describe_exit_code(proc->exit_code().value_or(-1))));
                     return;
                 }
-                if (!game_finished && session.started() && !cancel_ && !s_.manual_mode && !gave_up) {
+                if (!game_finished && session.started() && !cancel_ && !s_.manual_mode && !gave_up && pushed < part_subframes) {
                     gave_up = true;
                     log_warn("{}", trf("Гра закрилася посеред запису — зберігаю вже відрендерене"));
                 }
                 producer_done = true;
             }
-            if (proc->running()) manage_window_and_sound(producer_done || (st && (st->state == "stopping" || st->state == "done")));
+            // Поки гру призупинено (кодер наздоганяє), її вікно не чіпаємо
+            if (proc->running() && !proc->suspended())
+                manage_window_and_sound(producer_done || (st && (st->state == "stopping" || st->state == "done")));
         }
         if (producer_done) {
             rp->set_producer_done();
@@ -1605,8 +1748,8 @@ void RenderJob::run() {
                 spec.game_gain = static_cast<float>(s_.game_volume);
                 spec.voices = speakers;
                 spec.voice_gains = speaker_gains(s_, speakers);
-                spec.voice_origin_sample =
-                    static_cast<int64_t>(std::llround(first_tick * static_cast<double>(A.tick_interval) * media::kMixRate));
+                video_t0 = part_ ? part_->plan.first_time : first_tick * ti;
+                spec.voice_origin_sample = static_cast<int64_t>(std::llround(video_t0 * media::kMixRate));
                 spec.voice_delay = s_.voice_delay;
                 spec.voice_gain = static_cast<float>(s_.voice_volume);
                 spec.mic_file = s_.mic_file.empty() ? fs::path() : path_from_utf8(s_.mic_file);
@@ -1629,6 +1772,18 @@ void RenderJob::run() {
                 if (s_.speaker_overlay && !speakers.empty())
                     session.set_overlay(make_overlay(s_, speakers, spec.voice_origin_sample, expected_seconds, img.width,
                                                      img.height));
+                if (part_) {
+                    // Частина паралельного рендеру: гра почала на цілому тіку, а перший кадр частини —
+                    // трохи далі (зайві під-кадри відкидаються) або, якщо гра почала пізніше, повторюється
+                    std::lock_guard lock(part_mutex_);
+                    part_result_.wavs.push_back({frames_dir / path_from_utf8(movie_prefix() + ".wav"), first_tick * ti});
+                    const int64_t shift = std::llround((video_t0 - first_tick * ti) / sub_dt);
+                    drop_subframes = std::max<int64_t>(0, shift);
+                    if (shift < 0) {
+                        log_warn("{}", trf("Гра почала на {} під-кадр(ів) пізніше за початок частини — повторюю перший кадр", -shift));
+                        for (int64_t i = 0; i < -shift && session.push_subframe(copy_image(img), &err); ++i) ++pushed;
+                    }
+                }
                 set_stage(test_run_ ? tr("Тестовий прогін: рендер") : tr("Рендер"));
                 update([&](Progress& p) {
                     p.video_desc = session.video_description();
@@ -1653,8 +1808,11 @@ void RenderJob::run() {
                     log_warn("{}", trf("Після перезапуску гра почала на {} під-кадр(ів) пізніше — повторюю перший кадр", -shift));
                     for (int64_t i = 0; i < -shift && session.push_subframe(copy_image(img), &err); ++i) ++pushed;
                 }
-                session.game_audio_new_segment(frames_dir / path_from_utf8(movie_prefix() + ".wav"),
-                                               seg_t - video_start_tick * ti);
+                session.game_audio_new_segment(frames_dir / path_from_utf8(movie_prefix() + ".wav"), seg_t - video_t0);
+                if (part_) {
+                    std::lock_guard lock(part_mutex_);
+                    part_result_.wavs.push_back({frames_dir / path_from_utf8(movie_prefix() + ".wav"), seg_t});
+                }
                 segment_video_start = session.video_seconds();
                 log_info("{}", trf("Гра знову записує з тіку {} — відео продовжується з {} без шва{}", seg_tick,
                          format_duration(segment_video_start),
@@ -1663,11 +1821,15 @@ void RenderJob::run() {
             if (drop_subframes > 0) {
                 --drop_subframes;
                 img.release();
+            } else if (pushed >= part_subframes) {
+                img.release();   // частину вже записано — це кадри наступної частини
             } else if (!session.push_subframe(std::move(img), &err)) {
                 fatal(tr("Помилка кодування: ") + err);
                 return;
-            } else {
-                ++pushed;
+            } else if (++pushed == part_subframes) {
+                log_info("{}", trf("Частину записано ({} кадрів) — зупиняю цю копію гри", part_->plan.frames));
+                game::request_cancel(*gmod_, id_);
+                if (proc->suspended()) proc->resume();
             }
             if (session.frames_encoded() > 0) set_check(kCheckEncode, CheckItem::Ok, session.video_description());
             // RTX: чи є трасування в кадрі. Чорний кадр (лише HUD) — Remix не малює.
@@ -1690,7 +1852,7 @@ void RenderJob::run() {
                     }
                 }
             }
-            if (s_.game_audio && s_.audio) {
+            if (s_.game_audio && s_.audio && !part_) {   // копія гри звук не міксує — WAV забере склеювання
                 if (session.game_audio_opened()) set_check(kCheckAudio, CheckItem::Ok);
                 else if (!wav_warned && session.video_seconds() - segment_video_start > std::min(5.0, kTestSeconds * 0.8)) {
                     wav_warned = true;
@@ -1878,6 +2040,39 @@ void RenderJob::run() {
     const auto stems = session.stem_files();
     const bool fragmented = es.crash_safe && is_mov_family(s_.output_path, s_.container);
     session_ptr.reset();
+    if (part_) {
+        // Копія гри: звук гри — з тимчасової папки до частин (її зараз буде прибрано), решту
+        // (звук, субтитри, розділи) зробить склеювання
+        PartResult r;
+        {
+            std::lock_guard lock(part_mutex_);
+            r.wavs = part_result_.wavs;
+        }
+        r.frames = frames_done;
+        // Остання частина кінчається там, де й фрагмент, — гра може не дописати кількох під-кадрів
+        // останнього кадру (як і в звичайному рендері); частина ціла, якщо є всі її кадри
+        r.complete = pushed >= part_subframes || frames_done >= part_->plan.frames;
+        r.video = s_.output_path;
+        for (const auto& x : es.extras)
+            r.extras.push_back(std::find(extras_done.begin(), extras_done.end(), x.output_path) != extras_done.end() ? x.output_path : "");
+        for (size_t i = 0; i < r.wavs.size(); ++i) {
+            const fs::path dst = part_->dir / path_from_utf8(std::format("part{}_{}.wav", part_->plan.index + 1, i + 1));
+            if (move_file(r.wavs[i].first, dst)) r.wavs[i].first = dst;
+            else log_warn("{}", trf("Звук гри цієї частини не знайдено ({})", path_to_utf8(r.wavs[i].first)));
+        }
+        std::erase_if(r.wavs, [&](const auto& w) {
+            std::error_code wec;
+            return !fs::exists(w.first, wec);
+        });
+        {
+            std::lock_guard lock(part_mutex_);
+            part_result_ = r;
+        }
+        cleanup(false);
+        log_info("{}", trf("Частину готово: {} кадрів, {}", frames_done, format_duration(secs)));
+        succeed(s_.output_path);
+        return;
+    }
     if (hand_over) {
         handoff_->proc = std::move(proc);
         handoff_->waiting_id = id_;
@@ -1890,28 +2085,10 @@ void RenderJob::run() {
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
     if (!test_run_) make_after_render(s_, extras_done);
-    if (!es.stems_dir.empty()) {
-        // Проєкт для Premiere / DaVinci Resolve: відео, окремі WAV і позначки на одній шкалі
-        EditProject pr;
-        const fs::path out = fs::absolute(path_from_utf8(s_.output_path));
-        pr.name = path_to_utf8(out.stem());
-        pr.video_path = path_to_utf8(out);
-        pr.width = es.video.width > 0 ? es.video.width : s_.width;
-        pr.height = es.video.height > 0 ? es.video.height : s_.height;
-        pr.fps_num = es.video.fps.num;
-        pr.fps_den = es.video.fps.den;
-        pr.frames = frames_done;
-        pr.video_has_audio = es.audio_enabled;
-        for (const auto& st : stems) pr.stems.push_back({st.title, path_to_utf8(fs::absolute(path_from_utf8(st.path)))});
-        pr.markers = chapters_for_range(parse_markers(s_.markers), video_start_tick,
-                                        video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti);
-        const fs::path xml = path_from_utf8(es.stems_dir) / path_from_utf8(pr.name + ".xml");
-        std::string werr;
-        if (write_file_text(xml, make_fcp7_xml(pr), &werr))
-            log_info("{}", trf("Пакет для монтажу: {} (відкрийте в Premiere Pro або DaVinci Resolve: File → Import)", path_to_utf8(xml)));
-        else
-            log_warn("{}", trf("Не вдалося записати проєкт для монтажу: {}", werr));
-    }
+    if (!es.stems_dir.empty())
+        write_edit_project(s_, es, frames_done, stems,
+                           chapters_for_range(parse_markers(s_.markers), video_start_tick,
+                                              video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti));
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
@@ -1972,6 +2149,282 @@ void RenderJob::run() {
         set_report(rep);
         log_info("{}", trf("Тестовий прогін: {}", head));
     }
+    succeed(s_.output_path);
+}
+
+// ========================== Паралельний рендер ==============================
+// Кілька копій гри (-multirun) рендерять свої частини фрагмента одночасно, кожна — у свій файл
+// поруч із відео. Потім частини склеюються пакетами без перекодування, а звук (гра з WAV кожної
+// частини, голоси, мікрофон, обробка) міксується заново на всю довжину — без швів.
+void RenderJob::run_parallel(const ParallelInput& in) {
+    const demo::DemoAnalysis& A = *analysis_;
+    const size_t n = in.parts.size();
+    const auto t_start = Clock::now();
+    std::string err;
+    std::error_code ec;
+    log_info("{}", trf("Паралельний рендер: копій гри — {}, кожна рендерить ≈ {} відео", n,
+                       format_duration(in.expected_seconds / static_cast<double>(n))));
+
+    // ---- Гра: знайти, драйвер, копія config.cfg — один раз на всі копії ----
+    set_stage(tr("Підготовка гри"), 0);
+    gmod_ = resolve_game(s_, true, &err);
+    if (!gmod_) {
+        fail(err);
+        return;
+    }
+    id_ = make_unique_id();
+    tmp_dir_ = gmod_->garrysmod / "gmdr_tmp" / id_;
+    fs::create_directories(tmp_dir_, ec);
+    if (ec) {
+        fail(tr("Не вдалося створити тимчасову папку в папці гри: ") + ec.message());
+        return;
+    }
+    config_backup_ = tmp_dir_ / "config.cfg.bak";
+    game::backup_config(*gmod_, config_backup_);
+    const auto demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, &err);
+    if (!demo_for_game) {
+        cleanup(false);
+        fail(err);
+        return;
+    }
+    // Частини — поруч із відео (там і так має бути місце на все відео)
+    const fs::path out = path_from_utf8(s_.output_path);
+    const fs::path parts_dir = out.parent_path() / path_from_utf8(path_to_utf8(out.stem()) + ".gmdr_parts");
+    fs::remove_all(parts_dir, ec);
+    fs::create_directories(parts_dir, ec);
+    if (ec) {
+        cleanup(false);
+        fail(trf("Не вдалося створити теку для частин {}: {}", path_to_utf8(parts_dir), ec.message()));
+        return;
+    }
+    auto remove_parts = [&] {
+        if (s_.keep_temp_files) {
+            log_info("{}", trf("Частини залишено: {}", path_to_utf8(parts_dir)));
+            return;
+        }
+        std::error_code rec;
+        fs::remove_all(parts_dir, rec);
+    };
+
+    // ---- Копії гри: кожна — RenderJob у режимі частини ----
+    auto gate = std::make_shared<LaunchGate>();
+    const int cores = s_.threads > 0 ? s_.threads : static_cast<int>(std::max(2u, std::thread::hardware_concurrency()));
+    const std::string ext = path_to_utf8(out.extension());
+    std::vector<std::shared_ptr<RenderJob>> jobs;
+    for (const auto& plan : in.parts) {
+        RenderSettings cs = s_;
+        cs.start_tick = plan.start_tick;
+        cs.end_tick = plan.end_tick;
+        cs.parallel_games = 1;
+        cs.output_path = path_to_utf8(parts_dir / path_from_utf8(std::format("part{}{}", plan.index + 1, ext)));
+        cs.game_dir = path_to_utf8(gmod_->root);
+        cs.subtitles_srt = cs.chat_srt = cs.chapters = cs.edit_package = cs.speech_subtitles = false;
+        cs.markers.clear();
+        cs.crash_safe = false;
+        cs.quit_game_when_done = true;
+        cs.threads = std::max(1, cores / static_cast<int>(n));   // ядра — порівну між копіями
+        auto job = std::make_shared<RenderJob>(cs, analysis_, voices_);
+        PartSpec ps;
+        ps.plan = plan;
+        ps.count = static_cast<int>(n);
+        ps.size_seconds = in.expected_seconds;
+        ps.dir = parts_dir;
+        ps.gate = gate;
+        ps.gmod = gmod_;
+        ps.demo_for_game = *demo_for_game;
+        job->set_part(std::move(ps));
+        if (plan.index == 0) job->share_preview(preview_);   // у прев'ю — перша частина
+        job->set_show_game(show_game_);
+        jobs.push_back(std::move(job));
+    }
+    set_stage(trf("Запуск копій гри: {}", n), 0);
+    for (auto& j : jobs) j->start();
+
+    const double fps_v = in.es.video.fps.num / static_cast<double>(in.es.video.fps.den);
+    const int64_t total_frames = in.parts.back().first_frame + in.parts.back().frames;
+    bool shown = show_game_;
+    for (;;) {
+        bool any = false;
+        for (auto& j : jobs) any = any || j->running();
+        if (!any) break;
+        if (kill_) {
+            for (auto& j : jobs) j->kill();
+        } else if (cancel_) {
+            for (auto& j : jobs) j->cancel();
+        }
+        if (show_game_ != shown) {
+            shown = show_game_;
+            for (auto& j : jobs) j->set_show_game(shown);
+        }
+        std::vector<Progress> ps;
+        for (auto& j : jobs) ps.push_back(j->progress());
+        update([&](Progress& p) {
+            const Progress& first = ps.front();
+            int64_t frames = 0, subframes = 0, pending = 0, bytes = 0;
+            double speed = 0;
+            int restarts = 0, recording = 0, paused = 0;
+            bool running = false, disk_low = false;
+            for (const auto& q : ps) {
+                frames += q.frames;
+                subframes += q.subframes;
+                pending += q.pending_files;
+                bytes += q.bytes_written;
+                speed += std::max(0.0, q.speed_fps);
+                restarts += q.game_restarts;
+                recording += q.frames > 0 ? 1 : 0;
+                paused += q.game_paused ? 1 : 0;
+                running = running || q.game_running;
+                disk_low = disk_low || q.disk_low;
+            }
+            p.stage = recording == 0 ? trf("{} (копій гри: {})", first.stage, n) : trf("Рендер — копій гри: {}", n);
+            p.frames = frames;
+            p.subframes = subframes;
+            p.video_seconds = static_cast<double>(frames) / fps_v;
+            p.fraction = total_frames > 0 ? std::clamp(static_cast<double>(frames) / static_cast<double>(total_frames), 0.0, 1.0) : 0.0;
+            p.speed_fps = speed;
+            p.eta = speed > 0.01 ? static_cast<double>(total_frames - frames) / speed : -1;
+            p.pending_files = pending;
+            p.bytes_written = bytes;
+            p.game_restarts = restarts;
+            p.game_running = running;
+            p.game_paused = running && paused == static_cast<int>(n);
+            p.disk_low = disk_low;
+            p.game_hidden = first.game_hidden;
+            p.demo_tick = first.demo_tick;
+            p.driver_state = first.driver_state;
+            p.video_desc = first.video_desc;
+            p.stat_read_ms = first.stat_read_ms;
+            p.stat_decode_ms = first.stat_decode_ms;
+            p.stat_blend_ms = first.stat_blend_ms;
+            p.stat_convert_ms = first.stat_convert_ms;
+            p.stat_encode_ms = first.stat_encode_ms;
+            p.stat_game_wait = first.stat_game_wait;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    }
+    for (auto& j : jobs) j->wait();
+    const auto t_rendered = Clock::now();
+
+    // ---- Які частини склеювати: підряд від початку, до першої незавершеної включно ----
+    std::vector<PartResult> res;
+    for (auto& j : jobs) res.push_back(j->part_result());
+    std::vector<size_t> use;
+    for (size_t k = 0; k < n; ++k) {
+        if (res[k].frames <= 0) break;
+        use.push_back(k);
+        if (!res[k].complete) break;
+    }
+    const bool whole = use.size() == n && res[n - 1].complete;
+    std::string first_error;
+    for (size_t k = 0; k < n; ++k) {
+        if (jobs[k]->state() != JobState::Failed) continue;
+        const std::string e = jobs[k]->error();
+        if (first_error.empty()) first_error = e;
+        log_warn("{}", trf("Частина {} не вдалася: {}", k + 1, e.substr(0, e.find('\n'))));
+    }
+    // Копії гри закриваються самі; config.cfg повертаємо, коли закриються всі
+    set_stage(tr("Закриваю гру"));
+    cleanup(true);
+    if (kill_) {
+        remove_parts();
+        update([](Progress& p) { p.stage = tr("Скасовано"); });
+        return;
+    }
+    if (use.empty()) {
+        remove_parts();
+        if (cancel_) {
+            update([](Progress& p) { p.stage = tr("Скасовано"); });
+            return;
+        }
+        fail(first_error.empty() ? tr("Жодна копія гри не записала своєї частини — дивіться журнал") : first_error);
+        return;
+    }
+
+    // ---- Склеювання: відео — пакетами, звук — заново на всю довжину ----
+    set_stage(tr("Склеювання частин"), 0);
+    EncodeSettings fes = in.es;
+    fes.crash_safe = false;
+    for (size_t k : use) fes.video_parts.push_back(res[k].video);
+    for (size_t i = 0; i < fes.extras.size();) {
+        std::vector<std::string> v;
+        for (size_t k : use)
+            if (i < res[k].extras.size() && !res[k].extras[i].empty()) v.push_back(res[k].extras[i]);
+        if (v.size() == use.size()) {
+            fes.extras[i++].video_parts = std::move(v);
+        } else {
+            log_warn("{}", trf("Додаткову версію «{}» пропущено: вона не вдалася в одній із частин", fes.extras[i].label));
+            fes.extras.erase(fes.extras.begin() + static_cast<ptrdiff_t>(i));
+        }
+    }
+    const double t0 = in.parts.front().first_time;   // час демо першого кадру відео
+    AudioSourcesSpec spec;
+    for (size_t k : use)
+        for (const auto& [wav, t] : res[k].wavs) spec.game_segments.push_back({wav, t - t0});
+    spec.game_audio = s_.game_audio && !spec.game_segments.empty();
+    if (s_.game_audio && s_.audio && spec.game_segments.empty()) log_warn("{}", trf("Копії гри не записали звуку — звук гри буде тишею"));
+    if (!spec.game_segments.empty()) spec.game_wav = spec.game_segments.front().first;
+    spec.game_read_ahead = 30;
+    spec.game_offset = s_.game_audio_offset;
+    spec.game_gain = static_cast<float>(s_.game_volume);
+    spec.voices = in.speakers;
+    spec.voice_gains = speaker_gains(s_, in.speakers);
+    spec.voice_origin_sample = static_cast<int64_t>(std::llround(t0 * media::kMixRate));
+    spec.voice_delay = s_.voice_delay;
+    spec.voice_gain = static_cast<float>(s_.voice_volume);
+    spec.mic_file = s_.mic_file.empty() ? fs::path() : path_from_utf8(s_.mic_file);
+    spec.mic_offset = s_.mic_offset;
+    spec.mic_gain = static_cast<float>(s_.mic_volume);
+    spec.voice_cleanup = in.voice_fx;
+    spec.duck_game = s_.duck_game;
+    spec.loudness_target = s_.loudness_target;
+    spec.speed = video_speed(s_);
+    spec.speed_mute = s_.speed_audio == "mute";
+    auto session = std::make_unique<EncodeSession>(fes, nullptr);
+    const bool ok = session->begin(s_.width, s_.height, spec, &err) &&
+                    session->copy_video(&kill_, [&](double f) { update([&](Progress& p) { p.fraction = f; }); }, &err) &&
+                    session->finish(&err);
+    if (!ok) {
+        session->abort();
+        session.reset();
+        std::error_code rec;
+        fs::remove(out, rec);
+        if (kill_) {
+            remove_parts();
+            update([](Progress& p) { p.stage = tr("Скасовано"); });
+            return;
+        }
+        log_warn("{}", trf("Частини лишились у {}", path_to_utf8(parts_dir)));
+        fail(tr("Не вдалося склеїти частини: ") + err);
+        return;
+    }
+    const double secs = session->video_seconds();
+    const int64_t frames_done = session->frames_encoded();
+    const std::vector<std::string> extras_done = session->finished_extras();
+    const auto stems = session->stem_files();
+    session.reset();
+    remove_parts();
+
+    // ---- Субтитри, розділи, перевірка, обкладинка — як після звичайного рендеру ----
+    const int32_t start_tick = in.range_start;
+    const int32_t end_tick = start_tick + static_cast<int32_t>(std::llround(secs / in.vti));
+    if (s_.subtitles_srt && !in.speakers.empty())
+        write_speaker_subtitles(s_, in.speakers, spec.voice_origin_sample, secs, in.transcript);
+    const auto markers = chapters_for_range(parse_markers(s_.markers), start_tick, end_tick, in.vti);
+    finalize_output(s_, false, frames_done, secs, s_.chapters ? markers : std::vector<Chapter>{});
+    make_after_render(s_, extras_done);
+    if (!fes.stems_dir.empty()) write_edit_project(s_, fes, frames_done, stems, markers);
+    if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, start_tick, secs);
+    const auto t_end = Clock::now();
+    log_info("{}", trf("Готово! {} — {} кадрів, {}, {}", s_.output_path, frames_done, format_duration(secs),
+                       format_bytes(file_size_or_zero(out))));
+    log_info("{}", trf("Паралельний рендер: копій гри — {}, рендер {}, склеювання {}", n,
+                       format_duration(std::chrono::duration<double>(t_rendered - t_start).count()),
+                       format_duration(std::chrono::duration<double>(t_end - t_rendered).count())));
+    if (cancel_) log_info("{}", trf("Запис зупинено достроково — збережено відрендерену частину"));
+    else if (!whole)
+        log_warn("{}", trf("Збережено перші {} відео з {}: копія гри з частиною {} не впоралась. Решту можна дорендерити "
+                           "окремо: початок фрагмента — тік {}", format_duration(secs), format_duration(in.expected_seconds),
+                           use.back() + 1, end_tick));
     succeed(s_.output_path);
 }
 

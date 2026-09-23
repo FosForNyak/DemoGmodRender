@@ -331,6 +331,8 @@ std::pair<int, int> GameProcess::offscreen_position() {
     return {vx + vw + 200, vy};
 }
 
+// Вікно чужого процесу — лише асинхронно (SWP_ASYNCWINDOWPOS): інакше SetWindowPos чекає, поки
+// потік гри обробить повідомлення, а призупинена (suspend) чи зависла гра не відповість ніколи.
 bool GameProcess::place_window(WindowMode mode) {
     HWND hwnd = reinterpret_cast<HWND>(find_main_window());
     if (!hwnd) return false;
@@ -338,11 +340,11 @@ bool GameProcess::place_window(WindowMode mode) {
     case WindowMode::Normal:
         return true;
     case WindowMode::Behind:
-        SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         return true;
     case WindowMode::Offscreen: {
         const auto [x, y] = offscreen_position();
-        SetWindowPos(hwnd, HWND_BOTTOM, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(hwnd, HWND_BOTTOM, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         return true;
     }
     }
@@ -360,7 +362,7 @@ bool GameProcess::show_window_front() {
     const bool visible = r.right > GetSystemMetrics(SM_XVIRTUALSCREEN) &&
                          r.left < GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN);
     SetWindowPos(hwnd, HWND_TOP, visible ? r.left : wa.left, visible ? r.top : wa.top, 0, 0,
-                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
     return true;
 }
 

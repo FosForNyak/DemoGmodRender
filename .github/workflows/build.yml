@@ -140,6 +140,30 @@ jobs:
             $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $out)
             if ([math]::Abs($d - 6) -gt 0.1) { throw "після збою ($m): очікувалось 6 с відео, а не $d" }
           }
+          # Паралельний рендер: дві й три копії гри рендерять свої частини одночасно — склеєне відео має
+          # збігатися зі звичайним кадр у кадр (спалахи й біпи на тих самих місцях); з додатковою версією
+          # і зі збоєм гри в одній із частин
+          $env:GMDR_TEST_MIN_PART = "3"
+          $base = "$PWD\build\out_single.mp4"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $base --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 11 --no-chapters
+          if ($LASTEXITCODE -ne 0) { throw "звичайний рендер для порівняння не вдався" }
+          foreach ($n in 2, 3) {
+            $out = "$PWD\build\out_par$n.mp4"
+            $extra = if ($n -eq 3) { @("--also", "vertical") } else { @() }
+            if ($n -eq 2) { Remove-Item "$fake\garrysmod\fake_crashed.txt" -ErrorAction SilentlyContinue; $env:FAKE_CRASH_AT = "40" }
+            $log = & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+                --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 11 --no-chapters --parallel $n @extra 2>&1 | Out-String
+            $rc = $LASTEXITCODE
+            Remove-Item Env:FAKE_CRASH_AT -ErrorAction SilentlyContinue
+            if ($rc -ne 0 -or $log -notmatch "Паралельний рендер: копій гри — $n") { $log; throw "паралельний рендер ($n) не вдався" }
+            if ($n -eq 2 -and $log -notmatch "знову записує") { $log; throw "паралельний рендер: копія гри не продовжила після збою" }
+            python tests/tools/compare_av.py $base $out --ffmpeg third_party\ffmpeg\bin
+            if ($LASTEXITCODE -ne 0) { throw "паралельний рендер ($n) відрізняється від звичайного" }
+          }
+          $vert = & third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -of csv=p=0 "$PWD\build\out_par3_vertical.mp4"
+          if ($vert -ne "720,1280,300") { throw "паралельний рендер: вертикальна версія $vert" }
+          Remove-Item Env:GMDR_TEST_MIN_PART
           Remove-Item Env:FAKE_DEMO_CLOCK, Env:GMDR_TEST_WATCHDOG
           # Розпізнавання мовлення: імітатор whisper-cli ("фраза N" на кожну ділянку звуку і "галюцинація"
           # в тиші) — репліки мають стати на свої місця в часі демо, а галюцинація — відкинутись

@@ -1,5 +1,6 @@
 #include "encode_session.hpp"
 
+#include "../util/file_util.hpp"
 #include "../util/log.hpp"
 #include "edit_package.hpp"
 #include "../util/strings.hpp"
@@ -23,6 +24,59 @@ int64_t now_ms() {
 void atomic_add(std::atomic<double>& a, double v) {
     double cur = a.load();
     while (!a.compare_exchange_weak(cur, cur + v)) {}
+}
+
+// Частина паралельного рендеру: пакети відео з готового файлу
+class PartReader {
+public:
+    PartReader() = default;
+    PartReader(const PartReader&) = delete;
+    PartReader& operator=(const PartReader&) = delete;
+    ~PartReader() {
+        if (ctx_) avformat_close_input(&ctx_);
+    }
+    bool open(const std::string& path, std::string* error) {
+        int r = avformat_open_input(&ctx_, path.c_str(), nullptr, nullptr);
+        if (r >= 0) r = avformat_find_stream_info(ctx_, nullptr);
+        if (r < 0) {
+            if (error) *error = trf("не вдалося відкрити частину {}: {}", path, media::av_error_string(r));
+            return false;
+        }
+        stream_ = av_find_best_stream(ctx_, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        if (stream_ < 0) {
+            if (error) *error = trf("у частині {} немає відео", path);
+            return false;
+        }
+        return true;
+    }
+    const AVCodecParameters* par() const { return ctx_->streams[stream_]->codecpar; }
+    AVRational time_base() const { return ctx_->streams[stream_]->time_base; }
+    int64_t    position() const { return ctx_->pb ? std::max<int64_t>(0, avio_tell(ctx_->pb)) : 0; }
+    // Наступний пакет відео; false — кінець частини
+    bool next(AVPacket* p) {
+        while (av_read_frame(ctx_, p) >= 0) {
+            if (p->stream_index == stream_) return true;
+            av_packet_unref(p);
+        }
+        return false;
+    }
+
+private:
+    AVFormatContext* ctx_ = nullptr;
+    int              stream_ = -1;
+};
+
+// Потік для пакетів частин: параметри кодека — з першої частини
+int add_copy_stream(media::Muxer& m, const std::string& first_part, AVRational fps, std::string* desc, std::string* error) {
+    PartReader r;
+    if (!r.open(first_part, error)) return -1;
+    const int st = m.add_stream_copy(r.par(), AVRational{fps.den, fps.num}, fps, "GMod demo");
+    if (st < 0 && error) *error = tr("не вдалося створити потік відео для склеювання");
+    if (desc) {
+        const AVCodecDescriptor* d = avcodec_descriptor_get(r.par()->codec_id);
+        *desc = trf("{} {}×{} — частини без перекодування", d ? d->name : "?", r.par()->width, r.par()->height);
+    }
+    return st;
 }
 } // namespace
 
@@ -107,23 +161,31 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         if (!parent.empty()) std::filesystem::create_directories(parent, ec);
     }
     if (!muxer_.open(s_.output_path, s_.container, error)) return false;
-    if (!muxer_.supports_codec(s_.video.codec)) {
-        if (error) *error = trf("контейнер '{}' не підтримує кодек {} — оберіть інший формат файлу",
-                                        muxer_.format()->name, s_.video.codec);
-        return false;
-    }
     const bool global_header = muxer_.needs_global_header();
-    if (!video_.open(s_.video, frame_w, frame_h, global_header, error)) return false;
-    video_stream_ = muxer_.add_stream(video_.context(), "GMod demo");
-    video_desc_ = video_.describe();
-    log_info("{}", trf("Відео: {}", video_desc_));
+    if (copy_mode()) {
+        // Склеювання: пакети готових частин, кодер відео не потрібен
+        video_stream_ = add_copy_stream(muxer_, s_.video_parts.front(), s_.video.fps, &video_desc_, error);
+        if (video_stream_ < 0) return false;
+        log_info("{}", trf("Відео: {}", video_desc_));
+    } else {
+        if (!muxer_.supports_codec(s_.video.codec)) {
+            if (error) *error = trf("контейнер '{}' не підтримує кодек {} — оберіть інший формат файлу",
+                                            muxer_.format()->name, s_.video.codec);
+            return false;
+        }
+        if (!video_.open(s_.video, frame_w, frame_h, global_header, error)) return false;
+        video_stream_ = muxer_.add_stream(video_.context(), "GMod demo");
+        video_desc_ = video_.describe();
+        log_info("{}", trf("Відео: {}", video_desc_));
 
-    // Motion blur: 16-бітне змішування, якщо вихід >8 біт
-    const bool high_depth = media::pix_fmt_bit_depth(video_.output_pix_fmt()) > 8;
-    blender_ = std::make_unique<frames::MotionBlender>(s_.motion_blur_samples, s_.shutter_degrees, high_depth, pool_);
-    if (s_.motion_blur_samples > 1)
-        log_info("{}", trf("Motion blur: {} під-кадрів, затвор {:.0f}° (усереднюється {})", s_.motion_blur_samples,
-                 s_.shutter_degrees, blender_->used_samples()));
+        // Motion blur: 16-бітне змішування, якщо вихід >8 біт
+        const bool high_depth = media::pix_fmt_bit_depth(video_.output_pix_fmt()) > 8;
+        blender_ = std::make_unique<frames::MotionBlender>(s_.motion_blur_samples, s_.shutter_degrees, high_depth, pool_);
+        if (s_.motion_blur_samples > 1)
+            log_info("{}", trf("Motion blur: {} під-кадрів, затвор {:.0f}° (усереднюється {})", s_.motion_blur_samples,
+                     s_.shutter_degrees, blender_->used_samples()));
+    }
+    speed_ = spec.speed > 0 ? spec.speed : 1.0;
 
     // ---- Звук ----
     // Уповільнення/прискорення: звук гри, голоси й мікрофон записані в часі демо — розтягуємо
@@ -162,6 +224,13 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         std::vector<float> voice_gains;
         if (spec.game_audio) {
             auto g = std::make_unique<audio::GameAudioInput>(spec.game_wav, spec.game_wav_live, spec.game_offset);
+            g->set_read_ahead(spec.game_read_ahead);
+            if (!spec.game_segments.empty()) {
+                // Кілька WAV: перший — одразу (з його місцем у часі), решта — коли до них дійде відео
+                g->start_segment(spec.game_segments.front().first,
+                                 std::llround(spec.game_segments.front().second * kMixRate));
+                segments_.assign(spec.game_segments.begin() + 1, spec.game_segments.end());
+            }
             game_input_ = g.get();
             game = g.get();
             inputs.push_back(std::move(g));
@@ -307,7 +376,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
     if (s_.crash_safe && muxer_.is_fragmented())
         log_info("{}", trf("Файл пишеться фрагментами: навіть якщо гра чи ПК впадуть, уже записане відео відкриється"));
     started_ = true;
-    worker_ = std::thread([this] { worker_loop(); });
+    if (!copy_mode()) worker_ = std::thread([this] { worker_loop(); });
     return true;
 }
 
@@ -321,8 +390,13 @@ bool EncodeSession::open_extra(Extra& e, bool with_audio, std::string* error) {
         return false;
     }
     const bool global_header = e.muxer.needs_global_header();
-    if (!e.video.open(e.cfg.video, frame_w_, frame_h_, global_header, error)) return false;
-    e.video_stream = e.muxer.add_stream(e.video.context(), "GMod demo");
+    if (!e.cfg.video_parts.empty()) {
+        e.video_stream = add_copy_stream(e.muxer, e.cfg.video_parts.front(), e.cfg.video.fps, nullptr, error);
+        if (e.video_stream < 0) return false;
+    } else {
+        if (!e.video.open(e.cfg.video, frame_w_, frame_h_, global_header, error)) return false;
+        e.video_stream = e.muxer.add_stream(e.video.context(), "GMod demo");
+    }
     if (with_audio && !e.cfg.audio.codec.empty()) {
         if (!e.muxer.supports_codec(e.cfg.audio.codec)) {
             if (error) *error = trf("контейнер '{}' не підтримує аудіокодек {}", e.muxer.format()->name,
@@ -497,9 +571,19 @@ bool EncodeSession::produce_audio(int64_t until, std::string* error, bool final)
     return ok;
 }
 
+void EncodeSession::start_due_segments() {
+    if (!game_input_) return;
+    const double v = video_seconds();
+    while (!segments_.empty() && segments_.front().second / speed_ <= v + 1e-9) {
+        game_input_->start_segment(segments_.front().first, std::llround(segments_.front().second * kMixRate));
+        segments_.erase(segments_.begin());
+    }
+}
+
 bool EncodeSession::pump_audio(std::string* error) {
     std::lock_guard lock(audio_mutex_);
     if (!mixer_) return true;
+    start_due_segments();
     const auto t0 = Clock::now();
     const int64_t target = static_cast<int64_t>(std::llround(video_seconds() * kMixRate));
     const int64_t until = std::min(target, mixer_->ready_until());
@@ -507,6 +591,104 @@ bool EncodeSession::pump_audio(std::string* error) {
     const bool ok = produce_audio(until, error);
     atomic_add(audio_ms_, ms_since(t0));
     return ok;
+}
+
+bool EncodeSession::copy_video(const std::atomic<bool>* cancel, const std::function<void(double)>& progress,
+                               std::string* error) {
+    if (!started_ || !copy_mode()) return true;
+    const AVRational enc_tb{s_.video.fps.den, s_.video.fps.num};
+    uint64_t total_bytes = 0, done_bytes = 0;   // прогрес — за позицією читання у файлах частин
+    for (const auto& p : s_.video_parts) total_bytes += file_size_or_zero(path_from_utf8(p));
+    auto report = [&](uint64_t done) {
+        if (progress) progress(total_bytes ? std::min(1.0, static_cast<double>(done) / static_cast<double>(total_bytes)) : 0.0);
+    };
+    // pts і dts частини — у номерах кадрів від її початку, зсунуті на кадри попередніх частин
+    // (як у звичайному рендері: кадр n має pts n у часі 1/FPS)
+    auto shift = [&](AVPacket* p, AVRational tb, int64_t base) {
+        const auto frame = [&](int64_t t) {
+            if (t == AV_NOPTS_VALUE) return t;
+            return base + av_rescale_q_rnd(t, tb, enc_tb, static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+        };
+        p->pts = frame(p->pts);
+        p->dts = frame(p->dts);
+        p->duration = 1;
+        p->pos = -1;
+    };
+    struct PacketDel {
+        void operator()(AVPacket* p) const { av_packet_free(&p); }
+    };
+    using Packet = std::unique_ptr<AVPacket, PacketDel>;
+    Packet pkt(av_packet_alloc());
+    int64_t base = 0;
+    auto last_progress = Clock::now();
+    for (size_t k = 0; k < s_.video_parts.size(); ++k) {
+        PartReader in;
+        if (!in.open(s_.video_parts[k], error)) return false;
+        // Додаткові версії цієї частини: пакет наперед, щоб писати їх упереміш з основним відео
+        struct ExtraIn {
+            Extra*     e = nullptr;
+            PartReader r;
+            Packet     pending{av_packet_alloc()};
+            bool       has = false;
+            int64_t    written = 0;
+        };
+        std::vector<std::unique_ptr<ExtraIn>> xs;
+        for (auto& e : extras_) {
+            if (!e->ok || k >= e->cfg.video_parts.size()) continue;
+            auto x = std::make_unique<ExtraIn>();
+            x->e = e.get();
+            std::string xerr;
+            if (!x->r.open(e->cfg.video_parts[k], &xerr)) {
+                fail_extra(*e, xerr);
+                continue;
+            }
+            x->has = x->r.next(x->pending.get());
+            xs.push_back(std::move(x));
+        }
+        auto write_extras = [&](int64_t upto) {   // скільки пакетів (кадрів) має бути в кожній версії
+            for (auto& x : xs) {
+                while (x->has && x->e->ok && x->written < upto) {
+                    shift(x->pending.get(), x->r.time_base(), base);
+                    if (!x->e->muxer.write_packet(x->e->video_stream, x->pending.get(), enc_tb))
+                        fail_extra(*x->e, x->e->muxer.last_error());
+                    av_packet_unref(x->pending.get());
+                    ++x->written;
+                    x->has = x->r.next(x->pending.get());
+                }
+            }
+        };
+        int64_t part_frames = 0, part_packets = 0;
+        while (in.next(pkt.get())) {
+            if (cancel && *cancel) {
+                av_packet_unref(pkt.get());
+                if (error) *error = tr("скасовано");
+                return false;
+            }
+            shift(pkt.get(), in.time_base(), base);
+            if (pkt->pts != AV_NOPTS_VALUE) part_frames = std::max(part_frames, pkt->pts - base + 1);
+            if (!muxer_.write_packet(video_stream_, pkt.get(), enc_tb)) {
+                av_packet_unref(pkt.get());
+                if (error) *error = muxer_.last_error();
+                return false;
+            }
+            av_packet_unref(pkt.get());
+            ++part_packets;
+            frames_out_ = std::max(frames_out_.load(), base + part_frames);
+            write_extras(part_packets);
+            if (!pump_audio(error)) return false;
+            if (Clock::now() - last_progress > std::chrono::milliseconds(200)) {
+                last_progress = Clock::now();
+                report(done_bytes + static_cast<uint64_t>(in.position()));
+            }
+        }
+        write_extras(INT64_MAX);
+        done_bytes += file_size_or_zero(path_from_utf8(s_.video_parts[k]));
+        report(done_bytes);
+        log_debug("Склеювання: частина {} — {} кадрів ({})", k + 1, part_frames, s_.video_parts[k]);
+        base += part_frames;
+        frames_out_ = base;
+    }
+    return pump_audio(error);
 }
 
 void EncodeSession::game_audio_finished() {
@@ -522,17 +704,20 @@ void EncodeSession::game_audio_new_segment(const std::filesystem::path& wav, dou
 bool EncodeSession::finish(std::string* error) {
     if (!started_ || finished_) return true;
     // Незавершена група motion blur
-    if (auto last = blender_->flush()) {
-        draw_overlay(*last);
-        if (!enqueue(std::move(*last), error)) return false;
+    if (blender_) {
+        if (auto last = blender_->flush()) {
+            draw_overlay(*last);
+            if (!enqueue(std::move(*last), error)) return false;
+        }
     }
     if (!stop_worker(error)) return false;
-    if (!video_.flush([&](AVPacket* p) { return muxer_.write_packet(video_stream_, p, video_.context()->time_base); },
+    if (!copy_mode() &&
+        !video_.flush([&](AVPacket* p) { return muxer_.write_packet(video_stream_, p, video_.context()->time_base); },
                       error))
         return false;
     for (auto& e : extras_) {
         std::string xerr;
-        if (e->ok && !e->video.flush([&](AVPacket* p) {
+        if (e->ok && e->cfg.video_parts.empty() && !e->video.flush([&](AVPacket* p) {
                 return e->muxer.write_packet(e->video_stream, p, e->video.context()->time_base);
             }, &xerr))
             fail_extra(*e, xerr);

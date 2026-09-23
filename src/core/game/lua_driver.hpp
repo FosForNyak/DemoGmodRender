@@ -62,6 +62,8 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
 
 bool write_job_files(const GModInstall& g, const DriverJob& job, const std::string& cfg_text, bool with_driver_job,
                      std::string* error);
+// job.txt з завданням id ще лежить — драйвер (гра) його ще не забрав.
+bool job_file_pending(const GModInstall& g, const std::string& id);
 void remove_job_files(const GModInstall& g, const std::string& id);
 void request_cancel(const GModInstall& g, const std::string& id);
 

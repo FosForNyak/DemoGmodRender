@@ -1264,6 +1264,243 @@ static double rms_db(const std::vector<float>& x, double from_s, double to_s, si
 
 // Звук гри після перезапуску гри: недописаний хвіст старого WAV відкидається, новий файл —
 // рівно з потрібної позиції, пропуск між ними — тиша; старе ще можна дозміксувати
+// Склеювання частин паралельного рендеру: відео — пакетами без перекодування (з B-кадрами),
+// звук гри — з WAV кожної частини на своєму місці, додаткова версія — теж з частин
+// Поділ фрагмента на частини для кількох копій гри
+// Фрагментований MP4 (захист від збою): копія файлу посеред запису відкривається, а готовий
+// файл після переупаковки починається з нуля — відео не відстає від звуку на затримку B-кадрів
+static void test_fragmented_mp4() {
+    std::printf("[fragmented mp4]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_frag";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string path = path_to_utf8(dir / "f.mp4"), copy = path_to_utf8(dir / "crash.mp4");
+    media::Muxer mux;
+    media::VideoEncoder enc;
+    media::VideoEncoderSettings vs;
+    vs.codec = "libx264";
+    vs.fps = {30, 1};
+    vs.preset = "veryfast";   // з B-кадрами
+    vs.gop_seconds = 1;
+    std::string err;
+    if (!mux.open(path, "", &err) || !enc.open(vs, 320, 180, mux.needs_global_header(), &err)) {
+        std::printf("  пропуск: %s\n", err.c_str());
+        return;
+    }
+    const int st = mux.add_stream(enc.context(), "t");
+    CHECK(mux.write_header(true, true, &err) && mux.is_fragmented());
+    auto sink = [&](AVPacket* pk) { return mux.write_packet(st, pk, enc.context()->time_base); };
+    uint32_t rnd = 12345;   // шум — щоб дані справді йшли на диск, а не лишались у буфері запису
+    for (int f = 0; f < 90; ++f) {
+        frames::Image img;
+        img.allocate(320, 180, frames::PixelLayout::BGR24);
+        for (int y = 0; y < 180; ++y) {
+            uint8_t* row = img.row(0, y);
+            for (int x = 0; x < 320 * 3; ++x) row[x] = static_cast<uint8_t>((rnd = rnd * 1664525u + 1013904223u) >> 24);
+        }
+        CHECK(enc.encode(img, f, sink, &err));
+        if (f == 75) fs::copy_file(path_from_utf8(path), path_from_utf8(copy), fs::copy_options::overwrite_existing, ec);
+    }
+    CHECK(enc.flush(sink, &err) && mux.finish(&err));
+    media::MediaFileInfo info;
+    const bool opened = media::probe_media_file(copy, info, &err);
+    if (!opened) std::printf("  копія: %s\n", err.c_str());
+    CHECK(opened && info.has_video && info.video_seconds >= 0.9);   // хоча б перший фрагмент (1 с)
+    CHECK(media::remux_file(path, true, &err));
+    AVFormatContext* in = nullptr;
+    CHECK(avformat_open_input(&in, path.c_str(), nullptr, nullptr) >= 0);
+    if (in) {
+        avformat_find_stream_info(in, nullptr);
+        const AVStream* vst = in->streams[0];
+        CHECK(vst->start_time == 0 || vst->start_time == AV_NOPTS_VALUE);
+        avformat_close_input(&in);
+    }
+    CHECK(media::probe_media_file(path, info, &err) && info.video_frames == 90);
+    fs::remove_all(dir, ec);
+}
+
+static void test_plan_parts() {
+    std::printf("[parallel plan]\n");
+    const double ti = 0.015;   // 66.7 тік/с
+    // 1000 тіків = 15 с, 60 кадрів/с = 900 кадрів на 3 частини
+    auto parts = render::plan_parts(100, 1100, ti, 1.0 / 60, 3, 60);
+    CHECK(parts.size() == 3);
+    int64_t next = 0;
+    for (const auto& p : parts) {
+        CHECK(p.first_frame == next);   // кадри йдуть підряд, без пропусків і повторів
+        next += p.frames;
+        // Гра починає з запасом (драйвер вмикає запис на кілька тіків пізніше): 8..20 тіків раніше
+        const double lead = p.first_time - p.start_tick * ti;
+        CHECK(lead >= 8 * ti - 1e-9 && lead < 20 * ti);
+        CHECK_NEAR(p.first_time, 100 * ti + static_cast<double>(p.first_frame) / 60, 1e-9);
+        CHECK(p.end_tick <= 1100);
+    }
+    CHECK(next == 900);
+    // 9 кадрів 60 fps = рівно 10 тіків: межі — на кратних 9, запас — 10 тіків, тож кадри гри
+    // лягають рівно на сітку кадрів відео (зайві 9 кадрів на початку відкидаються)
+    CHECK(parts[0].start_tick == 90 && parts[0].frames == 297 && parts[2].end_tick == 1100);
+    CHECK(parts[1].first_frame == 297 && parts[1].start_tick == 420 && parts[2].first_frame == 603);
+    for (const auto& p : parts) {
+        const double lead_frames = (p.first_time - p.start_tick * ti) * 60;
+        CHECK_NEAR(lead_frames, std::round(lead_frames), 1e-6);
+    }
+    CHECK(parts[0].end_tick == 432);   // кінець частини (тік 430) + 2 тіки запасу
+    // Float-тривалість тіку з демо (12.5 с / 825 тіків) і 30 кадрів/с: 5 кадрів = 11 тіків
+    const double fti = static_cast<double>(static_cast<float>(12.5 / 825));
+    parts = render::plan_parts(66, 726, fti, 1.0 / 30, 2, 60);
+    CHECK(parts.size() == 2 && parts[1].first_frame == 150 && parts[1].start_tick == 396 - 11);
+    // 59.94 кадр/с — рівних меж немає: гра почне на тіку з запасом 8 тіків
+    parts = render::plan_parts(0, 4000, ti, 1001.0 / 60000, 2, 60);
+    CHECK(parts.size() == 2 && parts[1].start_tick * ti <= parts[1].first_time &&
+          parts[1].first_time - parts[1].start_tick * ti < 9 * ti);
+    // Уповільнення ×0.5: кадр — 1/120 с демо, кадрів удвічі більше
+    parts = render::plan_parts(0, 1000, ti, 0.5 / 60, 2, 60);
+    CHECK(parts.size() == 2 && parts[0].frames + parts[1].frames == 1800);
+    // Закороткий фрагмент — менше частин (кожна не коротша за min_frames)
+    parts = render::plan_parts(0, 400, ti, 1.0 / 60, 4, 120);   // 360 кадрів
+    CHECK(parts.size() == 3);
+    CHECK(render::plan_parts(0, 100, ti, 1.0 / 60, 4, 120).size() == 1);
+    CHECK(render::plan_parts(100, 100, ti, 1.0 / 60, 2, 1).empty());
+}
+
+static void test_part_assembly() {
+    std::printf("[part assembly]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_parts";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const auto p = [&](const char* name) { return path_to_utf8(dir / name); };
+    render::EncodeSettings base;
+    base.video.codec = "libx264";
+    base.video.width = 160;
+    base.video.height = 90;
+    base.video.fps = {30, 1};
+    base.video.preset = "veryfast";   // з B-кадрами: dts < pts
+    base.audio_enabled = false;
+    base.audio.codec = "pcm_s16le";
+    base.audio.sample_rate = 48000;
+    render::ExtraOutput small;
+    small.label = "small";
+    small.video = base.video;
+    small.video.width = 80;
+    small.video.height = 46;
+    small.audio = base.audio;
+    // Частина: frames кадрів, спалах (білий кадр) на кадрі flash
+    auto make_part = [&](const std::string& out, const std::string& out_small, int frames, int flash) {
+        render::EncodeSettings es = base;
+        es.output_path = out;
+        render::ExtraOutput x = small;
+        x.output_path = out_small;
+        es.extras.push_back(x);
+        render::EncodeSession ses(es, nullptr);
+        std::string err;
+        if (!ses.begin(160, 90, {}, &err)) {
+            std::printf("  пропуск: %s\n", err.c_str());
+            return false;
+        }
+        for (int f = 0; f < frames; ++f) {
+            frames::Image img;
+            img.allocate(160, 90, frames::PixelLayout::BGR24);
+            const uint8_t v = f == flash ? 255 : 30;
+            for (int y = 0; y < 90; ++y) std::memset(img.row(0, y), v, 160 * 3);
+            CHECK(ses.push_subframe(std::move(img), &err));
+        }
+        CHECK(ses.finish(&err));
+        return true;
+    };
+    if (!make_part(p("a.mov"), p("a_small.mov"), 45, 30) || !make_part(p("b.mov"), p("b_small.mov"), 30, 15)) return;
+    // Звук гри: частина A записала 1.6 с (трохи далі свого кінця), B почала на 1.5 с
+    auto write_wav = [&](const char* name, double seconds, float value) {
+        audio::WavWriter w;
+        w.open(dir / name, 48000, 2, audio::WavWriter::Format::Float32);
+        std::vector<float> v(static_cast<size_t>(seconds * 48000) * 2, value);
+        w.write(v.data(), v.size() / 2);
+        w.close();
+    };
+    write_wav("a.wav", 1.6, 0.25f);
+    write_wav("b.wav", 1.2, 0.5f);
+
+    render::EncodeSettings fs_ = base;
+    fs_.audio_enabled = true;
+    fs_.output_path = p("out.mov");
+    fs_.video_parts = {p("a.mov"), p("b.mov")};
+    render::ExtraOutput x = small;
+    x.output_path = p("out_small.mov");
+    x.video_parts = {p("a_small.mov"), p("b_small.mov")};
+    fs_.extras.push_back(x);
+    render::AudioSourcesSpec spec;
+    spec.game_wav = dir / "a.wav";
+    spec.game_segments = {{dir / "a.wav", 0.0}, {dir / "b.wav", 1.5}};
+    spec.game_read_ahead = 0.3;   // готові файли читаються потроху
+    render::EncodeSession ses(fs_, nullptr);
+    std::string err;
+    CHECK(ses.begin(0, 0, spec, &err));
+    double last_progress = -1;
+    CHECK(ses.copy_video(nullptr, [&](double f) { last_progress = f; }, &err));
+    CHECK(ses.finish(&err));
+    CHECK(ses.frames_encoded() == 75);
+    CHECK(ses.finished_extras().size() == 1);
+    media::MediaFileInfo info;
+    CHECK(media::probe_media_file(p("out.mov"), info, &err));
+    CHECK(info.video_frames == 75);
+    CHECK_NEAR(info.video_seconds, 2.5, 0.05);
+    CHECK_NEAR(info.audio_seconds, 2.5, 0.05);
+    CHECK(media::probe_media_file(p("out_small.mov"), info, &err) && info.video_frames == 75);
+
+    // Декодуємо: спалахи мають бути рівно на кадрах 30 і 45 + 15 = 60, звук — 0.25 до 1.5 с, далі 0.5
+    AVFormatContext* in = nullptr;
+    CHECK(avformat_open_input(&in, p("out.mov").c_str(), nullptr, nullptr) >= 0);
+    if (!in) return;
+    avformat_find_stream_info(in, nullptr);
+    const int vs = av_find_best_stream(in, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    const int as = av_find_best_stream(in, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    const AVCodec* dec = avcodec_find_decoder(in->streams[vs]->codecpar->codec_id);
+    AVCodecContext* dc = avcodec_alloc_context3(dec);
+    avcodec_parameters_to_context(dc, in->streams[vs]->codecpar);
+    CHECK(avcodec_open2(dc, dec, nullptr) >= 0);
+    std::vector<int> bright;   // номери кадрів зі спалахом (за pts)
+    std::vector<int16_t> pcm;
+    AVPacket* pk = av_packet_alloc();
+    AVFrame* fr = av_frame_alloc();
+    auto drain = [&] {
+        while (avcodec_receive_frame(dc, fr) >= 0) {
+            const int64_t n = av_rescale_q(fr->pts, in->streams[vs]->time_base, AVRational{1, 30});
+            if (fr->data[0][45 * fr->linesize[0] + 80] > 200) bright.push_back(static_cast<int>(n));
+            av_frame_unref(fr);
+        }
+    };
+    while (av_read_frame(in, pk) >= 0) {
+        if (pk->stream_index == vs) {
+            avcodec_send_packet(dc, pk);
+            drain();
+        } else if (pk->stream_index == as) {
+            const auto* smp = reinterpret_cast<const int16_t*>(pk->data);
+            pcm.insert(pcm.end(), smp, smp + pk->size / 2);
+        }
+        av_packet_unref(pk);
+    }
+    avcodec_send_packet(dc, nullptr);
+    drain();
+    av_frame_free(&fr);
+    av_packet_free(&pk);
+    avcodec_free_context(&dc);
+    avformat_close_input(&in);
+    CHECK(bright == std::vector<int>({30, 60}));
+    auto sample = [&](double t) {
+        const size_t i = static_cast<size_t>(t * 48000) * 2;
+        return i < pcm.size() ? pcm[i] / 32768.0 : -1.0;
+    };
+    CHECK_NEAR(sample(0.5), 0.25, 0.01);
+    CHECK_NEAR(sample(1.49), 0.25, 0.01);
+    CHECK_NEAR(sample(1.51), 0.5, 0.01);
+    CHECK_NEAR(sample(2.4), 0.5, 0.01);
+    CHECK(last_progress > 0.5);
+    fs::remove_all(dir, ec);
+}
+
 static void test_game_audio_segments() {
     std::printf("[game audio segments]\n");
     namespace fs = std::filesystem;
@@ -1727,6 +1964,9 @@ int main(int argc, char** argv) {
     test_audio_filters();
     test_speed();
     test_game_audio_segments();
+    test_fragmented_mp4();
+    test_plan_parts();
+    test_part_assembly();
     test_speech();
     test_i18n();
     if (argc > 1) {

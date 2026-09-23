@@ -23,6 +23,7 @@
 #include "../util/i18n.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
+#include "parallel.hpp"
 #include "settings.hpp"
 
 namespace gmdr::render {
@@ -159,6 +160,26 @@ struct GameHandoff {
     std::string                        launch_sig;   // з якими параметрами запущено гру (розмір вікна, RTX...)
 };
 
+// Паралельний рендер: частина, яку рендерить одна копія гри (RenderJob у режимі частини)
+struct PartSpec {
+    PartPlan                           plan;
+    int                                count = 1;          // скільки всього частин
+    double                             size_seconds = 0;   // тривалість усього фрагмента (бітрейт під розмір)
+    std::filesystem::path              dir;                // тека частин (поруч із відео)
+    std::shared_ptr<LaunchGate>        gate;
+    std::optional<game::GModInstall>   gmod;               // гра, уже знайдена і з драйвером
+    std::string                        demo_for_game;      // шлях демо для playdemo (спільний)
+};
+
+// Що зробила копія гри для своєї частини
+struct PartResult {
+    int64_t                  frames = 0;       // кадрів у файлі частини
+    bool                     complete = false; // усі заплановані кадри
+    std::string              video;            // файл частини
+    std::vector<std::string> extras;           // файли додаткових версій (порожньо — версія не вдалася)
+    std::vector<std::pair<std::filesystem::path, double>> wavs;   // звук гри: файл і час демо його першого семпла
+};
+
 class RenderJob final : public Job {
 public:
     // test_run: тестовий прогін — 3 секунди з початку фрагмента в тимчасовий файл зі
@@ -175,10 +196,19 @@ public:
 
     static constexpr double kTestSeconds = 3.0;
 
+    // Режим частини паралельного рендеру (до start)
+    void set_part(PartSpec p) { part_ = std::move(p); }
+    PartResult part_result() const {
+        std::lock_guard lock(part_mutex_);
+        return part_result_;
+    }
+
 protected:
     void run() override;
 
 private:
+    struct ParallelInput;   // що run() уже підготував для паралельного рендеру
+    void run_parallel(const ParallelInput& in);
     bool prepare(std::string* error);
     // Завдання для драйвера: демо з тіку start_tick (після збою гри — з місця, де урвалися кадри).
     bool write_game_job(int32_t start_tick, std::string* error);
@@ -208,6 +238,9 @@ private:
     std::atomic<bool>                               show_game_{false};
     std::shared_ptr<GameHandoff>                    handoff_;
     bool                                            keep_game_ = false;
+    std::optional<PartSpec>                         part_;           // копія гри в паралельному рендері
+    mutable std::mutex                              part_mutex_;
+    PartResult                                      part_result_;
 };
 
 // ---- Черга рендерів ----------------------------------------------------------------

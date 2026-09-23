@@ -136,6 +136,7 @@ static void print_usage() {
   --window offscreen|behind|normal   де вікно гри (типово — за межами екрана)
   --no-mute              не вимикати звук гри в мікшері Windows
   --rtx                  копія GMod RTX від RTXLauncher (її параметри запуску)
+  --parallel N           рендерити фрагмент частинами в N копіях гри одночасно (2..4, -multirun)
 Інше:
   --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
   --lang en|uk           мова повідомлень (English / українська; або змінна GMDR_LANG)
@@ -280,6 +281,11 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     }
     if (c.has("--no-mute")) s.mute_game_sound = false;
     if (c.has("--rtx")) s.rtx = true;
+    if (c.has("--parallel")) {
+        const auto v = parse_int(c.get("--parallel"));
+        if (!v || *v < 1 || *v > 4) { err = tr("--parallel: від 1 до 4 копій гри"); return false; }
+        s.parallel_games = static_cast<int>(*v);
+    }
     if (c.has("--srt")) s.subtitles_srt = true;
     if (c.has("--speaker-overlay")) s.speaker_overlay = true;
     if (c.has("--edit-package")) s.edit_package = true;

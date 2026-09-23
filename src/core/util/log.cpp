@@ -39,8 +39,15 @@ const char* log_level_name(LogLevel level) {
     return "?";
 }
 
-void log_message(LogLevel level, const std::string& text) {
+namespace {
+thread_local std::string t_prefix;   // напр. "[частина 2] " — для паралельного рендеру
+} // namespace
+
+void set_thread_log_prefix(std::string prefix) { t_prefix = std::move(prefix); }
+
+void log_message(LogLevel level, const std::string& text_in) {
     if (static_cast<int>(level) < g_min_level.load()) return;
+    const std::string& text = t_prefix.empty() ? text_in : t_prefix + text_in;
     // Копіюємо список приймачів під замком, а викликаємо без замка —
     // так приймач може сам щось логувати і не буде взаємоблокування.
     std::map<int, LogSink> sinks;

@@ -64,6 +64,22 @@ int Muxer::add_stream(AVCodecContext* enc, const std::string& title, const std::
     return st->index;
 }
 
+int Muxer::add_stream_copy(const AVCodecParameters* par, AVRational enc_tb, AVRational framerate, const std::string& title) {
+    AVStream* st = avformat_new_stream(fmt_ctx_, nullptr);
+    if (!st || avcodec_parameters_copy(st->codecpar, par) < 0) return -1;
+    st->codecpar->codec_tag = 0;   // тег вибере сам контейнер
+    st->time_base = enc_tb;
+    if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+        st->avg_frame_rate = framerate;
+        st->r_frame_rate = framerate;
+        const std::string fmt = fmt_ctx_->oformat->name;
+        if (par->codec_id == AV_CODEC_ID_HEVC && (fmt.find("mp4") != std::string::npos || fmt.find("mov") != std::string::npos))
+            st->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+    }
+    if (!title.empty()) av_dict_set(&st->metadata, "title", title.c_str(), 0);
+    return st->index;
+}
+
 bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
     if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
         int r = avio_open(&fmt_ctx_->pb, path_.c_str(), AVIO_FLAG_WRITE);
@@ -78,7 +94,7 @@ bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
     if (mov_family && fragmented) {
         // Фрагментований MP4: індекс пишеться частинами після кожного ключового кадру,
         // тож обірваний файл однаково відкривається.
-        av_dict_set(&opts, "movflags", "+frag_keyframe+empty_moov+default_base_moof", 0);
+        av_dict_set(&opts, "movflags", "+frag_keyframe+empty_moov+default_base_moof+delay_moov", 0);
         fragmented_ = true;
     } else if (mov_family && faststart) {
         av_dict_set(&opts, "movflags", "+faststart", 0);
@@ -268,6 +284,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
 }
 
 bool probe_media_file(const std::string& path, MediaFileInfo& out, std::string* error) {
+    out = MediaFileInfo{};
     AVFormatContext* in = nullptr;
     int r = avformat_open_input(&in, path.c_str(), nullptr, nullptr);
     if (r < 0) {
