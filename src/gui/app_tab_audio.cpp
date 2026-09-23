@@ -147,6 +147,10 @@ void App::draw_tab_audio() {
                 "чату в самій грі. Зручно, коли HUD приховано або голос гри вимкнено. Потрапляє в усі версії відео.");
     changed |= ImGui::Checkbox("Окремі звукові доріжки (для монтажу)", &s_.separate_tracks);
     help_marker("Крім загального міксу, у файл буде записано окремі доріжки: гра, кожен гравець, мікрофон. Зручно для Premiere/DaVinci Resolve.");
+    changed |= ImGui::Checkbox("Пакет для монтажу (WAV + проєкт XML)", &s_.edit_package);
+    help_marker("Поруч із відео з'явиться тека «назва_монтаж»: окремі WAV гри, кожного гравця і мікрофона (24 біт, "
+                "рівно від першого кадру) і проєкт XML. Premiere Pro і DaVinci Resolve відкривають його через "
+                "File → Import: відео і всі доріжки одразу на шкалі, позначки — маркерами.");
 
     ImGui::SeparatorText("Обробка звуку");
     ImGui::BeginDisabled(s_.voice_mode == "none");

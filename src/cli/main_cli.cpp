@@ -113,6 +113,8 @@ static void print_usage() {
   --loudness LUFS|off    гучність загального міксу за EBU R128 (-14 — YouTube, -23 — ТБ)
   --srt                  субтитри «хто говорить» (.srt поруч із відео)
   --speaker-overlay      підписи «хто говорить» прямо на кадрі (плашки праворуч унизу)
+  --edit-package         пакет для монтажу: окремі WAV (гра, кожен гравець, мікрофон) і проєкт XML
+                         для Premiere / DaVinci Resolve у теці «назва_монтаж» поруч із відео
   --chat-srt             субтитри з чатом гри (.srt; разом із --srt — .chat.srt)
   --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
   --no-chapters          не записувати розділи
@@ -164,7 +166,7 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
                                "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game",
-                               "--speaker-overlay", "--version"};
+                               "--speaker-overlay", "--version", "--edit-package"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -269,6 +271,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--rtx")) s.rtx = true;
     if (c.has("--srt")) s.subtitles_srt = true;
     if (c.has("--speaker-overlay")) s.speaker_overlay = true;
+    if (c.has("--edit-package")) s.edit_package = true;
     if (c.has("--accurate-color")) s.accurate_color = true;
     if (c.has("--no-crash-safe")) s.crash_safe = false;
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");

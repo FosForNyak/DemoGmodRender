@@ -27,6 +27,7 @@
 #include "core/render/versions.hpp"
 #include "core/render/derived.hpp"
 #include "core/render/overlay.hpp"
+#include "core/render/edit_package.hpp"
 #include "core/render/report.hpp"
 #include "core/util/zip_writer.hpp"
 #include "core/util/file_assoc.hpp"
@@ -967,6 +968,35 @@ static void test_speaker_overlay() {
           std::abs(sp[0].spans[0].b - (106000 + 48000) / 48000.0) < 0.01);
 }
 
+// Пакет для монтажу: проєкт xmeml (Premiere / DaVinci Resolve)
+static void test_edit_package() {
+    std::printf("[edit package]\n");
+    CHECK(render::fcp_path_url("C:\\Відео\\a b.mp4") == "file://localhost/C%3a/%d0%92%d1%96%d0%b4%d0%b5%d0%be/a%20b.mp4");
+    CHECK(render::safe_file_name("Голос: Олег (STEAM_0:1:2)") == "Голос_ Олег (STEAM_0_1_2)");
+    CHECK(render::safe_file_name(" ?*. ") == "__");      // крапка в кінці імені у Windows зникає
+    CHECK(render::safe_file_name("  . ") == "доріжка");
+    render::EditProject p;
+    p.name = "бій <1>";
+    p.video_path = "C:/v/бій.mp4";
+    p.fps_num = 60000;
+    p.fps_den = 1001;
+    p.frames = 600;
+    p.stems = {{"Гра", "C:/v/бій_монтаж/01 Гра.wav"}, {"Олег & Ко", "C:/v/бій_монтаж/02 Олег.wav"}};
+    p.markers = {{0, 2, "Початок"}, {2.0, 10, "Бій"}};
+    const std::string x = render::make_fcp7_xml(p);
+    CHECK(x.find("<timebase>60</timebase><ntsc>TRUE</ntsc>") != std::string::npos);   // 59.94
+    CHECK(x.find("<name>бій &lt;1&gt;</name>") != std::string::npos);
+    CHECK(x.find("<name>Олег &amp; Ко</name>") != std::string::npos);
+    CHECK(x.find("<in>120</in><out>-1</out>") != std::string::npos);                  // маркер на 2 с
+    auto count = [&](const std::string& what) {
+        size_t n = 0;
+        for (size_t pos = 0; (pos = x.find(what, pos)) != std::string::npos; ++pos) ++n;
+        return n;
+    };
+    CHECK(count("<track>") == 4);   // відео, мікс з відео, два WAV
+    CHECK(count("<clipitem ") == 4 && count("</clipitem>") == 4);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1450,6 +1480,7 @@ int main(int argc, char** argv) {
     test_power_action();
     test_update_check();
     test_speaker_overlay();
+    test_edit_package();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

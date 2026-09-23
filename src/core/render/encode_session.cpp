@@ -1,6 +1,7 @@
 #include "encode_session.hpp"
 
 #include "../util/log.hpp"
+#include "edit_package.hpp"
 #include "../util/strings.hpp"
 
 #include <algorithm>
@@ -201,7 +202,8 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         if (!mix.post_filter.empty()) log_info("Гучність міксу — {:.0f} LUFS (EBU R128, loudnorm)", spec.loudness_target);
         if (!mix.sources.empty()) {
             tracks.push_back(mix);
-            if (s_.separate_tracks) {
+            const bool stems = !s_.stems_dir.empty();
+            if (s_.separate_tracks || stems) {
                 if (game) tracks.push_back({"Гра", {{game, spec.game_gain}}});
                 for (size_t i = 0; i < voices.size(); ++i)
                     tracks.push_back({voices[i]->name(), {{voices[i], voice_gains[i]}}});
@@ -213,10 +215,12 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 std::filesystem::path wav = out.parent_path() / "audio.wav";
                 side_wav_ = std::make_unique<audio::WavWriter>();
                 if (!side_wav_->open(wav, kMixRate, 2, audio::WavWriter::Format::Int16, error)) return false;
-                tracks.resize(1);
                 log_info("Звук буде збережено окремо: {}", path_to_utf8(wav));
             } else {
-                for (const auto& t : tracks) {
+                // У файл — лише мікс, або всі доріжки ("окремі доріжки для монтажу")
+                const size_t encoded = s_.separate_tracks ? tracks.size() : 1;
+                for (size_t i = 0; i < encoded; ++i) {
+                    const auto& t = tracks[i];
                     auto enc = std::make_unique<media::AudioEncoder>();
                     if (!enc->open(s_.audio, global_header, error)) return false;
                     if (!muxer_.supports_codec(s_.audio.codec)) {
@@ -227,7 +231,23 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                     audio_streams_.push_back(muxer_.add_stream(enc->context(), t.title));
                     audio_encoders_.push_back(std::move(enc));
                 }
-                log_info("Звук: {} доріжк(и), {}", tracks.size(), audio_encoders_.front()->describe());
+                log_info("Звук: {} доріжк(и), {}", audio_encoders_.size(), audio_encoders_.front()->describe());
+            }
+            if (stems) {
+                // Пакет для монтажу: кожне джерело — окремий WAV 24 біт, від першого кадру відео
+                const std::filesystem::path dir = path_from_utf8(s_.stems_dir);
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                stem_wavs_.resize(tracks.size());
+                for (size_t i = 1; i < tracks.size(); ++i) {
+                    const std::filesystem::path p =
+                        dir / path_from_utf8(std::format("{:02} {}.wav", i, safe_file_name(tracks[i].title)));
+                    auto w = std::make_unique<audio::WavWriter>();
+                    if (!w->open(p, kMixRate, 2, audio::WavWriter::Format::Int24, error)) return false;
+                    stem_wavs_[i] = std::move(w);
+                    stem_files_.push_back({tracks[i].title, path_to_utf8(p)});
+                }
+                log_info("Пакет для монтажу: {} окремих WAV у {}", stem_files_.size(), s_.stems_dir);
             }
             for (const auto& t : tracks) {
                 std::string names;
@@ -432,10 +452,12 @@ bool EncodeSession::produce_audio(int64_t until, std::string* error, bool final)
                     fail_extra(*e, xerr);
             }
         }
+        if (track < stem_wavs_.size() && stem_wavs_[track]) stem_wavs_[track]->write(data, frames);
         if (side_wav_) {
             if (track == 0) side_wav_->write(data, frames);
             return;
         }
+        if (track >= audio_encoders_.size()) return;   // доріжка лише для окремого WAV
         auto& enc = audio_encoders_[track];
         const int stream = audio_streams_[track];
         const AVRational tb = enc->context()->time_base;
@@ -494,6 +516,8 @@ bool EncodeSession::finish(std::string* error) {
                     return false;
             }
             if (side_wav_) side_wav_->close(error);
+            for (auto& w : stem_wavs_)
+                if (w) w->close(nullptr);
             for (auto& e : extras_) {
                 std::string xerr;
                 const AVRational tb = e->audio ? e->audio->context()->time_base : AVRational{1, 1};
@@ -527,6 +551,8 @@ void EncodeSession::abort() {
     for (auto& e : extras_) e->muxer.abort();
     std::lock_guard lock(audio_mutex_);
     if (side_wav_) side_wav_->close(nullptr);
+    for (auto& w : stem_wavs_)
+        if (w) w->close(nullptr);
 }
 
 void EncodeSession::capture_preview(const frames::Image& img) {

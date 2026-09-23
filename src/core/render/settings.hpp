@@ -89,6 +89,7 @@ struct RenderSettings {
     bool        crash_safe = true;        // MP4/MOV фрагментами під час рендеру (файл вціліє при збої)
     bool        subtitles_srt = false;    // субтитри "хто говорить" (.srt поруч із відео)
     bool        speaker_overlay = false;  // підписи "хто говорить" прямо на кадрі
+    bool        edit_package = false;     // пакет для монтажу: окремі WAV + проєкт XML (Premiere, DaVinci)
     bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"

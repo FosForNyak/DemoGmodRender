@@ -52,6 +52,7 @@ struct EncodeSettings {
     bool                        faststart = true;
     bool                        crash_safe = false;        // MP4/MOV фрагментами (відкривається навіть після збою)
     std::vector<ExtraOutput>    extras;                    // додаткові версії
+    std::string                 stems_dir;                 // пакет для монтажу: окремі WAV кожного джерела (UTF-8)
 };
 
 // Які джерела звуку змішувати
@@ -132,6 +133,11 @@ public:
     PipelineStats stats() const;
     // Додаткові версії, що записалися без помилок (після finish)
     std::vector<std::string> finished_extras() const;
+    // Окремі WAV пакета для монтажу: {назва доріжки, шлях}
+    struct StemFile {
+        std::string title, path;
+    };
+    const std::vector<StemFile>& stem_files() const { return stem_files_; }
     // Підписи «хто говорить» на кадрах (після motion blur, до кодування)
     void set_overlay(std::unique_ptr<SpeakerOverlay> o) { overlay_ = std::move(o); }
 
@@ -174,6 +180,8 @@ private:
     std::unique_ptr<audio::WavWriter>         side_wav_;   // для послідовності зображень
     std::vector<std::unique_ptr<Extra>>       extras_;
     std::unique_ptr<SpeakerOverlay>           overlay_;
+    std::vector<std::unique_ptr<audio::WavWriter>> stem_wavs_;   // за номером доріжки мікшера (0 — мікс, без файлу)
+    std::vector<StemFile>                     stem_files_;
     int64_t                                   blended_frames_ = 0;   // кадрів після motion blur (час підписів)
     int64_t                                   subframes_in_ = 0;
     std::atomic<int64_t>                      frames_out_{0};

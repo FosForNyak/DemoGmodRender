@@ -14,6 +14,7 @@
 #include "encode_session.hpp"
 #include "markers.hpp"
 #include "subtitles.hpp"
+#include "edit_package.hpp"
 #include "versions.hpp"
 
 #include <algorithm>
@@ -971,6 +972,11 @@ void RenderJob::run() {
     }
     // Додаткові версії (Discord, вертикальна...) — у тестовому прогоні не потрібні
     if (!test_run_) es.extras = make_extra_outputs(s_.extra_versions, es, expected_seconds);
+    // Пакет для монтажу: окремі WAV у теці "назва_монтаж" поруч із відео (проєкт XML — після рендеру)
+    if (s_.edit_package && !test_run_ && s_.output_path.find('%') == std::string::npos) {
+        const fs::path out = path_from_utf8(s_.output_path);
+        es.stems_dir = path_to_utf8(out.parent_path() / path_from_utf8(path_to_utf8(out.stem()) + "_монтаж"));
+    }
     else if (!trim(s_.extra_versions).empty()) log_info("Тестовий прогін: додаткові версії не кодуються");
     update([&](Progress& p) {
         p.range_start = range_start;
@@ -1565,6 +1571,7 @@ void RenderJob::run() {
     const int64_t frames_done = session.frames_encoded();
     const PipelineStats pstats = session.stats();
     const std::vector<std::string> extras_done = session.finished_extras();
+    const auto stems = session.stem_files();
     const bool fragmented = es.crash_safe && is_mov_family(s_.output_path, s_.container);
     session_ptr.reset();
     if (hand_over) {
@@ -1580,6 +1587,29 @@ void RenderJob::run() {
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
     if (!test_run_) make_after_render(s_, extras_done);
+    if (!es.stems_dir.empty()) {
+        // Проєкт для Premiere / DaVinci Resolve: відео, окремі WAV і позначки на одній шкалі
+        EditProject pr;
+        const fs::path out = fs::absolute(path_from_utf8(s_.output_path));
+        pr.name = path_to_utf8(out.stem());
+        pr.video_path = path_to_utf8(out);
+        pr.width = es.video.width > 0 ? es.video.width : s_.width;
+        pr.height = es.video.height > 0 ? es.video.height : s_.height;
+        pr.fps_num = es.video.fps.num;
+        pr.fps_den = es.video.fps.den;
+        pr.frames = frames_done;
+        pr.video_has_audio = es.audio_enabled;
+        for (const auto& st : stems) pr.stems.push_back({st.title, path_to_utf8(fs::absolute(path_from_utf8(st.path)))});
+        pr.markers = chapters_for_range(parse_markers(s_.markers), video_start_tick,
+                                        video_start_tick + static_cast<int32_t>(std::llround(secs / A.tick_interval)),
+                                        A.tick_interval);
+        const fs::path xml = path_from_utf8(es.stems_dir) / path_from_utf8(pr.name + ".xml");
+        std::string werr;
+        if (write_file_text(xml, make_fcp7_xml(pr), &werr))
+            log_info("Пакет для монтажу: {} (відкрийте в Premiere Pro або DaVinci Resolve: File → Import)", path_to_utf8(xml));
+        else
+            log_warn("Не вдалося записати проєкт для монтажу: {}", werr);
+    }
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
