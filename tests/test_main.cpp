@@ -4,6 +4,10 @@
 //  Запуск:  gmdr-tests [папка_з_тестовими_даними]
 //  Тести демо використовують синтетичні файли з tests/tools/make_test_demo.py
 // =============================================================================
+#include "core/audio/audio_filter.hpp"
+#include "core/audio/audio_inputs.hpp"
+#include "core/audio/voice_clean.hpp"
+#include "core/audio/voice_preview.hpp"
 #include "core/audio/wav.hpp"
 #include "core/demo/analysis.hpp"
 #include "core/demo/bitreader.hpp"
@@ -58,6 +62,9 @@ static int g_fail = 0, g_pass = 0;
         if (std::abs(_a - _b) <= (eps)) { ++g_pass; }                                                \
         else { ++g_fail; std::printf("  ПРОВАЛ %s:%d: %s = %g, очікувалось %g ± %g\n", __FILE__, __LINE__, #a, _a, _b, (double)(eps)); } \
     } while (0)
+
+// Рівень RMS відрізка [from_s, to_s) секунд (48 кГц; stride 2 — лівий канал стерео), дБ.
+static double rms_db(const std::vector<float>& x, double from_s, double to_s, size_t stride = 1);
 
 static void test_bitreader() {
     std::printf("[bitreader]\n");
@@ -288,6 +295,27 @@ static void test_demo(const std::filesystem::path& demo_path, int expect_pe_bits
     CHECK(voice::export_speaker_audio(me, flac, 0, -1, &ferr));
     CHECK(std::filesystem::exists(flac) && std::filesystem::file_size(flac) > 1000);
     std::filesystem::remove(flac);
+    // Уривок для прослуховування: з першої фрази після from, сирий збігається з декодованим
+    {
+        const int64_t s0 = me.segments[0].start;
+        const auto clip = audio::make_voice_clip(me, 0, nullptr, 0.5);
+        const int64_t pad = 48000 * 15 / 100;
+        CHECK(clip.start == std::max<int64_t>(0, s0 - pad));
+        CHECK(clip.mono.size() == static_cast<size_t>(std::min(s0, pad) + 24000 + pad));
+        const auto ref = voice::decode_range(me, clip.start, clip.start + static_cast<int64_t>(clip.mono.size()));
+        double diff = 0;
+        for (size_t i = 0; i < ref.size() && i < clip.mono.size(); ++i) diff = std::max(diff, std::fabs(ref[i] - clip.mono[i]) * 1.0);
+        CHECK(diff < 1e-6);
+        // Після кінця мовлення — з початку; з обробкою (підсилення) — гучніше
+        audio::VoiceCleanup fx;
+        fx.level = 2.0f;
+        const auto loud = audio::make_voice_clip(me, me.end_sample() + 48000, &fx, 0.5);
+        CHECK(loud.start == clip.start && loud.mono.size() == clip.mono.size());
+        CHECK(rms_db(loud.mono, 0, 0.6) > rms_db(clip.mono, 0, 0.6) + 5.5);
+        // Довгі паузи між фразами стиснуто: уривок коротший за відрізок демо, який він охоплює
+        const auto longer = audio::make_voice_clip(me, 0, nullptr, 30.0);
+        CHECK(longer.speech_seconds > 0 && longer.mono.size() <= static_cast<size_t>(me.end_sample() - longer.start + pad));
+    }
     // Тривалість кадру Opus за TOC: CELT 20 мс (config 31), один кадр
     const uint8_t toc_celt20[] = {static_cast<uint8_t>((31 << 3) | 0)};
     CHECK(voice::opus_packet_samples_48k(toc_celt20, 1) == 960);
@@ -874,6 +902,189 @@ static void test_chat_and_markers() {
     CHECK(render::make_chat_srt(evs, 600, 700, ti, 10.0).empty());
 }
 
+// Моно-сигнал з вектора (позиція 0 = перший семпл), для перевірки обробки звуку.
+class VecInput final : public audio::AudioInput {
+public:
+    explicit VecInput(std::vector<float> x, int64_t avail = INT64_MAX) : x_(std::move(x)), avail_(avail) {}
+    std::string name() const override { return "тест"; }
+    int64_t available() override { return avail_; }
+    void mix(int64_t pos, float* out, size_t frames, float gain) override {
+        for (size_t i = 0; i < frames; ++i) {
+            const int64_t p = pos + static_cast<int64_t>(i);
+            if (p < 0 || p >= static_cast<int64_t>(x_.size())) continue;
+            out[i * 2] += x_[static_cast<size_t>(p)] * gain;
+            out[i * 2 + 1] += x_[static_cast<size_t>(p)] * gain;
+        }
+    }
+    void set_available(int64_t a) { avail_ = a; }
+
+private:
+    std::vector<float> x_;
+    int64_t            avail_;
+};
+
+static double rms_db(const std::vector<float>& x, double from_s, double to_s, size_t stride) {
+    const size_t a = static_cast<size_t>(from_s * 48000), b = std::min(x.size() / stride, static_cast<size_t>(to_s * 48000));
+    double s = 0;
+    for (size_t i = a; i < b; ++i) s += static_cast<double>(x[i * stride]) * x[i * stride];
+    return 10.0 * std::log10(s / std::max<size_t>(1, b - a) + 1e-20);
+}
+
+static void test_audio_filters() {
+    std::printf("[audio filters]\n");
+    constexpr int R = 48000;
+    const double kPi = 3.14159265358979323846;
+    auto sine = [&](double seconds, double freq, double amp) {
+        std::vector<float> v(static_cast<size_t>(seconds * R));
+        for (size_t i = 0; i < v.size(); ++i) v[i] = static_cast<float>(amp * std::sin(2 * kPi * freq * i / R));
+        return v;
+    };
+    std::mt19937 rng(7);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+
+    // ---- гучність BS.1770: синус 1 кГц з піком -20 дБ у моно = -23.0 LUFS ----
+    {
+        const auto s = sine(10, 997, 0.1);
+        CHECK_NEAR(audio::integrated_loudness(s.data(), s.size()), -23.01, 0.1);
+        std::vector<float> silence(R * 5, 0.0f);
+        CHECK(audio::integrated_loudness(silence.data(), silence.size()) < -90);
+        audio::VoiceProfile p;
+        p.seconds = 10;
+        p.loudness = -30;
+        CHECK_NEAR(20 * std::log10(audio::level_gain(p, -18)), 12.0, 0.01);
+        p.loudness = -50;
+        CHECK_NEAR(20 * std::log10(audio::level_gain(p, -18)), 15.0, 0.01);   // не більше +15 дБ
+        p.seconds = 0.2;
+        CHECK(audio::level_gain(p) == 1.0f);   // замало мовлення — не чіпаємо
+    }
+
+    // ---- ланцюжок FFmpeg: позиції збігаються з входом ----
+    {
+        audio::AudioFilterChain c;
+        std::string err;
+        CHECK(c.open("volume=0.5", 1, 1, &err));
+        const auto s = sine(1, 440, 0.8);
+        for (size_t at = 0; at < s.size(); at += 1000) c.push(0, s.data() + at, std::min<size_t>(1000, s.size() - at), &err);
+        CHECK(c.finish(&err));
+        CHECK(c.out_start() == 0 && c.out_end() == static_cast<int64_t>(s.size()));
+        bool same = true;
+        for (int64_t p = 0; p < c.out_end(); p += 997) same &= std::abs(c.out_at(p)[0] - s[static_cast<size_t>(p)] * 0.5f) < 1e-5f;
+        CHECK(same);
+        CHECK(!c.open("такого_фільтра_немає", 1, 1, &err) && !err.empty());
+    }
+    // loudnorm: вихід затримується (дивиться на 3 с уперед), але після кінця — рівно стільки ж і в цілі
+    {
+        audio::AudioFilterChain c;
+        std::string err;
+        CHECK(c.open(audio::loudness_filter(-14), 1, 2, &err));
+        std::vector<float> st;
+        const auto s = sine(20, 300, 0.02);
+        for (float v : s) {
+            st.push_back(v);
+            st.push_back(v);
+        }
+        int64_t max_lag = 0;
+        for (size_t at = 0; at < s.size(); at += 4096) {
+            c.push(0, st.data() + at * 2, std::min<size_t>(4096, s.size() - at), &err);
+            max_lag = std::max(max_lag, c.pushed(0) - c.out_end());
+        }
+        CHECK(max_lag > R / 2);   // справді є затримка
+        CHECK(c.finish(&err));
+        CHECK(std::llabs(c.out_end() - static_cast<int64_t>(s.size())) <= 64);
+        std::vector<float> left;
+        for (int64_t p = 5 * R; p < std::min<int64_t>(c.out_end(), 19 * R); ++p) left.push_back(c.out_at(p)[0]);
+        // Стерео з однаковими каналами: гучність = гучність одного каналу + 3 дБ
+        CHECK_NEAR(audio::integrated_loudness(left.data(), left.size()) + 3.01, -14.0, 1.5);
+        CHECK(audio::loudness_filter(0).empty());
+    }
+
+    // ---- гейт: фон між фразами тихішає, мова і початки слів цілі ----
+    {
+        std::vector<float> v(static_cast<size_t>(8 * R));
+        for (auto& x : v) x = gauss(rng) * 0.001f;   // фон -60 дБ
+        const auto tone = sine(1, 220, 0.14);        // "фраза" ~ -20 дБ RMS
+        for (double at : {1.0, 4.0})
+            for (size_t i = 0; i < tone.size(); ++i) v[static_cast<size_t>(at * R) + i] += tone[i];
+        const auto prof = audio::profile_samples(v.data(), v.size());
+        CHECK(prof.valid() && prof.noise_db < -55 && prof.speech_db > -25);
+        const auto gp = audio::gate_for(prof);
+        CHECK(gp.open_db > prof.noise_db + 5 && gp.open_db < prof.speech_db - 5 && gp.close_db < gp.open_db);
+        auto in = std::make_unique<VecInput>(v);
+        audio::FilteredInput f("голос", {{{in.get(), 1.0f}}}, true);
+        std::string err;
+        CHECK(f.open({}, &gp, &err));
+        CHECK(f.available() == INT64_MAX);
+        std::vector<float> out(v.size() * 2, 0.0f);
+        for (size_t at = 0; at < v.size(); at += 1000) {
+            const size_t n = std::min<size_t>(1000, v.size() - at);
+            f.mix(static_cast<int64_t>(at), out.data() + at * 2, n, 1.0f);
+            f.discard_before(static_cast<int64_t>(at + n));
+        }
+        CHECK(rms_db(out, 2.6, 3.8, 2) < rms_db(v, 2.6, 3.8) - 20);    // пауза: -25 дБ
+        CHECK(std::abs(rms_db(out, 1.1, 1.9, 2) - rms_db(v, 1.1, 1.9)) < 0.5);   // фраза без змін
+        const size_t onset = static_cast<size_t>(4.0 * R) + R / 500;   // 2 мс після початку фрази
+        CHECK(std::abs(out[onset * 2] - v[onset]) < 0.1f * std::abs(v[onset]) + 1e-4f);
+        // afftdn + гейт: так само, фраза ціла
+        audio::FilteredInput f2("голос", {{{in.get(), 1.0f}}}, true);
+        CHECK(f2.open(audio::denoise_filter(prof.noise_db), &gp, &err));
+        std::fill(out.begin(), out.end(), 0.0f);
+        for (size_t at = 0; at < v.size(); at += 4096)
+            f2.mix(static_cast<int64_t>(at), out.data() + at * 2, std::min<size_t>(4096, v.size() - at), 1.0f);
+        CHECK(std::abs(rms_db(out, 1.1, 1.9, 2) - rms_db(v, 1.1, 1.9)) < 1.0);
+        CHECK(rms_db(out, 2.6, 3.8, 2) < rms_db(v, 2.6, 3.8) - 20);
+        // Початок не з нуля (експорт фрагмента): позиції ті самі
+        audio::FilteredInput f3("голос", {{{in.get(), 1.0f}}}, true);
+        CHECK(f3.open({}, &gp, &err));
+        f3.start_at(static_cast<int64_t>(3.9 * R));
+        std::vector<float> part(R * 2, 0.0f);
+        f3.mix(static_cast<int64_t>(4.0 * R), part.data(), R / 2, 1.0f);
+        CHECK(std::abs(part[(R / 4) * 2] - v[static_cast<size_t>(4.25 * R)]) < 1e-5f);
+    }
+
+    // ---- гра стихає під голоси (sidechaincompress) ----
+    {
+        auto game = std::make_unique<VecInput>(sine(8, 150, 0.25), 3 * R);   // "живе" джерело: є лише 3 с
+        std::vector<float> talk(static_cast<size_t>(8 * R), 0.0f);
+        const auto t = sine(2, 400, 0.3);
+        std::copy(t.begin(), t.end(), talk.begin() + 2 * R);
+        auto voice = std::make_unique<VecInput>(talk);
+        audio::FilteredInput d("гра", {{{game.get(), 1.0f}}, {{voice.get(), 1.0f}}}, false);
+        std::string err;
+        CHECK(d.open(audio::duck_filter(), nullptr, &err));
+        const int64_t a = d.available();
+        CHECK(a > 3 * R - 8192 && a <= 3 * R);   // не далі, ніж є звук гри
+        game->set_available(INT64_MAX);
+        std::vector<float> out(static_cast<size_t>(8 * R) * 2, 0.0f);
+        for (int64_t at = 0; at < 8 * R; at += 4096)
+            d.mix(at, out.data() + at * 2, static_cast<size_t>(std::min<int64_t>(4096, 8 * R - at)), 1.0f);
+        const double before = rms_db(out, 0.5, 1.5, 2), during = rms_db(out, 3.0, 3.8, 2), after = rms_db(out, 6.5, 7.5, 2);
+        CHECK(during < before - 6);
+        CHECK(std::abs(after - before) < 1.0 && std::abs(before - 20 * std::log10(0.25 / std::sqrt(2.0))) < 0.5);
+    }
+
+    // ---- змішувач: фільтр доріжки віддає рівно стільки кадрів, скільки треба, і без зсуву ----
+    {
+        std::vector<float> ramp(static_cast<size_t>(3 * R));
+        for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<float>(i % 1000) / 2000.0f;
+        std::vector<std::unique_ptr<audio::AudioInput>> inputs;
+        inputs.push_back(std::make_unique<VecInput>(ramp));
+        audio::AudioInput* src = inputs.back().get();
+        std::vector<audio::AudioTrackPlan> tracks = {{"з фільтром", {{src, 1.0f}}, "volume=0.5"},
+                                                     {"без", {{src, 1.0f}}, ""}};
+        audio::AudioMixer mixer(std::move(inputs), std::move(tracks));
+        std::vector<std::vector<float>> got(2);
+        auto sink = [&](size_t t, const float* d, size_t n) { got[t].insert(got[t].end(), d, d + n * 2); };
+        const int64_t total = 2 * R + 123;
+        mixer.produce(R, sink);
+        mixer.produce(total, sink);
+        mixer.flush(total, sink);
+        CHECK(got[0].size() == static_cast<size_t>(total) * 2 && got[1].size() == static_cast<size_t>(total) * 2);
+        bool aligned = got[0].size() == got[1].size();
+        for (size_t i = 0; aligned && i < got[0].size(); i += 777) aligned = std::abs(got[0][i] - got[1][i] * 0.5f) < 1e-4f;
+        CHECK(aligned);
+    }
+}
+
 static void test_rtx_profile() {
     std::printf("[rtx profile]\n");
     namespace fs = std::filesystem;
@@ -938,6 +1149,7 @@ int main(int argc, char** argv) {
     test_driver_cfg();
     test_rtx_profile();
     test_chat_and_markers();
+    test_audio_filters();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

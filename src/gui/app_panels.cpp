@@ -88,6 +88,46 @@ void App::draw_info_panel() {
     (void)fs_;
 }
 
+void App::listen_voice(const voice::SpeakerTrack& sp) {
+    if (clip_future_.valid()) return;   // попередній уривок ще готується
+    player_.stop();
+    playing_key_.clear();
+    clip_key_ = sp.key;
+    // voices_ тримає доріжку живою, поки уривок готується у фоні
+    auto voices = voices_;
+    const voice::SpeakerTrack* track = &sp;
+    const render::RenderSettings settings = s_;
+    const int64_t from =
+        analysis_ ? static_cast<int64_t>(std::llround(std::max(0, s_.start_tick) * static_cast<double>(analysis_->tick_interval) *
+                                                      voice::kVoiceRate))
+                  : 0;
+    clip_future_ = std::async(std::launch::async, [voices, track, settings, from] {
+        std::vector<audio::VoiceCleanup> fx;
+        std::atomic<bool> cancel{false};
+        if (render::needs_voice_cleanup(settings)) fx = render::voice_cleanup_for(settings, {track}, cancel);
+        return audio::make_voice_clip(*track, from, fx.empty() ? nullptr : &fx[0]);
+    });
+}
+
+void App::poll_voice_clip() {
+    if (playing_key_.size() && !player_.playing()) playing_key_.clear();
+    if (!clip_future_.valid() || clip_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    const audio::VoiceClip clip = clip_future_.get();
+    if (clip.mono.empty()) {
+        log_info("Прослуховування: у цього гравця немає мовлення");
+        return;
+    }
+    std::string err;
+    if (player_.play(clip.mono, &err)) {
+        playing_key_ = clip_key_;
+        log_info("Прослуховування: {} с мовлення з {} демо{}", static_cast<int>(std::lround(clip.speech_seconds)),
+                 format_duration(static_cast<double>(clip.start) / voice::kVoiceRate),
+                 render::needs_voice_cleanup(s_) ? " (з обробкою, як у відео)" : "");
+    } else {
+        log_warn("Прослуховування: {}", err);
+    }
+}
+
 void App::draw_voice_table() {
     ImGui::SeparatorText("Голоси в демо");
     if (!voices_ || voices_->speakers.empty()) {
@@ -98,6 +138,9 @@ void App::draw_voice_table() {
     const bool selectable = s_.voice_mode == "selected";
     std::vector<std::string> keys = split(s_.voice_selected, ',');
     for (auto& k : keys) k = trim(k);
+    std::vector<std::string> denoise_keys;
+    for (const auto& k : split(s_.voice_denoise_players, ','))
+        if (!trim(k).empty()) denoise_keys.push_back(trim(k));
     // Гучність окремих гравців: "key=gain; key2=gain" (лише відмінні від 100%)
     std::map<std::string, double> volumes;
     for (const auto& [k, v] : parse_key_values(s_.voice_volumes)) volumes[k] = parse_double(v).value_or(1.0);
@@ -109,8 +152,9 @@ void App::draw_voice_table() {
         mark_dirty();
     };
     bool has_local = false;
+    const float below = (!playing_key_.empty() || clip_future_.valid()) ? 3.5f : 2.5f;   // рядки під таблицею
     if (ImGui::BeginTable("##voices", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
-                          ImVec2(0, std::min(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.5f,
+                          ImVec2(0, std::min(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * below,
                                              ImGui::GetFrameHeightWithSpacing() * (voices_->speakers.size() + 1.3f))))) {
         ImGui::TableSetupColumn("Гравець", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("SteamID", ImGuiTableColumnFlags_WidthFixed);
@@ -141,9 +185,21 @@ void App::draw_voice_table() {
             ImGui::EndDisabled();
             ImGui::SameLine();
             const double vol = volumes.count(sp.key) ? volumes[sp.key] : 1.0;
+            const bool denoised = s_.voice_denoise ||
+                                  std::find(denoise_keys.begin(), denoise_keys.end(), sp.key) != denoise_keys.end();
             const ImVec4 name_col = vol <= 0.0 ? kColDim : sp.is_local ? kColAccent : ImGui::GetStyleColorVec4(ImGuiCol_Text);
             ImGui::TextColored(name_col, "%s%s", sp.name.c_str(), sp.is_local ? " (ви)" : "");
             if (ImGui::BeginPopupContextItem(("##vctx" + sp.key).c_str())) {
+                if (playing_key_ == sp.key) {
+                    if (ImGui::MenuItem("Зупинити прослуховування")) {
+                        player_.stop();
+                        playing_key_.clear();
+                    }
+                } else if (ImGui::MenuItem("Прослухати (15 с з початку фрагмента)", nullptr, false,
+                                           VoicePlayer::supported() && !clip_future_.valid())) {
+                    listen_voice(sp);
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Лише цей гравець (соло)", nullptr, false, !job_running())) {
                     s_.voice_mode = "selected";
                     s_.voice_selected = sp.key;
@@ -157,7 +213,21 @@ void App::draw_voice_table() {
                     volumes.erase(sp.key);
                     store_volumes();
                 }
+                ImGui::Separator();
+                if (ImGui::MenuItem(s_.voice_denoise ? "Шумодав (увімкнено для всіх)" : "Шумодав для цього гравця", nullptr,
+                                    denoised, !job_running() && !s_.voice_denoise)) {
+                    std::string list;
+                    for (const auto& k : denoise_keys)
+                        if (k != sp.key) list += (list.empty() ? "" : ",") + k;
+                    if (!denoised) list += (list.empty() ? "" : ",") + sp.key;
+                    s_.voice_denoise_players = list;
+                    mark_dirty();
+                }
                 ImGui::EndPopup();
+            }
+            if (denoised) {
+                ImGui::SameLine();
+                ImGui::TextColored(kColDim, "· шумодав");
             }
             ImGui::TableNextColumn();
             ImGui::TextColored(kColDim, "%s", sp.steamid64 ? format_steamid(sp.steamid64).c_str() : "—");
@@ -176,9 +246,26 @@ void App::draw_voice_table() {
         }
         ImGui::EndTable();
     }
+    // Прослуховування: чий голос грає і кнопка «Стоп»
+    auto speaker_name = [&](const std::string& key) {
+        for (const auto& sp : voices_->speakers)
+            if (sp.key == key) return sp.name.empty() ? sp.display_name() : sp.name;
+        return key;
+    };
+    if (!playing_key_.empty()) {
+        ImGui::TextColored(kColAccent, "Грає: %s  %s / %s", speaker_name(playing_key_).c_str(),
+                           format_duration(player_.position()).c_str(), format_duration(player_.duration()).c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Стоп##listen")) {
+            player_.stop();
+            playing_key_.clear();
+        }
+    } else if (clip_future_.valid()) {
+        ImGui::TextColored(kColDim, "Готую уривок голосу: %s...", speaker_name(clip_key_).c_str());
+    }
     if (!has_local)
         ImGui::TextColored(kColDim, "Вашого голосу немає (не було voice_loopback 1).");
-    if (!selectable) ImGui::TextColored(kColDim, "Правий клік на імені — соло; повзунок — гучність гравця.");
+    if (!selectable) ImGui::TextColored(kColDim, "Правий клік на імені — прослухати, соло, шумодав; повзунок — гучність.");
     ImGui::BeginDisabled(job_running());
     if (ImGui::Button("Зберегти голоси у файли...")) {
         auto d = pick_folder_dialog("Папка для голосів", path_to_utf8(path_from_utf8(s_.demo_path).parent_path()));

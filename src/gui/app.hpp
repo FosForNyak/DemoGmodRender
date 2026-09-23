@@ -15,6 +15,7 @@
 #include <atomic>
 #include <deque>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -23,12 +24,14 @@
 #include <thread>
 #include <vector>
 
+#include "core/audio/voice_preview.hpp"
 #include "core/game/gmod_install.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/render/jobs.hpp"
 #include "core/render/markers.hpp"
 #include "core/render/settings.hpp"
 #include "core/util/log.hpp"
+#include "voice_player.hpp"
 
 namespace gmdr::gui {
 
@@ -112,6 +115,9 @@ private:
     void start_watch(int32_t tick);
     void apply_watch_marks();
     void update_taskbar();
+    // Прослуховування голосу гравця (уривок з початку фрагмента, з обробкою як у відео)
+    void listen_voice(const voice::SpeakerTrack& sp);
+    void poll_voice_clip();
 
     // ---- стан ----
     render::RenderSettings                          s_;
@@ -160,6 +166,12 @@ private:
     float                                           tl_sel_from_ = 0;
     float                                           tl_ctx_time_ = 0;   // час під курсором для контекстного меню
     std::vector<render::Marker>                     markers_;
+
+    // Прослуховування голосу
+    VoicePlayer                                     player_;
+    std::future<audio::VoiceClip>                   clip_future_;
+    std::string                                     clip_key_;      // чий уривок готується
+    std::string                                     playing_key_;   // чий уривок грає
 
     // Вкладка «Чат»
     std::string chat_search_;

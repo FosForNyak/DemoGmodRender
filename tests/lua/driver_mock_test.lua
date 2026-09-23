@@ -174,6 +174,11 @@ local function run_scenario(name, opts)
 	env.IsInGame = function() return (not opts.no_ingame) and S.playing end
 	S.keys = {}
 	env.input = { IsKeyDown = function(k) return S.keys[k] == true end }
+	env.system = { HasFocus = function() return not S.unfocused end }
+	-- У стані меню TEXT_ALIGN_* немає (у _G тестового Lua їх теж немає)
+	env.ScrW = function() return 1280 end
+	env.Color = function(r, g, b, a) return { r, g, b, a } end
+	env.draw = { SimpleTextOutlined = function(text, font, x, y, col, xa, ya) S.hint_xalign = xa end }
 	env.IsInLoading = function() return S.loading_until ~= nil and now < S.loading_until end
 	env.hook = { Add = function(ev, id, fn) hooks[ev] = fn end }
 
@@ -206,6 +211,12 @@ local function run_scenario(name, opts)
 			if S.tick >= p.tick and S.tick < p.tick + 5 then S.keys[p.key] = true end
 		end
 		if S.game_ui_at and S.tick >= S.game_ui_at then S.ui_visible = 1 end
+		-- Гра у фоні (Alt+Tab): рушій щокадру знову відкриває своє меню; F9 в іншій програмі
+		S.unfocused = opts.unfocus and S.tick >= opts.unfocus[1] and S.tick < opts.unfocus[2] or false
+		if S.unfocused then
+			S.ui_visible = 1
+			if opts.unfocus[3] then S.keys[opts.unfocus[3]] = true end
+		end
 		if hooks.Think then hooks.Think() end
 		hooks.DrawOverlay()
 		now = now + 0.01
@@ -228,6 +239,7 @@ local function run_scenario(name, opts)
 		check(S.seeks == 1, "перемотано до місця перегляду")
 		check(not S.quit or opts.cancel_at, "гра не закривається сама після перегляду")
 		check(st.state == (opts.cancel_at and "quit" or "done"), "підсумковий статус (" .. tostring(st.state) .. ")")
+		check(S.hint_xalign == 1, "підказка по центру екрана (" .. tostring(S.hint_xalign) .. ")")
 		if opts.verbose then for _, l in ipairs(log) do print("     " .. l) end end
 		return
 	end
@@ -273,6 +285,9 @@ run_scenario("перегляд у грі з позначками F9/F11/F6", { c
 	press = { { tick = 320, key = 100, kind = "start" }, { tick = 400, key = 97, kind = "mark" }, { tick = 500, key = 102, kind = "end" } } })
 run_scenario("перегляд закрито з програми", { cfg_loaded = true, watch = true, start_tick = 300, seek_tick = 250,
 	press = { { tick = 350, key = 100, kind = "start" } }, cancel_at = 600 })
+run_scenario("перегляд: гра у фоні, меню гри не закриває демо після повернення", { cfg_loaded = true, watch = true,
+	start_tick = 300, seek_tick = 250, unfocus = { 330, 420, 100 },
+	press = { { tick = 320, key = 97, kind = "mark" }, { tick = 450, key = 102, kind = "end" } } })
 
 print(failures == 0 and "\nУСІ СЦЕНАРІЇ ПРОЙДЕНО" or ("\nПРОВАЛІВ: " .. failures))
 os.exit(failures == 0 and 0 or 1)

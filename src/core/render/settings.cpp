@@ -16,7 +16,8 @@ namespace gmdr::render {
     X(video_options) X(scaler) X(accurate_color) X(full_range) X(gop_seconds) X(audio) X(audio_codec) \
     X(audio_bitrate) X(sample_rate) X(game_audio) X(game_volume) X(game_audio_offset) X(voice_mode)   \
     X(voice_selected) X(voice_volume) X(voice_delay) X(voice_volumes) X(separate_tracks) X(mic_file) \
-    X(mic_offset) X(mic_volume) X(output_path) X(container) X(faststart) X(crash_safe)              \
+    X(mic_offset) X(mic_volume) X(voice_level) X(voice_denoise) X(voice_denoise_players) X(duck_game) \
+    X(loudness_target) X(output_path) X(container) X(faststart) X(crash_safe)                         \
     X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files)
 
 namespace {

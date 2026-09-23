@@ -70,6 +70,13 @@ jobs:
           $chapters
           if (@($chapters).Count -ne 3) { throw "очікувалось 3 розділи" }
           if (-not (Select-String -Path ($mkv -replace '\.mkv$', '.srt') -Pattern "Friend: " -Quiet)) { throw "немає чату в субтитрах" }
+          # Обробка звуку: вирівнювання, шумодав, приглушення гри, гучність -14 LUFS
+          $fx = "$PWD\build\out_fx.mkv"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $fx --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --level-voices --denoise --duck-game --loudness -14
+          if ($LASTEXITCODE -ne 0) { throw "рендер з обробкою звуку не вдався" }
+          $r128 = & third_party\ffmpeg\bin\ffmpeg.exe -hide_banner -nostats -i $fx -map 0:a:0 -af ebur128=framelog=quiet -f null - 2>&1 | Out-String
+          if ($r128 -notmatch "I:\s+(-?[\d\.]+) LUFS" -or [math]::Abs([double]$matches[1] + 14) -gt 1.5) { $r128; throw "гучність не -14 LUFS" }
           # Перегляд у грі: імітатор сам "натискає" F9/F6/F11
           $watch = & build\gmdr-cli.exe watch build\td\test24.dem --from 2 --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" --menu-delay 1
           if ($LASTEXITCODE -ne 0) { throw "перегляд не вдався" }
@@ -97,7 +104,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libswresample-dev libglfw3-dev libgl-dev ffmpeg python3
+            libswresample-dev libavfilter-dev libglfw3-dev libgl-dev ffmpeg python3 lua5.1
 
       - name: Збірка
         run: |
@@ -116,6 +123,10 @@ jobs:
           python3 tests/tools/make_test_demo.py build/td/test2026.dem build/td/truth2026.json --pe-bits 24 --compress-userinfo --gmod2026
           ./build/gmdr-tests build/td
 
+      - name: Lua-драйвер (імітація меню GMod)
+        if: matrix.sanitize == ''
+        run: lua5.1 tests/lua/driver_mock_test.lua src/core/game/gmdr_driver.lua
+
   fuzz:
     runs-on: ubuntu-24.04
     steps:
@@ -125,7 +136,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build clang libclang-rt-18-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libswresample-dev ffmpeg python3
+            libswresample-dev libavfilter-dev ffmpeg python3
 
       - name: Збірка фазера
         run: |

@@ -131,6 +131,7 @@ local MARK_KEYS = {
 }
 local keyWasDown = {}
 local hintText, hintUntil = "", 0
+local HasFocus = system and system.HasFocus
 
 local function Hint( text, seconds )
 	hintText = text
@@ -145,6 +146,7 @@ end
 local function PollMarkKeys()
 	if not input or not input.IsKeyDown then return end
 	if gui.IsGameUIVisible() then return end   -- у меню гри клавіші не рахуються
+	if HasFocus and not HasFocus() then return end   -- F9 в іншій програмі — не позначка
 	for _, m in ipairs( MARK_KEYS ) do
 		local ok, down = pcall( input.IsKeyDown, m.key )
 		down = ok and down or false
@@ -162,8 +164,9 @@ end
 
 local function DrawHint()
 	if SysTime() > hintUntil or not draw or not draw.SimpleTextOutlined then return end
+	-- У стані меню TEXT_ALIGN_* не визначені: без запасних чисел текст ліг би від центру вправо
 	pcall( draw.SimpleTextOutlined, "GMod Demo Render — " .. hintText, "DermaLarge", ScrW() / 2, 60,
-		Color( 255, 255, 255 ), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color( 0, 0, 0, 200 ) )
+		Color( 255, 255, 255 ), TEXT_ALIGN_CENTER or 1, TEXT_ALIGN_TOP or 3, 2, Color( 0, 0, 0, 200 ) )
 end
 
 file.CreateDir( "gmdr" )
@@ -174,8 +177,12 @@ SetState( "menu" )
 -- відео через кадр. Think спрацьовує раніше, до малювання кадру.
 hook.Add( "Think", "GMDR_HideGameUI", function()
 	if watch then
-		-- Під час перегляду гра у фокусі: меню гри відкриває сам гравець (Esc), його не чіпаємо
-		if state == "watching" then PollMarkKeys() end
+		-- Меню, відкрите гравцем (Esc), не чіпаємо. Але без фокуса рушій відкриває його сам, і
+		-- після повернення в гру воно закривало б демо, доки гравець не натисне Esc.
+		if state == "watching" then
+			if HasFocus and not HasFocus() and gui.IsGameUIVisible() then gui.HideGameUI() end
+			PollMarkKeys()
+		end
 		return
 	end
 	if ( state == "arming" or state == "recording" or ( state == "loading" and DemoVisible() ) ) and gui.IsGameUIVisible() then

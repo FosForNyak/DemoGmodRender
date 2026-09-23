@@ -189,6 +189,43 @@ std::vector<float> speaker_gains(const RenderSettings& s, const std::vector<cons
     return gains;
 }
 
+bool denoise_speaker(const RenderSettings& s, const std::string& key) {
+    if (s.voice_denoise) return true;
+    for (const auto& k : split(s.voice_denoise_players, ','))
+        if (trim(k) == key) return true;
+    return false;
+}
+
+} // namespace
+
+// Обробка голосу: мовлення кожного гравця аналізується заздалегідь (гучність за EBU R128,
+// рівні фону і мови), щоб вирівняти гучність і поставити гейту поріг саме цього гравця.
+std::vector<audio::VoiceCleanup> voice_cleanup_for(const RenderSettings& s,
+                                                   const std::vector<const voice::SpeakerTrack*>& speakers,
+                                                   const std::atomic<bool>& cancel) {
+    std::vector<audio::VoiceCleanup> out(speakers.size());
+    for (size_t i = 0; i < speakers.size() && !cancel; ++i) {
+        auto& c = out[i];
+        c.denoise = denoise_speaker(s, speakers[i]->key);
+        if (!s.voice_level && !c.denoise) continue;
+        c.profile = audio::profile_voice(*speakers[i]);
+        if (s.voice_level) c.level = audio::level_gain(c.profile);
+        if (c.profile.valid())
+            log_info("Голос {}: {:.1f} LUFS, фон {:.0f} дБ, мова {:.0f} дБ{}", speakers[i]->display_name(),
+                     c.profile.loudness, c.profile.noise_db, c.profile.speech_db,
+                     s.voice_level ? std::format(", підсилення {:+.1f} дБ", 20.0 * std::log10(c.level)) : std::string());
+        else
+            log_info("Голос {}: замало мовлення для аналізу — без обробки", speakers[i]->display_name());
+    }
+    return out;
+}
+
+bool needs_voice_cleanup(const RenderSettings& s) {
+    return s.voice_level || s.voice_denoise || !trim(s.voice_denoise_players).empty();
+}
+
+namespace {
+
 // Чи це MP4/MOV (для фрагментованого запису і переупаковки).
 bool is_mov_family(const std::string& path, const std::string& container) {
     const std::string c = to_lower(container);
@@ -531,6 +568,12 @@ void ExportVoicesJob::run() {
 
     std::error_code ec;
     fs::create_directories(dir_, ec);
+    // Та сама обробка голосу, що й у відео (вирівнювання гучності, шумодав)
+    std::vector<audio::VoiceCleanup> voice_fx;
+    if (needs_voice_cleanup(s_)) {
+        set_stage("Аналіз голосу гравців");
+        voice_fx = voice_cleanup_for(s_, speakers, cancel_);
+    }
     set_stage("Збереження голосів", 0);
     std::vector<double> part(speakers.size(), 0.0);
     std::mutex pm;
@@ -543,6 +586,35 @@ void ExportVoicesJob::run() {
             const auto* sp = speakers[i];
             const fs::path file =
                 dir_ / path_from_utf8(sanitize_filename(sp->name + "_" + std::to_string(sp->steamid64)) + ext);
+            // Оброблений голос: VoiceInput (позиції = семпли демо) за шумодавом і гейтом
+            std::unique_ptr<audio::AudioInput> processed;
+            float level = 1.0f;
+            if (i < voice_fx.size()) {
+                const auto& cl = voice_fx[i];
+                level = cl.level;
+                auto vi = std::make_unique<audio::VoiceInput>(sp, 0, 0.0);
+                if (cl.denoise && cl.profile.valid()) {
+                    auto f = std::make_unique<audio::FilteredInput>(
+                        vi->name(), std::vector<std::vector<audio::TrackSource>>{{{vi.get(), 1.0f}}}, true);
+                    const audio::GateParams gp = audio::gate_for(cl.profile);
+                    std::string ferr;
+                    if (f->open(audio::denoise_filter(cl.profile.noise_db), &gp, &ferr) || f->open({}, &gp, &ferr)) {
+                        f->start_at(from);
+                        f->own(std::move(vi));
+                        processed = std::move(f);
+                    }
+                }
+                if (!processed) processed = std::move(vi);
+            }
+            std::vector<float> stereo;
+            voice::VoiceFill fill;
+            if (processed)
+                fill = [&](int64_t pos, size_t n, float* out) {
+                    stereo.assign(n * 2, 0.0f);
+                    processed->mix(pos, stereo.data(), n, level);
+                    for (size_t k = 0; k < n; ++k) out[k] += stereo[k * 2];
+                    processed->discard_before(pos + static_cast<int64_t>(n));
+                };
             std::string err;
             const bool ok = voice::export_speaker_audio(*sp, file, from, to, &err, &cancel_, [&](double f) {
                 std::lock_guard lock(pm);
@@ -550,7 +622,7 @@ void ExportVoicesJob::run() {
                 double sum = 0;
                 for (double x : part) sum += x;
                 update([&](Progress& p) { p.fraction = sum / static_cast<double>(part.size()); });
-            });
+            }, fill);
             if (ok) {
                 ++ok_count;
                 log_info("Збережено: {}", path_to_utf8(file));
@@ -785,6 +857,11 @@ void RenderJob::run() {
     }
     std::vector<const voice::SpeakerTrack*> speakers;
     if (voices_) speakers = select_speakers(s_, *voices_);
+    std::vector<audio::VoiceCleanup> voice_fx;
+    if (!speakers.empty() && needs_voice_cleanup(s_)) {
+        set_stage("Аналіз голосу гравців");
+        voice_fx = voice_cleanup_for(s_, speakers, cancel_);
+    }
 
     // Повний відрізок (для прогнозу в тестовому прогоні) і відрізок цього запуску
     const int32_t full_start = std::max(0, s_.start_tick);
@@ -1191,6 +1268,9 @@ void RenderJob::run() {
                 spec.mic_file = s_.mic_file.empty() ? fs::path() : path_from_utf8(s_.mic_file);
                 spec.mic_offset = s_.mic_offset;
                 spec.mic_gain = static_cast<float>(s_.mic_volume);
+                spec.voice_cleanup = voice_fx;
+                spec.duck_game = s_.duck_game;
+                spec.loudness_target = s_.loudness_target;
                 if (!session.begin(img.width, img.height, spec, &err)) {
                     fatal("Не вдалося почати кодування: " + err);
                     return;
@@ -1646,6 +1726,11 @@ void EncodeFramesJob::run() {
     EncodeSession session(es, &pool, preview_.get());
     std::vector<const voice::SpeakerTrack*> speakers;
     if (voices_) speakers = select_speakers(s_, *voices_);
+    std::vector<audio::VoiceCleanup> voice_fx;
+    if (!speakers.empty() && needs_voice_cleanup(s_)) {
+        set_stage("Аналіз голосу гравців");
+        voice_fx = voice_cleanup_for(s_, speakers, cancel_);
+    }
 
     int64_t total_files = 0;
     for (fs::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec))
@@ -1680,6 +1765,9 @@ void EncodeFramesJob::run() {
             spec.mic_file = s_.mic_file.empty() ? fs::path() : path_from_utf8(s_.mic_file);
             spec.mic_offset = s_.mic_offset;
             spec.mic_gain = static_cast<float>(s_.mic_volume);
+            spec.voice_cleanup = voice_fx;
+            spec.duck_game = s_.duck_game;
+            spec.loudness_target = s_.loudness_target;
             if (!session.begin(img.width, img.height, spec, &err)) {
                 fail("Не вдалося почати кодування: " + err);
                 return;

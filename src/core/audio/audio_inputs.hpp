@@ -8,6 +8,8 @@
 //   VoiceInput      — декодований голос гравця з демо
 //   FileAudioInput  — довільний аудіофайл (напр. запис мікрофона), будь-який
 //                     формат, який читає FFmpeg (wav, mp3, ogg, flac, m4a ...)
+//   FilteredInput   — інші джерела, пропущені через обробку: шумодав і гейт
+//                     для голосу, приглушення гри голосами
 // =============================================================================
 #pragma once
 
@@ -20,6 +22,8 @@
 
 #include "../media/ffmpeg_util.hpp"
 #include "../voice/voice_decoder.hpp"
+#include "audio_filter.hpp"
+#include "voice_clean.hpp"
 #include "wav.hpp"
 
 namespace gmdr::audio {
@@ -126,9 +130,51 @@ struct TrackSource {
     float       gain = 1.0f;
 };
 
+// Джерело, пропущене через обробку: фільтри FFmpeg (шумодав; приглушення гри голосами —
+// тоді другий вхід фільтра — сума голосів) і/або гейт тиші між фразами. Входи — суми
+// джерел, як доріжки змішувача. Обробка йде послідовно вперед, а результат читається за
+// позицією, як з будь-якого джерела; затримку фільтрів враховано (available() менше).
+class FilteredInput final : public AudioInput {
+public:
+    FilteredInput(std::string name, std::vector<std::vector<TrackSource>> inputs, bool mono);
+    // chain — фільтри FFmpeg (може бути порожнім), gate — гейт (лише для моно).
+    bool open(const std::string& chain, const GateParams* gate, std::string* error);
+    // Віддати джерело у володіння (його більше ніхто не читає — напр. голос за шумодавом).
+    void own(std::unique_ptr<AudioInput> in) { owned_.push_back(std::move(in)); }
+    // Почати обробку з позиції pos, а не з 0 (до першого читання). Раніше — тиша.
+    void start_at(int64_t pos) { fed_ = buf_start_ = gated_end_ = origin_ = pos; }
+    std::string name() const override { return name_; }
+    int64_t available() override;
+    void mix(int64_t pos, float* out, size_t frames, float gain) override;
+    void discard_before(int64_t pos) override;
+    void set_finished() override;
+
+private:
+    int64_t source_available();
+    int64_t ready_end() const;
+    void    produce_until(int64_t end, int64_t avail);
+    void    feed_chunk(size_t n);
+    void    fail(const std::string& why);
+
+    std::string                              name_;
+    std::vector<std::vector<TrackSource>>    inputs_;
+    std::vector<std::unique_ptr<AudioInput>> owned_;
+    size_t                                   ch_;
+    std::unique_ptr<AudioFilterChain>        chain_;
+    std::unique_ptr<NoiseGate>               gate_;
+    bool                                     failed_ = false;
+    int64_t                                  origin_ = 0;      // позиція, з якої почали (= 0 у фільтрі)
+    int64_t                                  fed_ = 0;         // до якої позиції подано на входи
+    std::vector<float>                       buf_;             // результат (ch_ каналів) від buf_start_
+    int64_t                                  buf_start_ = 0;
+    int64_t                                  gated_end_ = 0;   // до цієї позиції гейт уже відпрацював
+    std::vector<float>                       tmp_, mono_;
+};
+
 struct AudioTrackPlan {
     std::string              title;
     std::vector<TrackSource> sources;
+    std::string              post_filter;   // фільтри FFmpeg для готової доріжки (loudnorm); порожньо — без
 };
 
 // Змішує кілька доріжок з набору джерел і віддає результат шматками.
@@ -143,6 +189,7 @@ public:
     // Скільки можна змішати зараз (мінімум доступності всіх джерел).
     int64_t ready_until();
     // Змішати [position, until) і для кожної доріжки викликати sink(track, дані, кадри).
+    // Доріжка з post_filter віддається із затримкою фільтра — решту віддасть flush().
     template <class Sink>
     void produce(int64_t until, Sink&& sink) {
         std::vector<float> buf;
@@ -151,22 +198,77 @@ public:
             for (size_t t = 0; t < tracks_.size(); ++t) {
                 buf.assign(n * 2, 0.0f);
                 for (const auto& src : tracks_[t].sources) src.input->mix(pos_, buf.data(), n, src.gain);
-                soft_limit(buf);
+                if (post_[t]) {
+                    std::string err;
+                    if (post_[t]->push(0, buf.data(), n, &err)) {
+                        emit_post(t, pos_ + static_cast<int64_t>(n), sink);
+                        continue;
+                    }
+                    drop_post(t, err, sink);
+                }
+                soft_limit(buf.data(), buf.size());
                 sink(t, buf.data(), n);
+                emitted_[t] = pos_ + static_cast<int64_t>(n);
             }
             pos_ += static_cast<int64_t>(n);
             for (auto& in : inputs_) in->discard_before(pos_);
+        }
+    }
+    // Кінець: віддати те, що ще тримають фільтри доріжок, рівно до total кадрів.
+    template <class Sink>
+    void flush(int64_t total, Sink&& sink) {
+        for (size_t t = 0; t < tracks_.size(); ++t) {
+            if (post_[t]) {
+                std::string err;
+                if (post_[t]->finish(&err)) emit_post(t, total, sink);
+                else drop_post(t, err, sink);
+            }
+            pad_to(t, total, sink);
         }
     }
     void set_finished();
     std::vector<std::unique_ptr<AudioInput>>& inputs() { return inputs_; }
 
 private:
-    static void soft_limit(std::vector<float>& b);
+    static void soft_limit(float* b, size_t n);
 
-    std::vector<std::unique_ptr<AudioInput>> inputs_;
-    std::vector<AudioTrackPlan>              tracks_;
-    int64_t                                  pos_ = 0;
+    template <class Sink>
+    void emit_post(size_t t, int64_t limit, Sink& sink) {
+        AudioFilterChain& c = *post_[t];
+        const int64_t from = std::max(emitted_[t], c.out_start());
+        const int64_t to = std::min(c.out_end(), limit);
+        if (from > emitted_[t]) pad_to(t, from, sink);
+        if (to <= from) return;
+        out_.assign(c.out_at(from), c.out_at(to));
+        soft_limit(out_.data(), out_.size());
+        sink(t, out_.data(), static_cast<size_t>(to - from));
+        emitted_[t] = to;
+        c.discard_before(to);
+    }
+    // Фільтр доріжки зламався: те, що він тримав, стає тишею, далі — без фільтра.
+    template <class Sink>
+    void drop_post(size_t t, const std::string& err, Sink& sink) {
+        log_post_failure(t, err);
+        post_[t].reset();
+        pad_to(t, pos_, sink);
+    }
+    template <class Sink>
+    void pad_to(size_t t, int64_t end, Sink& sink) {
+        while (emitted_[t] < end) {
+            const size_t n = static_cast<size_t>(std::min<int64_t>(end - emitted_[t], 4096));
+            out_.assign(n * 2, 0.0f);
+            sink(t, out_.data(), n);
+            emitted_[t] += static_cast<int64_t>(n);
+        }
+    }
+    void log_post_failure(size_t t, const std::string& err) const;
+
+    std::vector<std::unique_ptr<AudioInput>>        inputs_;
+    std::vector<AudioTrackPlan>                     tracks_;
+    std::vector<std::unique_ptr<AudioFilterChain>>  post_;
+    std::vector<int64_t>                            emitted_;   // скільки кадрів віддано по кожній доріжці
+    std::vector<float>                              out_;
+    int64_t                                         pos_ = 0;
 };
 
 } // namespace gmdr::audio

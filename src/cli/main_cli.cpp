@@ -92,6 +92,10 @@ static void print_usage() {
   --voice all|local|others|none|selected  --voice-keys steam:7656...,slot:3
   --voice-volume 1.0  --voice-delay СЕКУНД  --separate-tracks  --engine-voice
   --player-volume "steam:7656...=1.5; slot:3=0"   гучність окремих гравців (0 — вимкнути)
+  --level-voices         вирівняти гучність гравців (кожного — до -18 LUFS)
+  --denoise              шумодав і тиша між фразами для всіх гравців; --denoise-player steam:7656...,slot:3 — для вибраних
+  --duck-game            звук гри стихає, коли хтось говорить
+  --loudness LUFS|off    гучність загального міксу за EBU R128 (-14 — YouTube, -23 — ТБ)
   --srt                  субтитри «хто говорить» (.srt поруч із відео)
   --chat-srt             субтитри з чатом гри (.srt; разом із --srt — .chat.srt)
   --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
@@ -142,7 +146,7 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--no-audio", "--no-game-audio", "--separate-tracks", "--engine-voice", "--full-range",
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
-                               "--chat-srt", "--no-chapters"};
+                               "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -251,6 +255,20 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");
     if (c.has("--chat-srt")) s.chat_srt = true;
     if (c.has("--no-chapters")) s.chapters = false;
+    if (c.has("--level-voices")) s.voice_level = true;
+    if (c.has("--denoise")) s.voice_denoise = true;
+    if (c.has("--denoise-player")) s.voice_denoise_players = c.get("--denoise-player");
+    if (c.has("--duck-game")) s.duck_game = true;
+    if (c.has("--loudness")) {
+        const std::string v = to_lower(c.get("--loudness"));
+        if (v == "off" || v == "0") {
+            s.loudness_target = 0;
+        } else {
+            auto l = parse_double(v);
+            if (!l || *l > -5 || *l < -70) { err = "--loudness: число LUFS від -70 до -5 (напр. -14) або off"; return false; }
+            s.loudness_target = *l;
+        }
+    }
     if (a) {
         if (c.has("--markers")) {
             std::vector<render::Marker> list;
@@ -465,7 +483,7 @@ static int cmd_watch(const Cli& c) {
 static int cmd_voice(const Cli& c) {
     if (c.positional.empty() || !c.has("--output")) {
         std::puts("Використання: gmdr-cli voice <demo.dem> -o <папка> [--voice all|local|others] [--voice-keys ...]\n"
-                  "                      [--start СЕКУНД] [--end СЕКУНД]");
+                  "                      [--start СЕКУНД] [--end СЕКУНД] [--level-voices] [--denoise]");
         return 1;
     }
     auto a = std::make_shared<demo::DemoAnalysis>();

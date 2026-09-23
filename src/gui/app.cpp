@@ -225,6 +225,8 @@ void App::detect_gmod(bool force) {
 
 // ================================= Дії ============================================
 void App::load_demo(const std::string& path_in) {
+    player_.stop();
+    playing_key_.clear();
     // Повний шлях з "рідними" розділювачами (на Windows — "\"), щоб і шлях до
     // відео поруч виглядав охайно.
     std::error_code aec;
@@ -354,6 +356,7 @@ void App::set_container(const std::string& ext) {
 }
 
 void App::poll() {
+    poll_voice_clip();
     // Аналіз демо завершився?
     if (analyze_job_ && !analyze_job_->running() && !analysis_) {
         if (analyze_job_->state() == render::JobState::Succeeded) {
@@ -609,6 +612,16 @@ void App::draw_settings_tabs() {
     }
     ImGui::EndTabBar();
     forced_tab = -1;
+    // GMDR_TEST_SCROLL=0..1 — прокрутити панель налаштувань (частка від кінця) у перших кадрах
+    static const double forced_scroll = [] {
+        const char* e = std::getenv("GMDR_TEST_SCROLL");
+        return e ? std::atof(e) : -1.0;
+    }();
+    static int scroll_frames = 60;
+    if (forced_scroll >= 0 && scroll_frames > 0) {
+        --scroll_frames;
+        ImGui::SetScrollY(ImGui::GetScrollMaxY() * static_cast<float>(forced_scroll));
+    }
 }
 
 void App::update_taskbar() {

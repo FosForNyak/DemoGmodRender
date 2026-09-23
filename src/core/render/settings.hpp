@@ -76,6 +76,11 @@ struct RenderSettings {
     std::string mic_file;
     double      mic_offset = 0.0;         // с
     double      mic_volume = 1.0;
+    bool        voice_level = false;      // вирівняти гучність гравців (кожного — до однакового рівня за EBU R128)
+    bool        voice_denoise = false;    // шумодав і тиша між фразами для всіх гравців
+    std::string voice_denoise_players;    // ... або лише для цих (ключі через кому)
+    bool        duck_game = false;        // гра стихає, коли хтось говорить
+    double      loudness_target = 0;      // гучність загального міксу, LUFS (-14 для YouTube); 0 — не змінювати
 
     // ---- Вихід ----
     std::string output_path;

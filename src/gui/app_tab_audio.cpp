@@ -145,6 +145,52 @@ void App::draw_tab_audio() {
     changed |= ImGui::Checkbox("Окремі звукові доріжки (для монтажу)", &s_.separate_tracks);
     help_marker("Крім загального міксу, у файл буде записано окремі доріжки: гра, кожен гравець, мікрофон. Зручно для Premiere/DaVinci Resolve.");
 
+    ImGui::SeparatorText("Обробка звуку");
+    ImGui::BeginDisabled(s_.voice_mode == "none");
+    changed |= ImGui::Checkbox("Вирівняти гучність гравців", &s_.voice_level);
+    help_marker("Кожного гравця доводимо до однакової гучності (-18 LUFS за EBU R128), виміряної по всьому його "
+                "мовленню в демо: тихих стає чутно, гучні не оглушують. Підсилення постійне, без «дихання». "
+                "Повзунки гучності в таблиці голосів діють поверх цього.");
+    changed |= ImGui::Checkbox("Шумодав для всіх гравців", &s_.voice_denoise);
+    help_marker("Прибирає шипіння мікрофона (фільтр afftdn) і глушить фон між фразами (гейт). Поріг рахується "
+                "для кожного гравця з його ж мовлення, тож тихі гравці не обрізаються. Якщо фон за гучністю як "
+                "мова (музика чи гра в мікрофон), гейт майже не спрацює.\n"
+                "Лише для окремих гравців — правий клік на імені в таблиці голосів.");
+    if (!s_.voice_denoise) {
+        size_t n = 0;
+        for (const auto& k : split(s_.voice_denoise_players, ','))
+            if (!trim(k).empty()) ++n;
+        if (n > 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(kColDim, "(зараз — для %zu гравц%s)", n, n == 1 ? "я" : "ів");
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(!s_.game_audio || s_.voice_mode == "none");
+    changed |= ImGui::Checkbox("Приглушувати звук гри, коли хтось говорить", &s_.duck_game);
+    help_marker("Постріли й музика стихають, поки звучить голос, і плавно повертаються після фрази "
+                "(фільтр sidechaincompress). Окрема доріжка гри для монтажу лишається без змін.");
+    ImGui::EndDisabled();
+    label("Гучність результату", lw);
+    ImGui::SetNextItemWidth(ww * 0.55f);
+    const std::pair<double, const char*> targets[] = {{0.0, "Не змінювати"},
+                                                      {-14.0, "-14 LUFS (YouTube, стрімінг)"},
+                                                      {-16.0, "-16 LUFS (подкасти)"},
+                                                      {-23.0, "-23 LUFS (EBU R128, ТБ)"}};
+    std::string target_label = std::format("{:.0f} LUFS", s_.loudness_target);
+    for (const auto& [v, t] : targets)
+        if (std::abs(s_.loudness_target - v) < 0.05) target_label = t;
+    if (ImGui::BeginCombo("##loud", target_label.c_str())) {
+        for (const auto& [v, t] : targets)
+            if (ImGui::Selectable(t, std::abs(s_.loudness_target - v) < 0.05)) {
+                s_.loudness_target = v;
+                changed = true;
+            }
+        ImGui::EndCombo();
+    }
+    help_marker("Загальний мікс доводиться до цієї гучності за EBU R128 (фільтр loudnorm), з обмеженням "
+                "піків -1.5 dBTP. YouTube і стрімінгові сервіси самі приглушують гучніше -14 LUFS.");
+
     ImGui::SeparatorText("Власний мікрофон (окремий запис)");
     ImGui::TextWrapped("Ваш власний голос є в демо, лише якщо під час запису було ввімкнено voice_loopback 1. Інакше можна додати окремий запис мікрофона (OBS, Audacity тощо).");
     label("Файл", lw);

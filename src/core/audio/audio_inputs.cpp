@@ -247,9 +247,137 @@ void FileAudioInput::discard_before(int64_t pos) {
     buf_start_ += drop;
 }
 
+// ============================== FilteredInput ===================================
+FilteredInput::FilteredInput(std::string name, std::vector<std::vector<TrackSource>> inputs, bool mono)
+    : name_(std::move(name)), inputs_(std::move(inputs)), ch_(mono ? 1 : 2) {}
+
+bool FilteredInput::open(const std::string& chain, const GateParams* gate, std::string* error) {
+    chain_.reset();
+    if (!chain.empty()) {
+        auto c = std::make_unique<AudioFilterChain>();
+        if (!c->open(chain, static_cast<int>(inputs_.size()), static_cast<int>(ch_), error)) return false;
+        chain_ = std::move(c);
+    }
+    if (gate && ch_ == 1) gate_ = std::make_unique<NoiseGate>(*gate);
+    return true;
+}
+
+void FilteredInput::fail(const std::string& why) {
+    if (failed_) return;
+    failed_ = true;
+    log_warn("Обробку «{}» вимкнено ({}) — далі без неї", name_, why);
+}
+
+int64_t FilteredInput::source_available() {
+    int64_t a = INT64_MAX;
+    for (const auto& in : inputs_)
+        for (const auto& s : in) a = std::min(a, s.input->available());
+    return a;
+}
+
+int64_t FilteredInput::ready_end() const {
+    return gate_ ? gated_end_ : buf_start_ + static_cast<int64_t>(buf_.size() / ch_);
+}
+
+void FilteredInput::feed_chunk(size_t n) {
+    for (size_t i = 0; i < inputs_.size(); ++i) {
+        tmp_.assign(n * 2, 0.0f);
+        for (const auto& s : inputs_[i]) s.input->mix(fed_, tmp_.data(), n, s.gain);
+        const float* data = tmp_.data();
+        if (ch_ == 1) {
+            mono_.resize(n);
+            for (size_t k = 0; k < n; ++k) mono_[k] = tmp_[k * 2];
+            data = mono_.data();
+        }
+        if (chain_) {
+            std::string err;
+            if (!chain_->push(static_cast<int>(i), data, n, &err)) return fail(err);
+        } else if (i == 0) {
+            buf_.insert(buf_.end(), data, data + n * ch_);
+        }
+    }
+    fed_ += static_cast<int64_t>(n);
+    for (auto& o : owned_) o->discard_before(fed_);
+    if (chain_) {
+        // Новий результат фільтрів — у свій буфер (за позиціями)
+        const int64_t have = buf_start_ + static_cast<int64_t>(buf_.size() / ch_);
+        const int64_t end = chain_->out_end() + origin_;
+        if (end > have) {
+            const int64_t from = std::max(have, chain_->out_start() + origin_);
+            if (from > have) buf_.resize(buf_.size() + static_cast<size_t>(from - have) * ch_, 0.0f);
+            buf_.insert(buf_.end(), chain_->out_at(from - origin_), chain_->out_at(end - origin_));
+        }
+        chain_->discard_before(end - origin_);
+    }
+    if (gate_) {
+        const int64_t can = buf_start_ + static_cast<int64_t>(buf_.size()) - static_cast<int64_t>(gate_->lookahead());
+        if (can > gated_end_) {
+            gate_->process(buf_.data() + (gated_end_ - buf_start_), static_cast<size_t>(can - gated_end_));
+            gated_end_ = can;
+        }
+    }
+}
+
+void FilteredInput::produce_until(int64_t end, int64_t avail) {
+    while (!failed_ && ready_end() < end && fed_ < avail) {
+        feed_chunk(static_cast<size_t>(std::min<int64_t>(4096, avail - fed_)));
+        // Джерело нескінченне (тиша після кінця), а фільтр нічого не віддає — щось не так
+        if (avail == INT64_MAX && fed_ > end + 10LL * kMixRate) fail("фільтр не віддає звук");
+    }
+}
+
+int64_t FilteredInput::available() {
+    const int64_t a = source_available();
+    if (failed_ || a == INT64_MAX) return a;
+    produce_until(INT64_MAX, a);
+    return failed_ ? a : ready_end();
+}
+
+void FilteredInput::mix(int64_t pos, float* out, size_t frames, float gain) {
+    const int64_t end = pos + static_cast<int64_t>(frames);
+    if (!failed_) produce_until(end, source_available());
+    if (failed_) {
+        for (const auto& s : inputs_[0]) s.input->mix(pos, out, frames, gain * s.gain);
+        return;
+    }
+    const int64_t a = std::max(pos, buf_start_);
+    const int64_t b = std::min(end, ready_end());
+    for (int64_t p = a; p < b; ++p) {
+        const float* s = buf_.data() + static_cast<size_t>(p - buf_start_) * ch_;
+        const size_t i = static_cast<size_t>(p - pos) * 2;
+        out[i] += s[0] * gain;
+        out[i + 1] += s[ch_ - 1] * gain;
+    }
+}
+
+void FilteredInput::discard_before(int64_t pos) {
+    const int64_t drop = std::min(pos, ready_end()) - buf_start_;
+    if (drop < kMixRate / 2) return;   // не зсуваємо буфер щоразу
+    buf_.erase(buf_.begin(), buf_.begin() + static_cast<ptrdiff_t>(static_cast<size_t>(drop) * ch_));
+    buf_start_ += drop;
+}
+
+void FilteredInput::set_finished() {
+    for (auto& o : owned_) o->set_finished();
+}
+
 // ================================ AudioMixer ====================================
 AudioMixer::AudioMixer(std::vector<std::unique_ptr<AudioInput>> inputs, std::vector<AudioTrackPlan> tracks)
-    : inputs_(std::move(inputs)), tracks_(std::move(tracks)) {}
+    : inputs_(std::move(inputs)), tracks_(std::move(tracks)) {
+    post_.resize(tracks_.size());
+    emitted_.assign(tracks_.size(), 0);
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        if (tracks_[t].post_filter.empty()) continue;
+        auto c = std::make_unique<AudioFilterChain>();
+        std::string err;
+        if (c->open(tracks_[t].post_filter, 1, 2, &err)) post_[t] = std::move(c);
+        else log_warn("Доріжка «{}» — без фільтра: {}", tracks_[t].title, err);
+    }
+}
+
+void AudioMixer::log_post_failure(size_t t, const std::string& err) const {
+    log_warn("Фільтр доріжки «{}» вимкнено: {}", tracks_[t].title, err);
+}
 
 int64_t AudioMixer::ready_until() {
     int64_t r = INT64_MAX;
@@ -261,9 +389,10 @@ void AudioMixer::set_finished() {
     for (auto& in : inputs_) in->set_finished();
 }
 
-void AudioMixer::soft_limit(std::vector<float>& b) {
+void AudioMixer::soft_limit(float* b, size_t n) {
     // М'яке обмеження піків: до 0.9 — без змін, далі плавно до 1.0 (без "хрипу" від кліпінгу)
-    for (float& x : b) {
+    for (size_t i = 0; i < n; ++i) {
+        float& x = b[i];
         const float a = std::fabs(x);
         if (a > 0.9f) {
             const float y = 0.9f + 0.1f * std::tanh((a - 0.9f) / 0.1f);

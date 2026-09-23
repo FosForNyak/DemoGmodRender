@@ -138,16 +138,36 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             game_input_ = g.get();
             game = g.get();
             inputs.push_back(std::move(g));
-            mix.sources.push_back({game, spec.game_gain});
         }
         for (size_t i = 0; i < spec.voices.size(); ++i) {
-            const float gain = spec.voice_gain * (i < spec.voice_gains.size() ? spec.voice_gains[i] : 1.0f);
+            const audio::VoiceCleanup* cl = i < spec.voice_cleanup.size() ? &spec.voice_cleanup[i] : nullptr;
+            const float gain = spec.voice_gain * (i < spec.voice_gains.size() ? spec.voice_gains[i] : 1.0f) *
+                               (cl ? cl->level : 1.0f);
             if (gain <= 0.0f) continue;   // вимкнений гравець
             auto vi = std::make_unique<audio::VoiceInput>(spec.voices[i], spec.voice_origin_sample, spec.voice_delay);
-            voices.push_back(vi.get());
+            audio::AudioInput* v = vi.get();
+            if (cl && cl->denoise && cl->profile.valid()) {
+                // Шумодав (afftdn) і гейт тиші між фразами — з порогами саме цього гравця
+                auto f = std::make_unique<audio::FilteredInput>(
+                    vi->name(), std::vector<std::vector<audio::TrackSource>>{{{vi.get(), 1.0f}}}, true);
+                const audio::GateParams gp = audio::gate_for(cl->profile);
+                std::string ferr;
+                bool ok = f->open(audio::denoise_filter(cl->profile.noise_db), &gp, &ferr);
+                if (!ok) {
+                    log_warn("{}: без afftdn ({}), лише гейт", vi->name(), ferr);
+                    ok = f->open({}, &gp, &ferr);
+                }
+                if (ok) {
+                    log_info("  {}: шумодав, фон {:.0f} дБ, мова {:.0f} дБ, гейт від {:.0f} дБ", vi->name(),
+                             cl->profile.noise_db, cl->profile.speech_db, gp.open_db);
+                    f->own(std::move(vi));
+                    v = f.get();
+                    inputs.push_back(std::move(f));
+                }
+            }
+            if (vi) inputs.push_back(std::move(vi));
+            voices.push_back(v);
             voice_gains.push_back(gain);
-            mix.sources.push_back({vi.get(), gain});
-            inputs.push_back(std::move(vi));
         }
         if (!spec.mic_file.empty()) {
             auto m = std::make_unique<audio::FileAudioInput>(spec.mic_file, spec.mic_offset);
@@ -155,10 +175,30 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 log_warn("Файл мікрофона не додано: {}", m->error());
             } else {
                 mic = m.get();
-                mix.sources.push_back({mic, spec.mic_gain});
                 inputs.push_back(std::move(m));
             }
         }
+        // Гра стихає, коли хтось говорить: другий вхід компресора — сума голосів
+        audio::AudioInput* game_in_mix = game;
+        if (game && spec.duck_game && (!voices.empty() || mic)) {
+            std::vector<audio::TrackSource> sidechain;
+            for (size_t i = 0; i < voices.size(); ++i) sidechain.push_back({voices[i], voice_gains[i]});
+            if (mic) sidechain.push_back({mic, spec.mic_gain});
+            auto d = std::make_unique<audio::FilteredInput>(
+                "Гра (стихає під голоси)", std::vector<std::vector<audio::TrackSource>>{{{game, 1.0f}}, sidechain}, false);
+            std::string ferr;
+            if (d->open(audio::duck_filter(), nullptr, &ferr)) {
+                game_in_mix = d.get();
+                inputs.push_back(std::move(d));
+            } else {
+                log_warn("Гра не стихатиме під голоси: {}", ferr);
+            }
+        }
+        if (game_in_mix) mix.sources.push_back({game_in_mix, spec.game_gain});
+        for (size_t i = 0; i < voices.size(); ++i) mix.sources.push_back({voices[i], voice_gains[i]});
+        if (mic) mix.sources.push_back({mic, spec.mic_gain});
+        mix.post_filter = audio::loudness_filter(spec.loudness_target);
+        if (!mix.post_filter.empty()) log_info("Гучність міксу — {:.0f} LUFS (EBU R128, loudnorm)", spec.loudness_target);
         if (!mix.sources.empty()) {
             tracks.push_back(mix);
             if (s_.separate_tracks) {
@@ -304,10 +344,10 @@ bool EncodeSession::push_subframe(frames::Image&& img, std::string* error) {
 }
 
 // Викликається під audio_mutex_.
-bool EncodeSession::produce_audio(int64_t until, std::string* error) {
+bool EncodeSession::produce_audio(int64_t until, std::string* error, bool final) {
     if (!mixer_) return true;
     bool ok = true;
-    mixer_->produce(until, [&](size_t track, const float* data, size_t frames) {
+    auto sink = [&](size_t track, const float* data, size_t frames) {
         if (!ok) return;
         if (side_wav_) {
             if (track == 0) side_wav_->write(data, frames);
@@ -317,7 +357,9 @@ bool EncodeSession::produce_audio(int64_t until, std::string* error) {
         const int stream = audio_streams_[track];
         const AVRational tb = enc->context()->time_base;
         if (!enc->push(data, frames, [&](AVPacket* p) { return muxer_.write_packet(stream, p, tb); }, error)) ok = false;
-    });
+    };
+    mixer_->produce(until, sink);
+    if (final) mixer_->flush(until, sink);   // хвіст фільтрів доріжок (loudnorm тримає 3 с)
     return ok;
 }
 
@@ -353,7 +395,7 @@ bool EncodeSession::finish(std::string* error) {
         if (mixer_) {
             mixer_->set_finished();
             const int64_t total = static_cast<int64_t>(std::llround(video_seconds() * kMixRate));
-            if (!produce_audio(total, error)) return false;
+            if (!produce_audio(total, error, true)) return false;
             for (size_t i = 0; i < audio_encoders_.size(); ++i) {
                 const int stream = audio_streams_[i];
                 const AVRational tb = audio_encoders_[i]->context()->time_base;

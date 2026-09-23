@@ -57,6 +57,9 @@ struct AudioSourcesSpec {
     std::filesystem::path                   mic_file;
     double                                  mic_offset = 0.0;
     float                                   mic_gain = 1.0f;
+    std::vector<audio::VoiceCleanup>        voice_cleanup;         // обробка кожного голосу (порожньо — без)
+    bool                                    duck_game = false;     // приглушувати гру, коли говорять
+    double                                  loudness_target = 0;   // LUFS загального міксу; 0 — не змінювати
 };
 
 // Маленька копія поточного кадру для живого прев'ю у вікні програми.
@@ -118,7 +121,7 @@ public:
 
 private:
     bool encode_video_frame(const frames::Image& img, std::string* error);
-    bool produce_audio(int64_t until, std::string* error);   // під audio_mutex_
+    bool produce_audio(int64_t until, std::string* error, bool final = false);   // під audio_mutex_
     bool enqueue(frames::Image&& img, std::string* error);
     bool stop_worker(std::string* error);
     void worker_loop();

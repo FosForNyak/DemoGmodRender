@@ -132,6 +132,13 @@ private:
 // Вибрати доріжки голосу згідно з налаштуваннями.
 std::vector<const voice::SpeakerTrack*> select_speakers(const RenderSettings& s, const voice::VoiceDecodeResult& v);
 
+// Обробка голосу (вирівнювання гучності, шумодав) для кожного з гравців: мовлення кожного
+// аналізується заздалегідь. needs_voice_cleanup — чи увімкнено хоч щось.
+bool needs_voice_cleanup(const RenderSettings& s);
+std::vector<audio::VoiceCleanup> voice_cleanup_for(const RenderSettings& s,
+                                                   const std::vector<const voice::SpeakerTrack*>& speakers,
+                                                   const std::atomic<bool>& cancel);
+
 // ---- Рендер через гру ------------------------------------------------------------
 class RenderJob final : public Job {
 public:

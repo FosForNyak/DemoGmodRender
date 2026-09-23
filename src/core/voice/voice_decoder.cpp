@@ -406,7 +406,7 @@ std::vector<float> decode_range(const SpeakerTrack& track, int64_t from, int64_t
 // ================================= Експорт ==========================================
 bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path& path, int64_t from, int64_t to,
                           std::string* error, const std::atomic<bool>* cancel,
-                          const std::function<void(double)>& progress) {
+                          const std::function<void(double)>& progress, const VoiceFill& fill) {
     if (to < 0) to = track.end_sample();
     if (to < from) to = from;
     const bool flac = to_lower(path_to_utf8(path.extension())) == ".flac";
@@ -414,6 +414,11 @@ bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path
     const int64_t chunk = kVoiceRate;   // по секунді
     std::vector<float> mono, stereo;
     auto should_stop = [&] { return cancel && cancel->load(); };
+    auto read = [&](int64_t pos, size_t n) {
+        mono.assign(n, 0.0f);
+        if (fill) fill(pos, n, mono.data());
+        else stream.mix_into(pos, n, mono.data());
+    };
 
     if (!flac) {
         audio::WavWriter w;
@@ -425,8 +430,7 @@ bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path
                 return false;
             }
             const auto n = static_cast<size_t>(std::min(chunk, to - pos));
-            mono.assign(n, 0.0f);
-            stream.mix_into(pos, n, mono.data());
+            read(pos, n);
             w.write(mono.data(), n);
             if (progress && ((pos - from) / chunk) % 30 == 0) progress(static_cast<double>(pos - from) / std::max<int64_t>(1, to - from));
         }
@@ -460,9 +464,9 @@ bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path
             return false;
         }
         const auto n = static_cast<size_t>(std::min(chunk, to - pos));
-        stereo.assign(n * 2, 0.0f);
-        stream.mix_into(pos, n, stereo.data(), 1.0f, 2);
-        for (size_t i = 0; i < n; ++i) stereo[i * 2 + 1] = stereo[i * 2];
+        read(pos, n);
+        stereo.resize(n * 2);
+        for (size_t i = 0; i < n; ++i) stereo[i * 2] = stereo[i * 2 + 1] = mono[i];
         if (!enc.push(stereo.data(), n, sink, error)) {
             mux.abort();
             return false;

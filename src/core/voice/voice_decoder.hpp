@@ -109,11 +109,15 @@ private:
 // Декодувати відрізок [from, to) у моно PCM 48 кГц.
 std::vector<float> decode_range(const SpeakerTrack& track, int64_t from, int64_t to);
 
+// Джерело звуку для експорту: додати в out семпли [from, from + count) часової шкали демо.
+using VoiceFill = std::function<void(int64_t from, size_t count, float* out)>;
+
 // Записати голос мовця за відрізок [from, to) у файл: .wav (16 біт, моно) або
 // .flac (без втрат; тиша майже не займає місця). to < 0 — до кінця мовлення.
+// fill — замість сирого голосу (напр. з обробкою).
 bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path& path, int64_t from, int64_t to,
                           std::string* error = nullptr, const std::atomic<bool>* cancel = nullptr,
-                          const std::function<void(double)>& progress = {});
+                          const std::function<void(double)>& progress = {}, const VoiceFill& fill = {});
 
 // Тривалість пакета Opus у семплах 48 кГц за його першим байтом (TOC); 0 — невідомо.
 int opus_packet_samples_48k(const uint8_t* data, size_t size);

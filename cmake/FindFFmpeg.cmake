@@ -1,5 +1,5 @@
 # =============================================================================
-#  FindFFmpeg.cmake — пошук бібліотек FFmpeg (avformat, avcodec, avutil,
+#  FindFFmpeg.cmake — пошук бібліотек FFmpeg (avformat, avcodec, avfilter, avutil,
 #  swscale, swresample).
 #
 #  Способи:
@@ -11,7 +11,7 @@
 #  Результат: імпортовані цілі FFmpeg::avformat, FFmpeg::avcodec, ...,
 #  змінна FFMPEG_DLL_DIR (Windows) — звідки копіювати DLL.
 # =============================================================================
-set(_ff_components avformat avcodec avutil swscale swresample)
+set(_ff_components avformat avcodec avfilter avutil swscale swresample)
 
 if(NOT FFMPEG_ROOT AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/ffmpeg/include/libavcodec/avcodec.h")
     set(FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg")
@@ -44,7 +44,7 @@ if(FFMPEG_ROOT)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PC_FFMPEG REQUIRED IMPORTED_TARGET
-        libavformat libavcodec libavutil libswscale libswresample)
+        libavformat libavcodec libavfilter libavutil libswscale libswresample)
     foreach(comp IN LISTS _ff_components)
         if(NOT TARGET FFmpeg::${comp})
             add_library(FFmpeg::${comp} INTERFACE IMPORTED)

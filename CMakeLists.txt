@@ -81,7 +81,7 @@ configure_file("${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp"
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GMDR_DRIVER_LUA}")
 target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(gmdr_core PUBLIC
-    FFmpeg::avformat FFmpeg::avcodec FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
+    FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
     Threads::Threads)
 if(WIN32)
     target_link_libraries(gmdr_core PUBLIC advapi32 shell32 ole32 user32)
@@ -116,7 +116,7 @@ if(GMDR_BUILD_GUI)
     if(WIN32)
         list(APPEND GMDR_IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp)
         add_executable(gmdr WIN32 ${GMDR_GUI_SOURCES} ${GMDR_IMGUI_SOURCES} src/gui/app.rc)
-        target_link_libraries(gmdr PRIVATE gmdr_core d3d11 dxgi d3dcompiler dwmapi uuid comdlg32 shell32 ole32 imm32)
+        target_link_libraries(gmdr PRIVATE gmdr_core d3d11 dxgi d3dcompiler dwmapi uuid comdlg32 shell32 ole32 imm32 winmm)
         if(MSVC)
             # Маніфест уже вбудовано через app.rc
             target_link_options(gmdr PRIVATE /MANIFEST:NO)
