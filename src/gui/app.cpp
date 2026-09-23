@@ -15,6 +15,7 @@
 #include "core/media/muxer.hpp"
 #include "core/media/video_encoder.hpp"
 #include "core/render/report.hpp"
+#include "core/util/file_assoc.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/strings.hpp"
 #include "core/game/audio_mute.hpp"
@@ -606,6 +607,25 @@ void App::draw_menu_bar() {
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Відкрити журнал (gmdr_log.txt)")) open_path(path_to_utf8(app_data_dir() / "gmdr_log.txt"));
+#ifdef _WIN32
+        {
+            // Реєстр читаємо лише поки меню відкрите
+            const fs::path exe = executable_dir() / "gmdr.exe";
+            const bool assoc = dem_association_registered(exe);
+            if (ImGui::MenuItem("Відкривати .dem подвійним кліком", nullptr, assoc)) {
+                std::string err;
+                if (assoc ? unregister_dem_association(&err) : register_dem_association(exe, &err))
+                    log_info("{}", assoc ? "Файли .dem більше не відкриваються цією програмою"
+                                   : "Файли .dem тепер відкриваються в GMod Demo Render (якщо Windows спитає, чим "
+                                     "відкривати, — виберіть її). Вимкнути — тут само.");
+                else
+                    log_error("Не вдалося змінити асоціацію .dem: {}", err);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Лише для вашого облікового запису (HKCU), без прав адміністратора.\n"
+                                  "Якщо програма вже відкрита, демо відкриється в ній.");
+        }
+#endif
         if (ImGui::MenuItem("Відкрити папку програми")) open_path(path_to_utf8(executable_dir()));
         ImGui::EndMenu();
     }

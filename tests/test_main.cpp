@@ -28,6 +28,7 @@
 #include "core/render/derived.hpp"
 #include "core/render/report.hpp"
 #include "core/util/zip_writer.hpp"
+#include "core/util/file_assoc.hpp"
 #include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -50,6 +51,16 @@
 #include <random>
 #include <string>
 #include <thread>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace gmdr;
 
@@ -845,6 +856,36 @@ static void test_report_zip() {
     CHECK(render::system_summary().find("GMod Demo Render") != std::string::npos);
 }
 
+// Асоціація .dem: що пишеться в реєстр. Сам запис — лише з GMDR_TEST_REGISTRY=1 (у CI, на
+// одноразовій машині) і в окремий розділ HKCU\Software\GModDemoRenderTest, не в справжній Classes.
+static void test_dem_association() {
+    std::printf("[dem association]\n");
+    const std::filesystem::path exe = std::filesystem::path("C:/Програми/GMDR") / "gmdr.exe";
+    const auto vals = dem_association_values(exe);
+    bool cmd_ok = false, openwith = false;
+    for (const auto& v : vals) {
+        if (v.key == std::string(kDemProgId) + "\\shell\\open\\command")
+            cmd_ok = v.value == "\"" + path_to_utf8(exe) + "\" \"%1\"";
+        if (v.key == ".dem\\OpenWithProgids" && v.name == kDemProgId) openwith = true;
+    }
+    CHECK(cmd_ok && openwith);
+#ifdef _WIN32
+    if (!std::getenv("GMDR_TEST_REGISTRY")) {
+        std::printf("  запис у реєстр пропущено (GMDR_TEST_REGISTRY не задано)\n");
+        return;
+    }
+    const std::string root = "Software\\GModDemoRenderTest\\Classes";
+    std::string err;
+    CHECK(!dem_association_registered(exe, root));
+    CHECK(register_dem_association(exe, &err, root));
+    CHECK(dem_association_registered(exe, root));
+    CHECK(!dem_association_registered(std::filesystem::path("D:/інша/gmdr.exe"), root));   // інша копія програми
+    CHECK(unregister_dem_association(&err, root));
+    CHECK(!dem_association_registered(exe, root));
+    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\GModDemoRenderTest");
+#endif
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1324,6 +1365,7 @@ int main(int argc, char** argv) {
     test_extra_versions();
     test_derived_outputs();
     test_report_zip();
+    test_dem_association();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

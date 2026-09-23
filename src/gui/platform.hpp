@@ -45,6 +45,10 @@ std::string clipboard_text_set(const std::string& text);   // скопіюват
 // Для автоматичних тестів: зберегти знімок вікна у PNG (лише Linux-версія).
 bool platform_screenshot(const std::string& path);
 
+// Програма вже відкрита: передати їй файл з args (подвійний клік на .dem), показати її вікно
+// і повернути true — тоді цей запуск просто завершується. (Лише Windows.)
+bool platform_forward_to_running_instance(const std::vector<std::string>& args);
+
 // Текстура з пікселів RGBA (живе прев'ю кадрів). tex — попередня текстура (0 — нова);
 // повертає ідентифікатор для ImGui::Image (0 — не вдалося).
 uint64_t platform_update_texture(uint64_t tex, int width, int height, const uint8_t* rgba);

@@ -41,6 +41,8 @@ jobs:
 
       - name: Модульні тести
         run: build\gmdr-tests.exe build\td
+        env:
+          GMDR_TEST_REGISTRY: "1"   # асоціація .dem — в окремому розділі HKCU одноразової машини
 
       - name: Наскрізний рендер через імітатор гри
         shell: pwsh

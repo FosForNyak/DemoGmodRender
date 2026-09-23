@@ -99,6 +99,8 @@ void cleanup_device() {
     if (g_device) { g_device->Release(); g_device = nullptr; }
 }
 
+constexpr ULONG_PTR kCopyDataOpen = 0x52444D47;   // "GMDR": шлях до файлу від другого запуску програми
+
 LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
     switch (msg) {
@@ -124,6 +126,15 @@ LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         DragFinish(drop);
         if (g_cb.on_files_dropped) g_cb.on_files_dropped(files);
         return 0;
+    }
+    case WM_COPYDATA: {
+        const auto* cds = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+        if (!cds || cds->dwData != kCopyDataOpen) break;
+        if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        if (cds->lpData && cds->cbData > 0 && g_cb.on_files_dropped)
+            g_cb.on_files_dropped({std::string(static_cast<const char*>(cds->lpData), cds->cbData)});
+        return TRUE;
     }
     case WM_CLOSE:
         if (g_cb.on_close_request && !g_cb.on_close_request()) return 0;
@@ -203,6 +214,29 @@ std::string file_dialog(int kind /*0 open, 1 save, 2 folder*/, const std::string
     return result;
 }
 } // namespace
+
+bool platform_forward_to_running_instance(const std::vector<std::string>& args) {
+    if (std::getenv("GMDR_MULTI_INSTANCE")) return false;   // для розробки й автотестів
+    // М'ютекс живе, доки працює перша копія програми
+    static const HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\GModDemoRender.instance");
+    static const bool another = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
+    if (!another) return false;
+    HWND other = FindWindowW(L"GModDemoRenderWnd", nullptr);
+    if (!other) return false;   // перша копія ще не створила вікно — працюємо як звичайно
+    DWORD pid = 0;
+    GetWindowThreadProcessId(other, &pid);
+    AllowSetForegroundWindow(pid);   // інакше Windows не дасть їй вийти на передній план
+    std::string file;
+    for (size_t i = 1; i < args.size(); ++i)
+        if (!args[i].empty() && args[i][0] != '-') {
+            file = args[i];
+            break;
+        }
+    COPYDATASTRUCT cds{kCopyDataOpen, static_cast<DWORD>(file.size()), file.empty() ? nullptr : file.data()};
+    DWORD_PTR result = 0;
+    SendMessageTimeoutW(other, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds), SMTO_ABORTIFHUNG, 5000, &result);
+    return true;
+}
 
 bool platform_init(const std::string& title, int width, int height, const PlatformCallbacks& cb) {
     g_cb = cb;

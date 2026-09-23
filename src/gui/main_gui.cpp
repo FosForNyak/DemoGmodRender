@@ -29,6 +29,7 @@
 
 static int run(const std::vector<std::string>& args) {
     using namespace gmdr::gui;
+    if (platform_forward_to_running_instance(args)) return 0;   // .dem відкриється у вже відкритій програмі
     gmdr::install_crash_handler(gmdr::app_data_dir());   // gmdr_crash_*.dmp, якщо програма впаде
     App app;
     PlatformCallbacks cb;

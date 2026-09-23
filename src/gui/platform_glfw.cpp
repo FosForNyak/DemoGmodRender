@@ -156,6 +156,8 @@ std::string clipboard_text_set(const std::string& text) {
     return text;
 }
 
+bool platform_forward_to_running_instance(const std::vector<std::string>&) { return false; }
+
 bool platform_screenshot(const std::string& path) {
     int w, h;
     glfwGetFramebufferSize(g_window, &w, &h);
