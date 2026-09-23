@@ -194,8 +194,26 @@ bool VideoEncoder::setup_hw_frames(const AVCodec* codec, std::string* error) {
     return false;
 }
 
+CropRect center_crop(int w, int h, double aspect) {
+    CropRect r{0, 0, w, h};
+    if (aspect <= 0 || w <= 0 || h <= 0) return r;
+    if (static_cast<double>(w) / h > aspect) {
+        r.w = std::max(2, static_cast<int>(std::lround(h * aspect)) & ~1);
+        r.x = ((w - r.w) / 2) & ~1;
+    } else {
+        r.h = std::max(2, static_cast<int>(std::lround(w / aspect)) & ~1);
+        r.y = ((h - r.h) / 2) & ~1;
+    }
+    return r;
+}
+
 bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool global_header, std::string* error) {
     s_ = s;
+    if (s.crop_aspect > 0) {
+        const CropRect c = center_crop(in_w, in_h, s.crop_aspect);
+        in_w = c.w;
+        in_h = c.h;
+    }
     in_w_ = in_w;
     in_h_ = in_h;
     const AVCodec* codec = avcodec_find_encoder_by_name(s.codec.c_str());
@@ -383,13 +401,13 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
 
 std::string VideoEncoder::describe() const { return chosen_desc_; }
 
-bool VideoEncoder::init_legacy_sws(const frames::Image& img, AVPixelFormat in_fmt, const AVFrame* dst,
-                                   std::string* error) {
+bool VideoEncoder::init_legacy_sws(const frames::Image& img, int src_w, int src_h, AVPixelFormat in_fmt,
+                                   const AVFrame* dst, std::string* error) {
     sws_freeContext(sws_);
     sws_ = sws_alloc_context();
-    const bool scaling = img.width != dst->width || img.height != dst->height;
-    av_opt_set_int(sws_, "srcw", img.width, 0);
-    av_opt_set_int(sws_, "srch", img.height, 0);
+    const bool scaling = src_w != dst->width || src_h != dst->height;
+    av_opt_set_int(sws_, "srcw", src_w, 0);
+    av_opt_set_int(sws_, "srch", src_h, 0);
     av_opt_set_int(sws_, "src_format", in_fmt, 0);
     av_opt_set_int(sws_, "dstw", dst->width, 0);
     av_opt_set_int(sws_, "dsth", dst->height, 0);
@@ -423,15 +441,19 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
     // Обгортка над пікселями кадру — без копіювання. Від'ємний крок рядка (TGA знизу
     // вгору) swscale розуміє сам.
     AVFrame* src = src_frame_.get();
+    // Вертикальне відео тощо: лише центр кадру — зсув початку рядків, без копіювання
+    const CropRect crop = center_crop(img.width, img.height, s_.crop_aspect);
+    const frames::LayoutInfo li = frames::layout_info(img.layout);
     src->format = in_fmt;
-    src->width = img.width;
-    src->height = img.height;
+    src->width = crop.w;
+    src->height = crop.h;
     for (int p = 0; p < 4; ++p) {
         src->data[p] = nullptr;
         src->linesize[p] = 0;
     }
     for (int p = 0; p < img.planes(); ++p) {
-        src->data[p] = const_cast<uint8_t*>(img.row(p, 0));
+        const int sx = p > 0 && li.yuv ? li.log2_chroma_w : 0, sy = p > 0 && li.yuv ? li.log2_chroma_h : 0;
+        src->data[p] = const_cast<uint8_t*>(img.row(p, crop.y >> sy)) + static_cast<ptrdiff_t>(crop.x >> sx) * li.bytes_per_pixel;
         src->linesize[p] = img.stride[p];
     }
     if (src_yuv) {
@@ -454,7 +476,7 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
     if (!sws_use_legacy()) {
 #if LIBSWSCALE_VERSION_MAJOR >= 9
         if (!sws_) sws_ = sws_alloc_context();
-        const bool scaling = img.width != dst->width || img.height != dst->height;
+        const bool scaling = crop.w != dst->width || crop.h != dst->height;
         sws_->flags = static_cast<unsigned>(sws_flags_for(s_.scaler, scaling, s_.accurate_color));
         sws_->threads = sws_threads(s_.threads);
         r = sws_scale_frame(sws_, dst, src);
@@ -462,11 +484,11 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
     } else {
         const int matrix = src_yuv && !img.bt709 ? 601 : 709;
         const int range = src_yuv && !img.full_range ? 0 : 1;
-        if (!sws_ || sws_in_w_ != img.width || sws_in_h_ != img.height || sws_in_fmt_ != in_fmt ||
+        if (!sws_ || sws_in_w_ != crop.w || sws_in_h_ != crop.h || sws_in_fmt_ != in_fmt ||
             sws_in_range_ != range || sws_in_matrix_ != matrix) {
-            if (!init_legacy_sws(img, in_fmt, dst, error)) return false;
-            sws_in_w_ = img.width;
-            sws_in_h_ = img.height;
+            if (!init_legacy_sws(img, crop.w, crop.h, in_fmt, dst, error)) return false;
+            sws_in_w_ = crop.w;
+            sws_in_h_ = crop.h;
             sws_in_fmt_ = in_fmt;
             sws_in_range_ = range;
             sws_in_matrix_ = matrix;

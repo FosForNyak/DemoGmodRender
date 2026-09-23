@@ -92,6 +92,7 @@ struct RenderSettings {
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"
     double      target_size_mb = 0;       // цільовий розмір файлу в МБ (напр. для Discord), 0 — за якістю
+    std::string extra_versions;           // додаткові версії за один рендер: "discord,480p,vertical,master"
     int         threads = 0;
     bool        keep_temp_files = false;
 

@@ -10,6 +10,7 @@
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/muxer.hpp"
 #include "core/media/video_encoder.hpp"
+#include "core/render/versions.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/strings.hpp"
 
@@ -247,6 +248,39 @@ void App::draw_tab_video() {
         }
         help_marker("Бітрейт розраховується так, щоб увесь фрагмент уклався в заданий розмір (напр. 10 МБ для Discord). "
                     "Замінює «Якість» і «Бітрейт». Якщо бітрейт виходить замалим — зменште роздільну здатність або FPS.");
+    }
+    // ---- Додаткові версії з тих самих кадрів ----
+    {
+        label("Ще версії", lw);
+        std::vector<std::string> on;
+        for (const auto& id : split(s_.extra_versions, ','))
+            if (!trim(id).empty()) on.push_back(trim(id));
+        bool first = true;
+        for (const auto& v : render::version_presets()) {
+            bool checked = std::find(on.begin(), on.end(), v.id) != on.end();
+            if (!first) {
+                // Переносимо на новий рядок, якщо галочка не влазить
+                ImGui::SameLine();
+                if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(v.label.c_str()).x + ImGui::GetFrameHeight() * 2) {
+                    ImGui::NewLine();
+                    label("", lw);
+                }
+            }
+            first = false;
+            if (ImGui::Checkbox((v.label + "##ver_" + v.id).c_str(), &checked)) {
+                if (checked) on.push_back(v.id);
+                else on.erase(std::remove(on.begin(), on.end(), v.id), on.end());
+                std::string joined;
+                for (const auto& p : render::version_presets())   // порядок як у списку
+                    if (std::find(on.begin(), on.end(), p.id) != on.end()) joined += (joined.empty() ? "" : ",") + p.id;
+                s_.extra_versions = joined;
+                changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", v.hint.c_str());
+        }
+        help_marker("Гра рендерить демо один раз, а з тих самих кадрів одночасно кодуються й ці версії — файли з "
+                    "суфіксом (_discord, _480p, _vertical, _master) поруч з основним. Кожна версія додає роботи "
+                    "процесору, тож рендер іде трохи повільніше.");
     }
     // ---- Пресет ----
     if (!qi.presets.empty()) {

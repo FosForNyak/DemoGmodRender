@@ -39,6 +39,11 @@
   відкриває нове демо (перезапуск — лише коли змінюються роздільність, RTX або параметри запуску).
   Черга зберігається між запусками програми; готові пункти з неї прибираються, невдалі лишаються.
   У консолі: `gmdr-cli render a.dem b.dem -o папка\` або `gmdr-cli queue список.txt`.
+- **Кілька версій за один рендер** (вкладка «Відео» → «Ще версії»): гра рендерить демо один раз,
+  а з тих самих кадрів одночасно кодуються ще й версія для Discord (до 10 МБ, 720p), легка копія
+  480p, вертикальне відео 9:16 для Shorts/TikTok/Reels (центр кадру) і ProRes 422 HQ для монтажу.
+  Файли з'являються поруч з основним: `бій_discord.mp4`, `бій_vertical.mp4`... У консолі —
+  `--also discord,480p,vertical,master`.
 
 ## Що нового у 1.1
 
@@ -261,6 +266,7 @@ gmdr-cli render demo.dem -o yt.mp4 --level-voices --denoise --duck-game --loudne
 gmdr-cli voice demo.dem -o голоси\ --denoise-player steam:76561198152226525 --level-voices
 gmdr-cli render a.dem b.dem c.dem -o відео\ --size 1920x1080 (черга: гра запускається один раз)
 gmdr-cli queue список.txt --fps 60                          (черга з файлу; параметри — для всіх пунктів)
+gmdr-cli render demo.dem -o бій.mp4 --size 2560x1440 --also discord,vertical   (+ бій_discord.mp4, бій_vertical.mp4)
 gmdr-cli encode "C:\...\кадри" -o out.mkv --codec ffv1     (закодувати готові кадри startmovie)
 gmdr-cli encoders --test                                    (які кодеки працюють на цьому ПК)
 ```

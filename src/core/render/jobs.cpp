@@ -14,6 +14,7 @@
 #include "encode_session.hpp"
 #include "markers.hpp"
 #include "subtitles.hpp"
+#include "versions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -143,6 +144,15 @@ void Job::succeed(const std::string& result) {
 
 // ============================ Допоміжні функції ==================================
 namespace {
+
+// Журнал: які додаткові версії записано і скільки вони важать
+void log_extra_versions(const std::vector<std::string>& paths) {
+    for (const auto& p : paths) {
+        std::error_code ec;
+        const auto size = fs::file_size(path_from_utf8(p), ec);
+        log_info("Додаткова версія: {} ({})", p, ec ? "?" : format_bytes(size));
+    }
+}
 
 bool make_encode_settings(const RenderSettings& s, EncodeSettings& es, std::string* error) {
     auto fps = parse_rational(s.fps);
@@ -932,6 +942,9 @@ void RenderJob::run() {
         log_info("Цільовий розмір {:.0f} МБ на {}: бітрейт відео {:.2f} Мбіт/с", s_.target_size_mb,
                  format_duration(size_seconds), es.video.bitrate / 1e6);
     }
+    // Додаткові версії (Discord, вертикальна...) — у тестовому прогоні не потрібні
+    if (!test_run_) es.extras = make_extra_outputs(s_.extra_versions, es, expected_seconds);
+    else if (!trim(s_.extra_versions).empty()) log_info("Тестовий прогін: додаткові версії не кодуються");
     update([&](Progress& p) {
         p.range_start = range_start;
         p.range_end = range_end;
@@ -1521,6 +1534,7 @@ void RenderJob::run() {
     const double secs = session.video_seconds();
     const int64_t frames_done = session.frames_encoded();
     const PipelineStats pstats = session.stats();
+    const std::vector<std::string> extras_done = session.finished_extras();
     const bool fragmented = es.crash_safe && is_mov_family(s_.output_path, s_.container);
     session_ptr.reset();
     if (hand_over) {
@@ -1535,6 +1549,7 @@ void RenderJob::run() {
                                          A.tick_interval)
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
+    log_extra_versions(extras_done);
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
@@ -1896,6 +1911,15 @@ void EncodeFramesJob::run() {
     so.prefix = prefix;
     so.live = false;
     so.delete_after_read = false;
+    int64_t total_files = 0;
+    for (fs::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec))
+        if (frames::FrameSequenceReader::parse_index(path_to_utf8(it->path().filename()), prefix, so.extensions) >= 0)
+            ++total_files;
+    const int64_t total_out = std::max<int64_t>(1, total_files / std::max(1, es.motion_blur_samples));
+    const double fps_v = es.video.fps.num / static_cast<double>(es.video.fps.den);
+    if (s_.target_size_mb > 0)
+        es.video.bitrate = bitrate_for_target_size(s_.target_size_mb, total_out / fps_v, s_.audio ? es.audio.bitrate : 0);
+    es.extras = make_extra_outputs(s_.extra_versions, es, total_out / fps_v);
     frames::FrameSequenceReader reader(so);
     ThreadPool pool(s_.threads > 0 ? static_cast<unsigned>(s_.threads) : 0);
     EncodeSession session(es, &pool, preview_.get());
@@ -1907,14 +1931,6 @@ void EncodeFramesJob::run() {
         voice_fx = voice_cleanup_for(s_, speakers, cancel_);
     }
 
-    int64_t total_files = 0;
-    for (fs::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec))
-        if (frames::FrameSequenceReader::parse_index(path_to_utf8(it->path().filename()), prefix, so.extensions) >= 0)
-            ++total_files;
-    const int64_t total_out = std::max<int64_t>(1, total_files / std::max(1, es.motion_blur_samples));
-    const double fps_v = es.video.fps.num / static_cast<double>(es.video.fps.den);
-    if (s_.target_size_mb > 0)
-        es.video.bitrate = bitrate_for_target_size(s_.target_size_mb, total_out / fps_v, s_.audio ? es.audio.bitrate : 0);
     set_stage("Кодування");
     auto last_progress = Clock::now();
     frames::Image img;
@@ -1996,7 +2012,9 @@ void EncodeFramesJob::run() {
     }
     const int64_t frames_done = session.frames_encoded();
     const double secs = session.video_seconds();
+    const std::vector<std::string> extras_done = session.finished_extras();
     finalize_output(s_, es.crash_safe && is_mov_family(s_.output_path, s_.container), frames_done, secs);
+    log_extra_versions(extras_done);
     log_info("Готово! {} — {} кадрів, {}", s_.output_path, frames_done, format_duration(secs));
     succeed(s_.output_path);
 }

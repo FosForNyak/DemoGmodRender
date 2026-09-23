@@ -24,6 +24,7 @@
 #include "core/render/jobs.hpp"
 #include "core/render/markers.hpp"
 #include "core/render/subtitles.hpp"
+#include "core/render/versions.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
@@ -702,6 +703,40 @@ static void test_job_elapsed() {
     CHECK_NEAR(a, b, 1e-9);
 }
 
+// Додаткові версії: вирізання центру кадру і налаштування пресетів
+static void test_extra_versions() {
+    std::printf("[extra versions]\n");
+    auto c = media::center_crop(1920, 1080, 9.0 / 16.0);
+    CHECK(c.w == 608 && c.h == 1080 && c.x == 656 && c.y == 0);
+    c = media::center_crop(1080, 1920, 16.0 / 9.0);   // навпаки: смуга по висоті
+    CHECK(c.w == 1080 && c.h == 608 && c.x == 0 && c.y == 656);
+    c = media::center_crop(1280, 720, 0);
+    CHECK(c.w == 1280 && c.h == 720 && c.x == 0 && c.y == 0);
+    render::EncodeSettings main;
+    main.video.width = 2560;
+    main.video.height = 1440;
+    main.video.fps = {60, 1};
+    main.output_path = "D:/відео/бій.mp4";
+    auto x = render::make_extra_outputs("vertical, discord,нема,master", main, 60.0);
+    CHECK(x.size() == 3);
+    if (x.size() == 3) {
+        CHECK(x[0].video.width == 1080 && x[0].video.height == 1920 && x[0].video.crop_aspect > 0.56);
+        CHECK(x[0].output_path.ends_with("бій_vertical.mp4"));
+        CHECK(x[1].video.height == 720 && x[1].video.width == 1280 && x[1].video.bitrate > 0);
+        // 9.5 МБ за хвилину: відео + звук 128 кбіт/с не більше 9.5 МБ
+        CHECK((x[1].video.bitrate + x[1].audio.bitrate) * 60 / 8 <= static_cast<int64_t>(9.5 * 1024 * 1024));
+        CHECK(x[2].video.codec == "prores_ks" && x[2].output_path.ends_with("бій_master.mov") &&
+              x[2].audio.codec == "pcm_s16le");
+    }
+    main.output_path = "D:/кадри/f_%05d.png";   // послідовність зображень
+    x = render::make_extra_outputs("480p", main, 0);
+    CHECK(x.size() == 1 && x[0].output_path.ends_with("video_480p.mp4") && x[0].video.height == 480 &&
+          x[0].video.width == 854);
+    std::string bad;
+    CHECK(render::valid_version_ids("discord, 480p", &bad));
+    CHECK(!render::valid_version_ids("discord,4k", &bad) && bad == "4k");
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1178,6 +1213,7 @@ int main(int argc, char** argv) {
     test_frame_files();
     test_job_elapsed();
     test_driver_cfg();
+    test_extra_versions();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

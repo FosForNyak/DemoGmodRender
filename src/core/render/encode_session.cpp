@@ -239,6 +239,21 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             log_info("Звук: немає джерел — відео буде без звуку");
         }
     }
+    // Додаткові версії: помилка в одній не зупиняє основний рендер
+    for (const auto& x : s_.extras) {
+        auto e = std::make_unique<Extra>();
+        e->cfg = x;
+        std::string xerr;
+        if (open_extra(*e, mixer_ != nullptr, &xerr)) {
+            log_info("Додаткова версія «{}»: {} → {}", x.label, e->video.describe(), x.output_path);
+            extras_.push_back(std::move(e));
+        } else {
+            e->muxer.abort();
+            std::error_code ec;
+            std::filesystem::remove(path_from_utf8(x.output_path), ec);
+            log_warn("Додаткову версію «{}» пропущено: {}", x.label, xerr);
+        }
+    }
     if (!muxer_.write_header(s_.faststart, s_.crash_safe, error)) return false;
     if (s_.crash_safe && muxer_.is_fragmented())
         log_info("Файл пишеться фрагментами: навіть якщо гра чи ПК впадуть, уже записане відео відкриється");
@@ -247,9 +262,50 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
     return true;
 }
 
+bool EncodeSession::open_extra(Extra& e, bool with_audio, std::string* error) {
+    std::error_code ec;
+    const std::filesystem::path parent = path_from_utf8(e.cfg.output_path).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    if (!e.muxer.open(e.cfg.output_path, e.cfg.container, error)) return false;
+    if (!e.muxer.supports_codec(e.cfg.video.codec)) {
+        if (error) *error = std::format("контейнер '{}' не підтримує кодек {}", e.muxer.format()->name, e.cfg.video.codec);
+        return false;
+    }
+    const bool global_header = e.muxer.needs_global_header();
+    if (!e.video.open(e.cfg.video, frame_w_, frame_h_, global_header, error)) return false;
+    e.video_stream = e.muxer.add_stream(e.video.context(), "GMod demo");
+    if (with_audio && !e.cfg.audio.codec.empty()) {
+        if (!e.muxer.supports_codec(e.cfg.audio.codec)) {
+            if (error) *error = std::format("контейнер '{}' не підтримує аудіокодек {}", e.muxer.format()->name,
+                                            e.cfg.audio.codec);
+            return false;
+        }
+        e.audio = std::make_unique<media::AudioEncoder>();
+        if (!e.audio->open(e.cfg.audio, global_header, error)) return false;
+        e.audio_stream = e.muxer.add_stream(e.audio->context(), "Мікс");
+    }
+    return e.muxer.write_header(true, false, error);
+}
+
+void EncodeSession::fail_extra(Extra& e, const std::string& error) {
+    if (!e.ok.exchange(false)) return;
+    log_warn("Додаткова версія «{}» не вдалася: {} — основне відео пишеться далі", e.cfg.label, error);
+    e.muxer.abort();
+    std::error_code ec;
+    std::filesystem::remove(path_from_utf8(e.cfg.output_path), ec);
+}
+
+std::vector<std::string> EncodeSession::finished_extras() const {
+    std::vector<std::string> out;
+    for (const auto& e : extras_)
+        if (e->ok && e->finished) out.push_back(e->cfg.output_path);
+    return out;
+}
+
 bool EncodeSession::encode_video_frame(const frames::Image& img, std::string* error) {
+    const int64_t pts = frames_out_.load();
     const double conv0 = video_.convert_ms(), enc0 = video_.encode_ms();
-    const bool ok = video_.encode(img, frames_out_.load(), [&](AVPacket* p) {
+    const bool ok = video_.encode(img, pts, [&](AVPacket* p) {
         return muxer_.write_packet(video_stream_, p, video_.context()->time_base);
     }, error);
     atomic_add(convert_ms_, video_.convert_ms() - conv0);
@@ -257,6 +313,17 @@ bool EncodeSession::encode_video_frame(const frames::Image& img, std::string* er
     if (!ok) {
         if (error && error->empty()) *error = muxer_.last_error();
         return false;
+    }
+    for (auto& e : extras_) {
+        if (!e->ok) continue;
+        const double c0 = e->video.convert_ms(), e0 = e->video.encode_ms();
+        std::string xerr;
+        if (!e->video.encode(img, pts, [&](AVPacket* p) {
+                return e->muxer.write_packet(e->video_stream, p, e->video.context()->time_base);
+            }, &xerr))
+            fail_extra(*e, xerr.empty() ? e->muxer.last_error() : xerr);
+        atomic_add(convert_ms_, e->video.convert_ms() - c0);
+        atomic_add(encode_ms_, e->video.encode_ms() - e0);
     }
     ++frames_out_;
     return true;
@@ -349,6 +416,16 @@ bool EncodeSession::produce_audio(int64_t until, std::string* error, bool final)
     bool ok = true;
     auto sink = [&](size_t track, const float* data, size_t frames) {
         if (!ok) return;
+        if (track == 0) {
+            for (auto& e : extras_) {
+                if (!e->ok || !e->audio) continue;
+                std::string xerr;
+                const AVRational tb = e->audio->context()->time_base;
+                if (!e->audio->push(data, frames, [&](AVPacket* p) { return e->muxer.write_packet(e->audio_stream, p, tb); },
+                                    &xerr))
+                    fail_extra(*e, xerr);
+            }
+        }
         if (side_wav_) {
             if (track == 0) side_wav_->write(data, frames);
             return;
@@ -390,6 +467,13 @@ bool EncodeSession::finish(std::string* error) {
     if (!video_.flush([&](AVPacket* p) { return muxer_.write_packet(video_stream_, p, video_.context()->time_base); },
                       error))
         return false;
+    for (auto& e : extras_) {
+        std::string xerr;
+        if (e->ok && !e->video.flush([&](AVPacket* p) {
+                return e->muxer.write_packet(e->video_stream, p, e->video.context()->time_base);
+            }, &xerr))
+            fail_extra(*e, xerr);
+    }
     {
         std::lock_guard lock(audio_mutex_);
         if (mixer_) {
@@ -403,7 +487,20 @@ bool EncodeSession::finish(std::string* error) {
                     return false;
             }
             if (side_wav_) side_wav_->close(error);
+            for (auto& e : extras_) {
+                std::string xerr;
+                const AVRational tb = e->audio ? e->audio->context()->time_base : AVRational{1, 1};
+                if (e->ok && e->audio &&
+                    !e->audio->flush([&](AVPacket* p) { return e->muxer.write_packet(e->audio_stream, p, tb); }, &xerr))
+                    fail_extra(*e, xerr);
+            }
         }
+    }
+    for (auto& e : extras_) {
+        std::string xerr;
+        if (!e->ok) continue;
+        if (e->muxer.finish(&xerr)) e->finished = true;
+        else fail_extra(*e, xerr);
     }
     finished_ = true;
     return muxer_.finish(error);
@@ -420,6 +517,7 @@ void EncodeSession::abort() {
     if (worker_.joinable()) worker_.join();
     finished_ = true;
     muxer_.abort();
+    for (auto& e : extras_) e->muxer.abort();
     std::lock_guard lock(audio_mutex_);
     if (side_wav_) side_wav_->close(nullptr);
 }

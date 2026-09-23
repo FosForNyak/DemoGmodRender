@@ -29,6 +29,16 @@
 
 namespace gmdr::render {
 
+// Додаткова версія того самого відео (інший розмір, кодек, кадрування) — кодується з тих
+// самих кадрів одночасно з основною. Звук — загальний мікс.
+struct ExtraOutput {
+    std::string                 label;         // для журналу: "Discord (до 10 МБ)"
+    std::string                 output_path;   // UTF-8
+    std::string                 container;     // порожньо — за розширенням
+    media::VideoEncoderSettings video;
+    media::AudioEncoderSettings audio;
+};
+
 struct EncodeSettings {
     media::VideoEncoderSettings video;
     int                         motion_blur_samples = 1;   // під-кадрів на кадр
@@ -40,6 +50,7 @@ struct EncodeSettings {
     std::string                 container;                 // порожньо — за розширенням
     bool                        faststart = true;
     bool                        crash_safe = false;        // MP4/MOV фрагментами (відкривається навіть після збою)
+    std::vector<ExtraOutput>    extras;                    // додаткові версії
 };
 
 // Які джерела звуку змішувати
@@ -118,8 +129,23 @@ public:
     bool        game_audio_opened() const;
     const EncodeSettings& settings() const { return s_; }
     PipelineStats stats() const;
+    // Додаткові версії, що записалися без помилок (після finish)
+    std::vector<std::string> finished_extras() const;
 
 private:
+    struct Extra {
+        ExtraOutput                          cfg;
+        media::Muxer                         muxer;
+        media::VideoEncoder                  video;
+        int                                  video_stream = -1;
+        std::unique_ptr<media::AudioEncoder> audio;
+        int                                  audio_stream = -1;
+        std::atomic<bool>                    ok{true};
+        bool                                 finished = false;
+    };
+    bool open_extra(Extra& e, bool with_audio, std::string* error);
+    void fail_extra(Extra& e, const std::string& error);
+
     bool encode_video_frame(const frames::Image& img, std::string* error);
     bool produce_audio(int64_t until, std::string* error, bool final = false);   // під audio_mutex_
     bool enqueue(frames::Image&& img, std::string* error);
@@ -142,6 +168,7 @@ private:
     std::vector<std::unique_ptr<media::AudioEncoder>> audio_encoders_;
     std::vector<int>                          audio_streams_;
     std::unique_ptr<audio::WavWriter>         side_wav_;   // для послідовності зображень
+    std::vector<std::unique_ptr<Extra>>       extras_;
     int64_t                                   subframes_in_ = 0;
     std::atomic<int64_t>                      frames_out_{0};
     int                                       frame_w_ = 0, frame_h_ = 0;

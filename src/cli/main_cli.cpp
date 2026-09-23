@@ -17,6 +17,7 @@
 #include "core/render/jobs.hpp"
 #include "core/render/markers.hpp"
 #include "core/render/settings.hpp"
+#include "core/render/versions.hpp"
 #include "core/util/crash_dump.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/log.hpp"
@@ -89,6 +90,8 @@ static void print_usage() {
   --scaler lanczos|bicubic|bilinear|spline   --full-range   --gop СЕКУНД   --threads N
   --accurate-color       максимальна точність кольору (повільніше)
   --target-size МБ       бітрейт під розмір файлу (напр. 10 для Discord)
+  --also discord,480p,vertical,master   додаткові версії з тих самих кадрів (поруч з основним файлом):
+                         Discord до 10 МБ, легка 480p, вертикальна 9:16, ProRes для монтажу
 Звук:
   --no-audio  --acodec aac|libopus|flac|pcm_s16le|pcm_s24le|alac|libmp3lame  --abitrate 320k
   --sample-rate 48000  --no-game-audio  --game-volume 1.0  --audio-offset СЕКУНД
@@ -258,6 +261,14 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");
     if (c.has("--chat-srt")) s.chat_srt = true;
     if (c.has("--no-chapters")) s.chapters = false;
+    if (c.has("--also")) {
+        std::string bad;
+        if (!render::valid_version_ids(c.get("--also"), &bad)) {
+            err = "--also: невідома версія '" + bad + "' (є discord, 480p, vertical, master)";
+            return false;
+        }
+        s.extra_versions = c.get("--also");
+    }
     if (c.has("--level-voices")) s.voice_level = true;
     if (c.has("--denoise")) s.voice_denoise = true;
     if (c.has("--denoise-player")) s.voice_denoise_players = c.get("--denoise-player");

@@ -40,7 +40,14 @@ struct VideoEncoderSettings {
     int         gop_seconds = 2;        // ключовий кадр кожні N секунд (0 — типово)
     bool        full_range = false;     // повний діапазон 0..255 замість 16..235
     std::string hw_device;              // для VAAPI/Vulkan: пристрій (напр. /dev/dri/renderD128)
+    double      crop_aspect = 0;        // > 0: лише центр кадру з таким співвідношенням сторін (9/16 — вертикальне)
 };
+
+// Центральна частина кадру w×h зі співвідношенням сторін aspect (парні координати — для YUV 4:2:0).
+struct CropRect {
+    int x = 0, y = 0, w = 0, h = 0;
+};
+CropRect center_crop(int w, int h, double aspect);
 
 // Типова якість і назва параметра для кодека (для GUI).
 struct QualityInfo {
@@ -81,7 +88,8 @@ public:
 private:
     bool setup_hw_frames(const AVCodec* codec, std::string* error);
     bool send(AVFrame* frame, const PacketSink& sink, std::string* error);
-    bool init_legacy_sws(const frames::Image& img, AVPixelFormat in_fmt, const AVFrame* dst, std::string* error);
+    bool init_legacy_sws(const frames::Image& img, int src_w, int src_h, AVPixelFormat in_fmt, const AVFrame* dst,
+                         std::string* error);
 
     VideoEncoderSettings s_;
     CodecCtxPtr          ctx_;
