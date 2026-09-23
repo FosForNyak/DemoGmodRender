@@ -22,6 +22,10 @@ bool Muxer::open(const std::string& path, const std::string& format_name, std::s
     return true;
 }
 
+void Muxer::set_format_option(const char* key, const char* value) {
+    if (fmt_ctx_ && fmt_ctx_->priv_data) av_opt_set(fmt_ctx_->priv_data, key, value, 0);
+}
+
 bool Muxer::needs_global_header() const {
     return fmt_ctx_ && (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER);
 }

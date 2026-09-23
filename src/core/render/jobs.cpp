@@ -145,12 +145,14 @@ void Job::succeed(const std::string& result) {
 // ============================ Допоміжні функції ==================================
 namespace {
 
-// Журнал: які додаткові версії записано і скільки вони важать
-void log_extra_versions(const std::vector<std::string>& paths) {
-    for (const auto& p : paths) {
+// Після рендеру: обкладинка й анімації з готового файлу; журнал — що записано і скільки важить
+void make_after_render(const RenderSettings& s, std::vector<std::string> made) {
+    const auto post = make_post_versions(s.extra_versions, s.output_path);
+    made.insert(made.end(), post.begin(), post.end());
+    for (const auto& p : made) {
         std::error_code ec;
         const auto size = fs::file_size(path_from_utf8(p), ec);
-        log_info("Додаткова версія: {} ({})", p, ec ? "?" : format_bytes(size));
+        log_info("Додатково: {} ({})", p, ec ? "?" : format_bytes(size));
     }
 }
 
@@ -1549,7 +1551,7 @@ void RenderJob::run() {
                                          A.tick_interval)
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
-    log_extra_versions(extras_done);
+    if (!test_run_) make_after_render(s_, extras_done);
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
@@ -2014,7 +2016,7 @@ void EncodeFramesJob::run() {
     const double secs = session.video_seconds();
     const std::vector<std::string> extras_done = session.finished_extras();
     finalize_output(s_, es.crash_safe && is_mov_family(s_.output_path, s_.container), frames_done, secs);
-    log_extra_versions(extras_done);
+    make_after_render(s_, extras_done);
     log_info("Готово! {} — {} кадрів, {}", s_.output_path, frames_done, format_duration(secs));
     succeed(s_.output_path);
 }

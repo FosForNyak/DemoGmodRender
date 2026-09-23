@@ -25,6 +25,8 @@
 #include "core/render/markers.hpp"
 #include "core/render/subtitles.hpp"
 #include "core/render/versions.hpp"
+#include "core/render/derived.hpp"
+#include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
@@ -737,6 +739,67 @@ static void test_extra_versions() {
     CHECK(!render::valid_version_ids("discord,4k", &bad) && bad == "4k");
 }
 
+// Обкладинка, GIF і WebP з готового відео
+static void test_derived_outputs() {
+    std::printf("[thumbnail, gif, webp]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_derived";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string video = path_to_utf8(dir / "кліп.mp4");
+    // 2 с відео 160×90, 30 кадрів/с: смуга, що рухається
+    {
+        media::Muxer mux;
+        media::VideoEncoder enc;
+        media::VideoEncoderSettings vs;
+        vs.codec = "libx264";
+        vs.fps = {30, 1};
+        vs.preset = "ultrafast";
+        std::string err;
+        const bool opened = mux.open(video, "", &err) && enc.open(vs, 160, 90, mux.needs_global_header(), &err);
+        if (!opened) {
+            std::printf("  пропуск: %s\n", err.c_str());
+            return;
+        }
+        const int st = mux.add_stream(enc.context(), "t");
+        CHECK(mux.write_header(true, false, &err));
+        auto sink = [&](AVPacket* pk) { return mux.write_packet(st, pk, enc.context()->time_base); };
+        for (int f = 0; f < 60; ++f) {
+            frames::Image img;
+            img.allocate(160, 90, frames::PixelLayout::BGR24);
+            for (int y = 0; y < 90; ++y)
+                for (int x = 0; x < 160; ++x) {
+                    uint8_t* px = img.row(0, y) + x * 3;
+                    const bool bar = std::abs(x - f * 2) < 10;
+                    px[0] = bar ? 255 : 40;
+                    px[1] = static_cast<uint8_t>(y * 2);
+                    px[2] = bar ? 255 : 90;
+                }
+            CHECK(enc.encode(img, f, sink, &err));
+        }
+        CHECK(enc.flush(sink, &err) && mux.finish(&err));
+    }
+    std::string err;
+    const std::string jpg = path_to_utf8(dir / "кліп.jpg");
+    CHECK(render::make_thumbnail(video, jpg, -1, 1280, 720, &err));
+    media::MediaFileInfo info;
+    CHECK(media::probe_media_file(jpg, info, &err) && info.has_video);
+    const std::string gif = path_to_utf8(dir / "кліп.gif");
+    CHECK(render::make_animation(video, gif, render::AnimFormat::Gif, 1.0, 480, 10, &err));
+    CHECK(media::probe_media_file(gif, info, &err) && info.has_video);
+    if (avcodec_find_encoder_by_name("libwebp_anim")) {
+        const std::string webp = path_to_utf8(dir / "кліп.webp");
+        CHECK(render::make_animation(video, webp, render::AnimFormat::WebP, 1.0, 640, 10, &err));
+        auto bytes = read_file_bytes(path_from_utf8(webp));
+        CHECK(bytes && bytes->size() > 100 && std::memcmp(bytes->data(), "RIFF", 4) == 0 &&
+              std::memcmp(bytes->data() + 8, "WEBPVP8X", 8) == 0);
+    }
+    // Не відео — помилка з поясненням, а не падіння
+    write_file_text(dir / "не_відео.mp4", "hello");
+    CHECK(!render::make_thumbnail(path_to_utf8(dir / "не_відео.mp4"), jpg, -1, 640, 360, &err) && !err.empty());
+    fs::remove_all(dir);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1214,6 +1277,7 @@ int main(int argc, char** argv) {
     test_job_elapsed();
     test_driver_cfg();
     test_extra_versions();
+    test_derived_outputs();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();

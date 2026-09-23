@@ -90,8 +90,9 @@ static void print_usage() {
   --scaler lanczos|bicubic|bilinear|spline   --full-range   --gop СЕКУНД   --threads N
   --accurate-color       максимальна точність кольору (повільніше)
   --target-size МБ       бітрейт під розмір файлу (напр. 10 для Discord)
-  --also discord,480p,vertical,master   додаткові версії з тих самих кадрів (поруч з основним файлом):
-                         Discord до 10 МБ, легка 480p, вертикальна 9:16, ProRes для монтажу
+  --also discord,480p,vertical,master,thumb,gif,webp   ще версії поруч з основним файлом:
+                         Discord до 10 МБ, легка 480p, вертикальна 9:16, ProRes для монтажу (з тих самих
+                         кадрів); обкладинка JPG, GIF і WebP (перші 15 с) — з готового відео
 Звук:
   --no-audio  --acodec aac|libopus|flac|pcm_s16le|pcm_s24le|alac|libmp3lame  --abitrate 320k
   --sample-rate 48000  --no-game-audio  --game-volume 1.0  --audio-offset СЕКУНД
@@ -264,7 +265,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--also")) {
         std::string bad;
         if (!render::valid_version_ids(c.get("--also"), &bad)) {
-            err = "--also: невідома версія '" + bad + "' (є discord, 480p, vertical, master)";
+            err = "--also: невідома версія '" + bad + "' (є discord, 480p, vertical, master, thumb, gif, webp)";
             return false;
         }
         s.extra_versions = c.get("--also");

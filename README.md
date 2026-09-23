@@ -44,6 +44,10 @@
   480p, вертикальне відео 9:16 для Shorts/TikTok/Reels (центр кадру) і ProRes 422 HQ для монтажу.
   Файли з'являються поруч з основним: `бій_discord.mp4`, `бій_vertical.mp4`... У консолі —
   `--also discord,480p,vertical,master`.
+- **Обкладинка, GIF і WebP**: там само можна замовити обкладинку `бій.jpg` (найвиразніший кадр
+  біля середини, до 1280×720), `бій.gif` (перші 15 с, палітра саме під це відео) і анімацію
+  `бій.webp` (менша й якісніша за GIF). Вони робляться з готового відео одразу після рендеру
+  (`--also thumb,gif,webp`).
 
 ## Що нового у 1.1
 
@@ -266,7 +270,7 @@ gmdr-cli render demo.dem -o yt.mp4 --level-voices --denoise --duck-game --loudne
 gmdr-cli voice demo.dem -o голоси\ --denoise-player steam:76561198152226525 --level-voices
 gmdr-cli render a.dem b.dem c.dem -o відео\ --size 1920x1080 (черга: гра запускається один раз)
 gmdr-cli queue список.txt --fps 60                          (черга з файлу; параметри — для всіх пунктів)
-gmdr-cli render demo.dem -o бій.mp4 --size 2560x1440 --also discord,vertical   (+ бій_discord.mp4, бій_vertical.mp4)
+gmdr-cli render demo.dem -o бій.mp4 --size 2560x1440 --also discord,vertical,thumb,gif   (+ _discord, _vertical, .jpg, .gif)
 gmdr-cli encode "C:\...\кадри" -o out.mkv --codec ffv1     (закодувати готові кадри startmovie)
 gmdr-cli encoders --test                                    (які кодеки працюють на цьому ПК)
 ```

@@ -6,6 +6,8 @@
 
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
+#include "../util/log.hpp"
+#include "derived.hpp"
 #include "jobs.hpp"
 
 namespace gmdr::render {
@@ -18,6 +20,9 @@ const std::vector<VersionPreset>& version_presets() {
         {"480p", "Легка копія 480p", "H.264 480p — швидко переслати або дивитися з телефона"},
         {"vertical", "Вертикальне 9:16", "центр кадру, 1080×1920 — для YouTube Shorts, TikTok, Reels"},
         {"master", "Для монтажу (ProRes)", "ProRes 422 HQ у MOV, звук без стиснення — для Premiere, DaVinci Resolve"},
+        {"thumb", "Обкладинка (JPG)", "найвиразніший кадр біля середини відео, до 1280×720 — для YouTube чи прев'ю", true},
+        {"gif", "GIF", "перші 15 с, 480 пікселів завширшки, 15 кадрів/с — для чатів і форумів", true},
+        {"webp", "WebP-анімація", "перші 15 с, 640 пікселів, 20 кадрів/с — менша й якісніша за GIF", true},
     };
     return presets;
 }
@@ -120,6 +125,41 @@ std::vector<ExtraOutput> make_extra_outputs(const std::string& ids, const Encode
         out.push_back(std::move(x));
     }
     return out;
+}
+
+std::vector<std::string> make_post_versions(const std::string& ids, const std::string& main_path) {
+    std::vector<std::string> made;
+    fs::path p = path_from_utf8(main_path);
+    const std::string stem = path_to_utf8(p.stem());
+    auto sibling = [&](const char* ext) { return path_to_utf8(p.parent_path() / path_from_utf8(stem + ext)); };
+    for (const auto& raw : split(ids, ',')) {
+        const std::string id = trim(raw);
+        if (id != "thumb" && id != "gif" && id != "webp") continue;
+        if (stem.find('%') != std::string::npos) {
+            log_warn("Обкладинка й анімації — лише для відеофайлу, не для послідовності зображень");
+            break;
+        }
+        std::string out, err;
+        bool ok = false;
+        if (id == "thumb") {
+            out = sibling(".jpg");
+            ok = make_thumbnail(main_path, out, -1, 1280, 720, &err);
+        } else if (id == "gif") {
+            out = sibling(".gif");
+            ok = make_animation(main_path, out, AnimFormat::Gif, 15.0, 480, 15, &err);
+        } else {
+            out = sibling(".webp");
+            ok = make_animation(main_path, out, AnimFormat::WebP, 15.0, 640, 20, &err);
+        }
+        if (ok) {
+            made.push_back(out);
+        } else {
+            std::error_code ec;
+            fs::remove(path_from_utf8(out), ec);
+            log_warn("Не вдалося зробити {}: {}", out, err);
+        }
+    }
+    return made;
 }
 
 } // namespace gmdr::render

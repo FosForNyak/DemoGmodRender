@@ -23,6 +23,8 @@ public:
     bool open(const std::string& path_utf8, const std::string& format_name, std::string* error);
     bool needs_global_header() const;
     bool is_image_sequence() const;
+    // Параметр самого формату (напр. "loop" для webp) — до write_header.
+    void set_format_option(const char* key, const char* value);
     const AVOutputFormat* format() const { return fmt_ctx_ ? fmt_ctx_->oformat : nullptr; }
 
     // Перевірити, чи контейнер підтримує кодек.
