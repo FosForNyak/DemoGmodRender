@@ -4,7 +4,10 @@ compare_av.py — чи однакові за часом два відео з і�
 кадри з білими спалахами і початки "біпів" 1 кГц у звуці. Так перевіряється, що паралельний
 рендер (частини кількох копій гри, склеєні без перекодування) не має швів і зсуву звуку.
 
-Використання: compare_av.py a.mp4 b.mp4 [--ffmpeg ПАПКА]   (без numpy — лише стандартна бібліотека)
+Використання: compare_av.py a.mp4 b.mp4 [--ffmpeg ПАПКА] [--frame-tolerance N]
+  --frame-tolerance 1 — спалах може бути на сусідньому кадрі (стик дописування після збою починається
+  з ключового кадру, що не завжди припадає на тік: зсув до пів кадру)
+Без numpy — лише стандартна бібліотека.
 """
 import array
 import math
@@ -12,10 +15,14 @@ import os
 import subprocess
 import sys
 
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # консоль Windows у CI — cp1252
 args = [a for a in sys.argv[1:] if not a.startswith('--')]
 ffdir = sys.argv[sys.argv.index('--ffmpeg') + 1] if '--ffmpeg' in sys.argv else ''
 if '--ffmpeg' in sys.argv:
     args.remove(ffdir)
+tol = int(sys.argv[sys.argv.index('--frame-tolerance') + 1]) if '--frame-tolerance' in sys.argv else 0
+if '--frame-tolerance' in sys.argv:
+    args.remove(str(tol))
 ffmpeg = os.path.join(ffdir, 'ffmpeg') if ffdir else 'ffmpeg'
 SR = 8000
 
@@ -69,7 +76,7 @@ n = min(na, nb)
 fa, fb = [f for f in fa if f < n], [f for f in fb if f < n]
 end = min(sa, sb) - 0.1
 ba, bb = [b for b in ba if b < end], [b for b in bb if b < end]
-if fa != fb:
+if len(fa) != len(fb) or any(abs(x - y) > tol for x, y in zip(fa, fb)):
     print('  ! спалахи на різних кадрах')
     ok = False
 if len(ba) != len(bb) or any(abs(x - y) > 0.015 for x, y in zip(ba, bb)):
