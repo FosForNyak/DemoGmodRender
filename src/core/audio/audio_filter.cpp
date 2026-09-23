@@ -1,6 +1,8 @@
 #include "audio_filter.hpp"
 
 #include "../media/ffmpeg_util.hpp"
+#include "../util/file_util.hpp"
+#include "../util/strings.hpp"
 
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -116,7 +118,13 @@ bool AudioFilterChain::push(int input, const float* data, size_t frames, std::st
 
 bool AudioFilterChain::finish(std::string* error) {
     if (!graph_) return false;
-    for (AVFilterContext* src : src_) (void)av_buffersrc_add_frame_flags(src, nullptr, 0);   // кінець потоку
+    for (AVFilterContext* src : src_) {
+        const int r = av_buffersrc_add_frame_flags(src, nullptr, 0);   // кінець потоку
+        if (r < 0 && r != AVERROR_EOF) {
+            if (error) *error = std::format("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
+            return false;
+        }
+    }
     return drain(error);
 }
 
@@ -154,8 +162,9 @@ void AudioFilterChain::place(int64_t pos, const float* data, size_t frames) {
     if (skip >= static_cast<int64_t>(frames)) return;
     const int64_t at = pos + skip;
     const size_t overlap = static_cast<size_t>(std::min<int64_t>(end - at, static_cast<int64_t>(frames) - skip));
-    std::memcpy(out_.data() + static_cast<size_t>(at - out_start_) * ch, data + static_cast<size_t>(skip) * ch,
-                overlap * ch * sizeof(float));
+    if (overlap > 0)   // порожній буфер: data() == nullptr, а memcpy з ним — UB навіть для 0 байт
+        std::memcpy(out_.data() + static_cast<size_t>(at - out_start_) * ch, data + static_cast<size_t>(skip) * ch,
+                    overlap * ch * sizeof(float));
     const size_t rest_from = static_cast<size_t>(skip) + overlap;
     out_.insert(out_.end(), data + rest_from * ch, data + frames * ch);
 }
@@ -167,7 +176,35 @@ void AudioFilterChain::discard_before(int64_t pos) {
     out_start_ += n;
 }
 
+std::string filter_path_arg(const std::filesystem::path& p) {
+    std::string s = path_to_utf8(p);
+#ifdef _WIN32
+    std::replace(s.begin(), s.end(), '\\', '/');   // Windows розуміє й прямі, а екранувати менше
+#endif
+    std::string opt, graph;
+    for (char c : s) {
+        if (c == '\\' || c == ':' || c == '\'') opt += '\\';
+        opt += c;
+    }
+    for (char c : opt) {
+        if (c == '\\' || c == '\'' || c == '[' || c == ']' || c == ',' || c == ';') graph += '\\';
+        graph += c;
+    }
+    return graph;
+}
+
+std::filesystem::path voice_denoise_model() {
+    static const std::filesystem::path model = [] {
+        std::error_code ec;
+        const std::filesystem::path p = executable_dir() / "rnnoise-voice.rnnn";
+        return std::filesystem::is_regular_file(p, ec) ? p : std::filesystem::path();
+    }();
+    return model;
+}
+
 std::string denoise_filter(double noise_db) {
+    const std::filesystem::path model = voice_denoise_model();
+    if (!model.empty()) return "arnndn=m=" + filter_path_arg(model);
     const int nf = static_cast<int>(std::lround(std::clamp(noise_db, -80.0, -20.0)));
     return std::format("afftdn=nr=12:nf={}:tn=1", nf);
 }

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -63,7 +64,13 @@ private:
 };
 
 // ---- Готові ланцюжки ---------------------------------------------------------------
-// Шумодав для шипіння мікрофона; noise_db — рівень фону гравця (дБ).
+// Шлях як значення параметра фільтра в описі графа: прямі скісні риски (і на Windows) і
+// двічі екрановано — ':' і '\'' для параметра, '[],;' для графа.
+std::string filter_path_arg(const std::filesystem::path& p);
+// Модель RNNoise поруч із програмою (rnnoise-voice.rnnn); порожньо — немає.
+std::filesystem::path voice_denoise_model();
+// Шумодав для голосу: нейромережа RNNoise (arnndn) — прибирає і фон, схожий на мову за
+// гучністю; без моделі — afftdn (шипіння), noise_db — рівень фону гравця (дБ).
 std::string denoise_filter(double noise_db);
 // Приглушення першого входу (гра) другим (голоси).
 std::string duck_filter();

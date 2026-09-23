@@ -506,4 +506,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # Консоль Windows-раннера в cp1252 — без цього print з кирилицею падає
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     main()

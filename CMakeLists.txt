@@ -99,11 +99,19 @@ function(gmdr_copy_ffmpeg_dlls target)
     endif()
 endfunction()
 
+# Модель RNNoise для шумодава голосу — поруч із програмою (без неї шумодав бере afftdn)
+function(gmdr_copy_voice_model target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_SOURCE_DIR}/third_party/rnnoise-models/lq.rnnn"
+                "$<TARGET_FILE_DIR:${target}>/rnnoise-voice.rnnn")
+endfunction()
+
 # ---- Консольна програма ---------------------------------------------------------
 if(GMDR_BUILD_CLI)
     add_executable(gmdr-cli src/cli/main_cli.cpp)
     target_link_libraries(gmdr-cli PRIVATE gmdr_core)
     gmdr_copy_ffmpeg_dlls(gmdr-cli)
+    gmdr_copy_voice_model(gmdr-cli)
 endif()
 
 # ---- Програма з вікном --------------------------------------------------------
@@ -140,6 +148,7 @@ if(GMDR_BUILD_GUI)
     endif()
     target_include_directories(gmdr PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends ${IMGUI_DIR}/misc/cpp)
     gmdr_copy_ffmpeg_dlls(gmdr)
+    gmdr_copy_voice_model(gmdr)
 endif()
 
 # ---- Тести --------------------------------------------------------------------
@@ -148,6 +157,7 @@ if(GMDR_BUILD_TESTS)
     add_executable(gmdr-tests tests/test_main.cpp)
     target_link_libraries(gmdr-tests PRIVATE gmdr_core)
     add_test(NAME unit COMMAND gmdr-tests)
+    gmdr_copy_voice_model(gmdr-tests)
     add_executable(gmdr-fakegame tests/fake_game.cpp)
     target_link_libraries(gmdr-fakegame PRIVATE gmdr_core)
 endif()

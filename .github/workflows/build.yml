@@ -89,6 +89,7 @@ jobs:
             build/gmdr.exe
             build/gmdr-cli.exe
             build/*.dll
+            build/rnnoise-voice.rnnn
             third_party/ffmpeg/LICENSE.txt
 
   linux-gcc:

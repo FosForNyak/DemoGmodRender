@@ -35,7 +35,6 @@ VoiceClip make_voice_clip(const voice::SpeakerTrack& track, int64_t from, const 
         else keep.push_back({s, e});
     }
     if (keep.empty()) return clip;
-    const int64_t b = keep.back().second;
 
     // Той самий шлях, що й під час рендеру: VoiceInput -> [шумодав і гейт] -> підсилення
     std::unique_ptr<AudioInput> src = std::make_unique<VoiceInput>(&track, 0, 0.0);

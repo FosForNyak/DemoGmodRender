@@ -1024,9 +1024,10 @@ static void test_audio_filters() {
         CHECK(std::abs(rms_db(out, 1.1, 1.9, 2) - rms_db(v, 1.1, 1.9)) < 0.5);   // фраза без змін
         const size_t onset = static_cast<size_t>(4.0 * R) + R / 500;   // 2 мс після початку фрази
         CHECK(std::abs(out[onset * 2] - v[onset]) < 0.1f * std::abs(v[onset]) + 1e-4f);
-        // afftdn + гейт: так само, фраза ціла
+        // afftdn + гейт: так само, фраза ціла (запасний шумодав, коли немає моделі RNNoise;
+        // сама RNNoise синус як "не мову" приглушила б)
         audio::FilteredInput f2("голос", {{{in.get(), 1.0f}}}, true);
-        CHECK(f2.open(audio::denoise_filter(prof.noise_db), &gp, &err));
+        CHECK(f2.open("afftdn=nr=12:nf=-60:tn=1", &gp, &err));
         std::fill(out.begin(), out.end(), 0.0f);
         for (size_t at = 0; at < v.size(); at += 4096)
             f2.mix(static_cast<int64_t>(at), out.data() + at * 2, std::min<size_t>(4096, v.size() - at), 1.0f);
@@ -1039,6 +1040,36 @@ static void test_audio_filters() {
         std::vector<float> part(R * 2, 0.0f);
         f3.mix(static_cast<int64_t>(4.0 * R), part.data(), R / 2, 1.0f);
         CHECK(std::abs(part[(R / 4) * 2] - v[static_cast<size_t>(4.25 * R)]) < 1e-5f);
+    }
+
+    // ---- нейромережевий шумодав RNNoise (arnndn): модель поруч із програмою ----
+    {
+        CHECK(audio::filter_path_arg("C:/a b/c,d'[e];f") == R"(C\\:/a b/c\,d\\\'\[e\]\;f)");
+        const auto model = audio::voice_denoise_model();
+        CHECK(!model.empty());
+        CHECK(audio::denoise_filter(-50).rfind("arnndn=", 0) == 0);
+        if (!model.empty()) {
+            // Шлях з усім, що треба екранувати в описі графа, і кирилицею
+            namespace fs = std::filesystem;
+            const fs::path dir = fs::temp_directory_path() / path_from_utf8("gmdr тест, [x]; 'q'");
+            fs::create_directories(dir);
+            const fs::path copy = dir / "m,1.rnnn";
+            fs::copy_file(model, copy, fs::copy_options::overwrite_existing);
+            audio::AudioFilterChain c;
+            std::string err;
+            CHECK(c.open("arnndn=m=" + audio::filter_path_arg(copy), 1, 1, &err));
+            if (!err.empty()) std::printf("  %s\n", err.c_str());
+            std::vector<float> noise(static_cast<size_t>(4 * R));
+            for (auto& x : noise) x = gauss(rng) * 0.03f;   // шум -30 дБ, без мови
+            for (size_t at = 0; at < noise.size(); at += 4096)
+                c.push(0, noise.data() + at, std::min<size_t>(4096, noise.size() - at), &err);
+            CHECK(c.finish(&err));
+            CHECK(std::llabs(c.out_end() - static_cast<int64_t>(noise.size())) <= 480);
+            std::vector<float> out;
+            for (int64_t p = R; p < std::min<int64_t>(c.out_end(), 4 * R); ++p) out.push_back(c.out_at(p)[0]);
+            CHECK(rms_db(out, 0, 3) < rms_db(noise, 1, 4) - 15);   // шум без мови глушиться
+            fs::remove_all(dir);
+        }
     }
 
     // ---- гра стихає під голоси (sidechaincompress) ----

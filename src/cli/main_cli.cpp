@@ -93,7 +93,7 @@ static void print_usage() {
   --voice-volume 1.0  --voice-delay СЕКУНД  --separate-tracks  --engine-voice
   --player-volume "steam:7656...=1.5; slot:3=0"   гучність окремих гравців (0 — вимкнути)
   --level-voices         вирівняти гучність гравців (кожного — до -18 LUFS)
-  --denoise              шумодав і тиша між фразами для всіх гравців; --denoise-player steam:7656...,slot:3 — для вибраних
+  --denoise              шумодав (RNNoise) і тиша між фразами для всіх гравців; --denoise-player steam:7656...,slot:3 — для вибраних
   --duck-game            звук гри стихає, коли хтось говорить
   --loudness LUFS|off    гучність загального міксу за EBU R128 (-14 — YouTube, -23 — ТБ)
   --srt                  субтитри «хто говорить» (.srt поруч із відео)
