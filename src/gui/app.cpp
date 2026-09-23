@@ -14,6 +14,7 @@
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/muxer.hpp"
 #include "core/media/video_encoder.hpp"
+#include "core/render/report.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/strings.hpp"
 #include "core/game/audio_mute.hpp"
@@ -142,7 +143,7 @@ void App::init(const std::vector<std::string>& args) {
     whole_demo_ = s_.start_tick <= 0 && s_.end_tick <= 0;
     load_queue();
 
-    log_info("GMod Demo Render 1.1 — рендер демо Garry's Mod у відео");
+    log_info("GMod Demo Render {} — рендер демо Garry's Mod у відео", GMDR_VERSION);
     log_info("FFmpeg: libavcodec {}.{}.{}", LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
     refresh_codec_lists();
     detect_gmod(false);
@@ -256,6 +257,42 @@ void App::load_demo(const std::string& path_in) {
 }
 
 bool App::job_running() const { return job_ && job_->running(); }
+
+void App::make_report() {
+    const std::string path = save_file_dialog("Зберегти звіт про проблему", {{"ZIP-архів", "*.zip"}},
+                                              render::default_report_name(), "zip");
+    if (path.empty()) return;
+    save_settings_now();
+    render::ReportInput in;
+    in.settings_path = settings_path_;
+    {
+        std::lock_guard lock(gpu_mutex_);
+        std::string gpu;
+        for (const auto& [name, st] : gpu_status_)
+            gpu += std::format("  {}: {}\n", name, st == 1 ? "працює" : st == 0 ? "не працює" : "перевіряється");
+        if (!gpu.empty()) in.extra_text = "Перевірка GPU-кодеків у програмі:\n" + gpu;
+    }
+    std::vector<std::string> contents;
+    std::string err;
+    popup_checks_.clear();
+    popup_test_ok_ = false;
+    popup_is_folder_ = false;
+    if (render::make_problem_report(path_from_utf8(path), in, &contents, &err)) {
+        log_info("Звіт про проблему: {}", path);
+        std::string list;
+        for (const auto& c : contents) list += "\n  • " + c;
+        popup_title_ = "Звіт готовий";
+        popup_text_ = "Файл: " + path + "\n\nУсередині:" + list +
+                      "\n\nШлях до вашого профілю Windows у текстах замінено на %USERPROFILE%. Архів нікуди не "
+                      "надсилається — перегляньте його і передайте сам (Discord, GitHub, пошта).";
+        popup_result_ = path;
+    } else {
+        popup_title_ = "Не вдалося створити звіт";
+        popup_text_ = err;
+        popup_result_.clear();
+    }
+    open_popup_ = true;
+}
 
 void App::start_render(bool test_run) {
     if (!analysis_) return;
@@ -574,6 +611,7 @@ void App::draw_menu_bar() {
     }
     if (ImGui::BeginMenu("Довідка")) {
         if (ImGui::MenuItem("Як це працює")) show_help_ = true;
+        if (ImGui::MenuItem("Зібрати звіт про проблему...")) make_report();
         if (ImGui::MenuItem("Про програму")) show_about_ = true;
         ImGui::EndMenu();
     }
@@ -798,7 +836,13 @@ void App::draw_popups() {
             ImGui::SameLine();
         }
         if (!popup_result_.empty()) {
-            if (popup_is_folder_) {
+            if (ends_with_i(popup_result_, ".zip")) {
+                if (ImGui::Button("Показати в папці")) {
+                    show_in_folder(popup_result_);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+            } else if (popup_is_folder_) {
                 if (ImGui::Button("Відкрити папку")) {
                     open_path(popup_result_);
                     ImGui::CloseCurrentPopup();
@@ -843,7 +887,7 @@ void App::draw_popups() {
         show_about_ = false;
     }
     if (ImGui::BeginPopupModal("Про програму", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(kColAccent, "GMod Demo Render 1.1");
+        ImGui::TextColored(kColAccent, "GMod Demo Render " GMDR_VERSION);
         ImGui::TextUnformatted("Рендер демо-записів Garry's Mod у відео будь-якого формату.");
         ImGui::TextColored(kColDim, "Кодування: FFmpeg (libavcodec %d.%d). Інтерфейс: Dear ImGui %s.", LIBAVCODEC_VERSION_MAJOR,
                            LIBAVCODEC_VERSION_MINOR, IMGUI_VERSION);

@@ -129,6 +129,8 @@ private:
     void load_queue();
     void save_queue();
     void finish_queue(const render::QueueJob& q);
+    // Звіт про проблему (Довідка → «Зібрати звіт про проблему»)
+    void make_report();
 
     // ---- стан ----
     render::RenderSettings                          s_;

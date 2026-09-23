@@ -16,6 +16,7 @@
 #include "core/media/video_encoder.hpp"
 #include "core/render/jobs.hpp"
 #include "core/render/markers.hpp"
+#include "core/render/report.hpp"
 #include "core/render/settings.hpp"
 #include "core/render/versions.hpp"
 #include "core/util/crash_dump.hpp"
@@ -73,6 +74,9 @@ static void print_usage() {
                                                F9 — початок фрагмента, F11 — кінець, F6 — позначка
   gmdr-cli encode <папка_кадрів> [параметри]   закодувати готові кадри startmovie (TGA/JPG + WAV)
   gmdr-cli encoders [--test]                   список кодеків (і перевірка GPU-кодеків)
+  gmdr-cli report [-o файл.zip]                звіт про проблему: журнал, налаштування, система,
+                                               консоль GMod (нічого не надсилається — лише файл)
+  gmdr-cli --version                           версія програми
   gmdr-cli driver install|uninstall|status     драйвер у меню GMod
 
 Відео:
@@ -556,6 +560,26 @@ static std::vector<std::string> split_command_line(const std::string& line) {
     return out;
 }
 
+// Звіт про проблему: ZIP з журналом, налаштуваннями, відомостями про систему і консоллю GMod
+static int cmd_report(const Cli& c) {
+    const fs::path out = c.has("--output") ? path_from_utf8(c.get("--output"))
+                                           : fs::current_path() / path_from_utf8(render::default_report_name());
+    render::ReportInput in;
+    const fs::path settings = app_data_dir() / "gmdr_settings.json";
+    std::error_code ec;
+    if (fs::exists(settings, ec)) in.settings_path = path_to_utf8(settings);
+    std::vector<std::string> contents;
+    std::string err;
+    if (!render::make_problem_report(out, in, &contents, &err)) {
+        std::printf("Не вдалося створити звіт: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("Звіт: %s\n", path_to_utf8(out).c_str());
+    for (const auto& n : contents) std::printf("  %s\n", n.c_str());
+    std::puts("Шлях до профілю Windows у текстах замінено на %USERPROFILE%. Перегляньте архів перед тим, як надіслати.");
+    return 0;
+}
+
 // Черга: "render a.dem b.dem ..." (demos) або "queue список.txt" (рядок — демо і його параметри;
 // параметри з командного рядка — для всіх). Гра запускається один раз.
 static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
@@ -717,6 +741,10 @@ int main(int argc, char** argv) {
     install_crash_handler(app_data_dir());
     const auto args = utf8_args(argc, argv);
     Cli c = parse_cli(args);
+    if (c.command == "--version" || c.command == "version" || c.has("--version")) {
+        std::puts("GMod Demo Render " GMDR_VERSION);
+        return 0;
+    }
     if (c.command.empty() || c.has("-h") || c.has("--help")) {
         print_usage();
         return c.command.empty() ? 1 : 0;
@@ -736,6 +764,7 @@ int main(int argc, char** argv) {
     }
 
     if (c.command == "info") return cmd_info(c);
+    if (c.command == "report") return cmd_report(c);
     if (c.command == "voice") return cmd_voice(c);
     if (c.command == "encoders") return cmd_encoders(c);
     if (c.command == "driver") return cmd_driver(c);

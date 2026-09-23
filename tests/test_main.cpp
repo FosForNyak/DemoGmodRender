@@ -26,6 +26,8 @@
 #include "core/render/subtitles.hpp"
 #include "core/render/versions.hpp"
 #include "core/render/derived.hpp"
+#include "core/render/report.hpp"
+#include "core/util/zip_writer.hpp"
 #include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -800,6 +802,49 @@ static void test_derived_outputs() {
     fs::remove_all(dir);
 }
 
+// ZIP для звіту: CRC32, заголовки, імена UTF-8; прибирання шляху до профілю
+static void test_report_zip() {
+    std::printf("[report zip]\n");
+    namespace fs = std::filesystem;
+    const char* check = "123456789";
+    CHECK(crc32(reinterpret_cast<const uint8_t*>(check), 9) == 0xCBF43926u);
+    const fs::path zp = fs::temp_directory_path() / "gmdr_test_звіт.zip";
+    {
+        ZipWriter z;
+        std::string err;
+        CHECK(z.open(zp, &err));
+        CHECK(z.add("журнал.txt", "рядок 1\nрядок 2\n"));
+        CHECK(z.add("порожній.txt", ""));
+        CHECK(!z.add_file("немає.txt", fs::temp_directory_path() / "gmdr_такого_файлу_нема"));
+        CHECK(z.close(&err));
+    }
+    auto bytes = read_file_bytes(zp);
+    CHECK(bytes.has_value());
+    if (bytes) {
+        const auto& b = *bytes;
+        auto u16 = [&](size_t o) { return static_cast<uint32_t>(b[o] | (b[o + 1] << 8)); };
+        auto u32 = [&](size_t o) { return u16(o) | (u16(o + 2) << 16); };
+        CHECK(u32(0) == 0x04034b50 && (u16(6) & 0x0800));   // перший файл, імена UTF-8
+        const size_t eocd = b.size() - 22;
+        CHECK(u32(eocd) == 0x06054b50 && u16(eocd + 10) == 2);   // два записи в каталозі
+        const size_t cd = u32(eocd + 16);
+        CHECK(u32(cd) == 0x02014b50 && u32(cd + 16) == crc32(reinterpret_cast<const uint8_t*>("рядок 1\nрядок 2\n"),
+                                                               std::strlen("рядок 1\nрядок 2\n")));
+        const std::string name(reinterpret_cast<const char*>(&b[cd + 46]), u16(cd + 28));
+        CHECK(name == "журнал.txt");
+    }
+    std::error_code ec;
+    fs::remove(zp, ec);
+    // Шлях до профілю — у звичайному вигляді, з прямими скісними і в JSON (подвоєні \)
+    const std::string prof = "C:\\Users\\Олена";
+    const std::string text = "лог: c:\\users\\Олена\\Desktop\\a.dem; C:/Users/Олена/x; {\"p\":\"C:\\\\Users\\\\Олена\\\\y\"}";
+    const std::string an = render::anonymize_paths(text, prof);
+    CHECK(an.find("Олена") == std::string::npos);   // регістр латинської частини шляху не важить
+    CHECK(an.find("%USERPROFILE%\\Desktop") != std::string::npos && an.find("%USERPROFILE%/x") != std::string::npos);
+    CHECK(render::default_report_name().ends_with(".zip"));
+    CHECK(render::system_summary().find("GMod Demo Render") != std::string::npos);
+}
+
 static void test_driver_cfg() {
     std::printf("[driver cfg]\n");
     namespace fs = std::filesystem;
@@ -1278,6 +1323,7 @@ int main(int argc, char** argv) {
     test_driver_cfg();
     test_extra_versions();
     test_derived_outputs();
+    test_report_zip();
     test_rtx_profile();
     test_chat_and_markers();
     test_audio_filters();
