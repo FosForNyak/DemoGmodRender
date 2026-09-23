@@ -7,6 +7,7 @@
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
 #include "../util/subprocess.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -27,10 +28,10 @@ namespace fs = std::filesystem;
 const std::vector<ModelInfo>& known_models() {
     // Від найточнішої до найшвидшої — у такому порядку й вибирається наявна
     static const std::vector<ModelInfo> m = {
-        {"ggml-large-v3-turbo.bin", "Large v3 Turbo — найточніша", 1550},
-        {"ggml-large-v3-turbo-q5_0.bin", "Large v3 Turbo, стиснута — майже так само точна", 547},
-        {"ggml-small.bin", "Small — швидша, помиляється частіше", 466},
-        {"ggml-base.bin", "Base — найшвидша, для проби", 142},
+        {"ggml-large-v3-turbo.bin", tr("Large v3 Turbo — найточніша"), 1550},
+        {"ggml-large-v3-turbo-q5_0.bin", tr("Large v3 Turbo, стиснута — майже так само точна"), 547},
+        {"ggml-small.bin", tr("Small — швидша, помиляється частіше"), 466},
+        {"ggml-base.bin", tr("Base — найшвидша, для проби"), 142},
     };
     return m;
 }
@@ -82,7 +83,7 @@ std::optional<WhisperTools> find_whisper(const std::string& cli_override, const 
     }
     if (t.cli.empty()) {
         if (why)
-            *why = std::format("не знайдено whisper-cli: покладіть його (з DLL) у теку «whisper» поруч із програмою ({})",
+            *why = trf("не знайдено whisper-cli: покладіть його (з DLL) у теку «whisper» поруч із програмою ({})",
                                path_to_utf8(executable_dir() / "whisper"));
         return std::nullopt;
     }
@@ -109,7 +110,7 @@ std::optional<WhisperTools> find_whisper(const std::string& cli_override, const 
         if (t.model.empty() && !found.empty()) t.model = found.front();
     }
     if (t.model.empty()) {
-        if (why) *why = "немає моделі розпізнавання — завантажте її («Розпізнати мовлення» → «Завантажити модель»)";
+        if (why) *why = tr("немає моделі розпізнавання — завантажте її («Розпізнати мовлення» → «Завантажити модель»)");
         return std::nullopt;
     }
     return t;
@@ -263,7 +264,7 @@ std::vector<RawSegment> parse_whisper_json(const std::string& text, std::string*
     std::vector<RawSegment> out;
     auto j = json::parse(text);
     if (!j || !j->is_object() || !(*j)["transcription"].is_array()) {
-        if (error) *error = "незрозумілий вивід whisper-cli (немає transcription)";
+        if (error) *error = tr("незрозумілий вивід whisper-cli (немає transcription)");
         return out;
     }
     for (const auto& s : (*j)["transcription"].items())
@@ -374,7 +375,7 @@ bool write_compact_wav(const voice::SpeakerTrack& track, const std::vector<Piece
                             nullptr) < 0 ||
         swr_init(raw) < 0) {
         swr_free(&raw);
-        if (error) *error = "не вдалося налаштувати ресемплер";
+        if (error) *error = tr("не вдалося налаштувати ресемплер");
         return false;
     }
     media::SwrPtr swr(raw);
@@ -411,9 +412,9 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
                                      const WhisperTools& tools, const Options& opt, const fs::path& work_dir,
                                      const Progress& progress, const std::atomic<bool>* cancel, std::string* error) {
     constexpr double kGap = 1.0;
-    Transcript tr;
-    tr.model = path_to_utf8(tools.model.filename());
-    tr.language = opt.language.empty() ? "auto" : opt.language;
+    Transcript ts;
+    ts.model = path_to_utf8(tools.model.filename());
+    ts.language = opt.language.empty() ? "auto" : opt.language;
     std::error_code ec;
     fs::create_directories(work_dir, ec);
     // Скільки всього розпізнавати — для прогресу
@@ -433,18 +434,18 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
         if (!track) continue;
         const double cover_to = opt.to >= 0 ? opt.to : 1e9;   // усе демо — до кінця, хоч би що було далі
         if (pieces.empty()) {   // на цьому відрізку гравець мовчить — теж результат
-            tr.covered.push_back({track->key, opt.from, cover_to});
+            ts.covered.push_back({track->key, opt.from, cover_to});
             continue;
         }
         const double seconds = pieces.back().compact + pieces.back().length;
-        if (progress) progress(total > 0 ? done / total : 0, std::format("{}: підготовка звуку", name));
+        if (progress) progress(total > 0 ? done / total : 0, trf("{}: підготовка звуку", name));
         const fs::path wav = work_dir / std::format("speaker_{}.wav", k);
         const fs::path out_base = work_dir / std::format("speaker_{}", k);
         if (!write_compact_wav(*track, pieces, wav, kGap, cancel, error)) {
-            if (cancel && cancel->load() && error) *error = "скасовано";
+            if (cancel && cancel->load() && error) *error = tr("скасовано");
             return std::nullopt;
         }
-        std::vector<std::string> args = {"-m", arg_path(tools.model), "-f", arg_path(wav), "-l", tr.language,
+        std::vector<std::string> args = {"-m", arg_path(tools.model), "-f", arg_path(wav), "-l", ts.language,
                                          "-oj", "-of", arg_path(out_base), "-t", std::to_string(threads), "-pp", "-sns"};
         std::vector<std::string> tail;
         const auto res = run_process(
@@ -456,7 +457,7 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
                     const double pct = std::atof(line.c_str() + at + 10);
                     if (progress)
                         progress(total > 0 ? (done + seconds * std::clamp(pct / 100.0, 0.0, 1.0)) / total : 0,
-                                 std::format("{}: розпізнавання {:.0f}%", name, pct));
+                                 trf("{}: розпізнавання {:.0f}%", name, pct));
                     return;
                 }
                 if (const size_t l = line.find("auto-detected language:"); l != std::string::npos)
@@ -467,7 +468,7 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
             cancel, error);
         fs::remove(wav, ec);
         if (res.cancelled) {
-            if (error) *error = "скасовано";
+            if (error) *error = tr("скасовано");
             return std::nullopt;
         }
         if (!res.started) return std::nullopt;
@@ -476,7 +477,7 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
         fs::remove(json_path, ec);
         if (res.exit_code != 0 || !text) {
             if (error) {
-                *error = std::format("whisper-cli завершився з кодом {}", res.exit_code);
+                *error = trf("whisper-cli завершився з кодом {}", res.exit_code);
                 for (const auto& l : tail) *error += "\n  " + l;
             }
             return std::nullopt;
@@ -492,19 +493,19 @@ std::optional<Transcript> transcribe(const std::vector<std::pair<const voice::Sp
             if (!lang.empty()) ++langs[lang];
         }
         auto lines = segments_to_lines(segs, pieces, track->key, name);
-        log_info("Розпізнано {}: {} реплік ({} мовлення)", name, lines.size(), format_duration(seconds));
-        for (auto& l : lines) tr.lines.push_back(std::move(l));
-        tr.covered.push_back({track->key, opt.from, cover_to});
+        log_info("{}", trf("Розпізнано {}: {} реплік ({} мовлення)", name, lines.size(), format_duration(seconds)));
+        for (auto& l : lines) ts.lines.push_back(std::move(l));
+        ts.covered.push_back({track->key, opt.from, cover_to});
         done += seconds;
     }
-    std::stable_sort(tr.lines.begin(), tr.lines.end(), [](const Line& a, const Line& b) { return a.start < b.start; });
-    if (tr.language == "auto" && !langs.empty()) {
+    std::stable_sort(ts.lines.begin(), ts.lines.end(), [](const Line& a, const Line& b) { return a.start < b.start; });
+    if (ts.language == "auto" && !langs.empty()) {
         std::string l;
         for (const auto& [k, v] : langs) l += (l.empty() ? "" : ",") + k;
-        tr.language = "auto:" + l;
+        ts.language = "auto:" + l;
     }
-    if (progress) progress(1.0, "готово");
-    return tr;
+    if (progress) progress(1.0, tr("готово"));
+    return ts;
 }
 
 } // namespace gmdr::speech

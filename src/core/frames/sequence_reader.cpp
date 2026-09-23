@@ -4,6 +4,7 @@
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
 #include "image_decode.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -176,7 +177,7 @@ void FrameSequenceReader::try_dispatch() {
             if (higher == known_.end()) return;   // просто чекаємо наступний файл
             if (gap_since_ms_ == 0) gap_since_ms_ = now_ms();
             if (done || !opt_.live || now_ms() - gap_since_ms_ > 3000) {
-                log_warn("Кадр №{} відсутній — пропускаю", next_dispatch_);
+                log_warn("{}", trf("Кадр №{} відсутній — пропускаю", next_dispatch_));
                 failed_.insert(next_dispatch_);
                 ++next_dispatch_;
                 ++skipped_;
@@ -225,7 +226,7 @@ void FrameSequenceReader::decode_task(int64_t index, fs::path path, std::string 
         const ReadStatus st = read_frame_file(path, ext, opt_.delete_after_read, rd);
         read_ms += ms_since(t0);
         if (st == ReadStatus::Missing) {
-            err = "файл зник";
+            err = tr("файл зник");
             break;
         }
         if (st != ReadStatus::Ok) {
@@ -234,7 +235,7 @@ void FrameSequenceReader::decode_task(int64_t index, fs::path path, std::string 
             continue;
         }
         if (!rd.complete) {
-            err = rd.size == 0 ? "порожній файл" : "файл обрізаний";
+            err = rd.size == 0 ? tr("порожній файл") : tr("файл обрізаний");
             if (++incomplete > 5) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -265,8 +266,8 @@ void FrameSequenceReader::decode_task(int64_t index, fs::path path, std::string 
         } else {
             failed_.insert(index);
             ++skipped_;
-            last_error_ = std::format("кадр {}: {}", path_to_utf8(path.filename()), err);
-            log_warn("Не вдалося прочитати {}", last_error_);
+            last_error_ = trf("кадр {}: {}", path_to_utf8(path.filename()), err);
+            log_warn("{}", trf("Не вдалося прочитати {}", last_error_));
         }
     }
     cv_ready_.notify_all();

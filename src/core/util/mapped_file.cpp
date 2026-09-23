@@ -1,4 +1,5 @@
 #include "mapped_file.hpp"
+#include "i18n.hpp"
 
 #include <format>
 #include <utility>
@@ -44,25 +45,25 @@ bool MappedFile::open(const std::filesystem::path& path, std::string* error) {
     HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
-        if (error) *error = std::format("не вдалося відкрити файл (код {})", GetLastError());
+        if (error) *error = trf("не вдалося відкрити файл (код {})", GetLastError());
         return false;
     }
     LARGE_INTEGER sz{};
     if (!GetFileSizeEx(f, &sz) || sz.QuadPart <= 0 ||
         static_cast<unsigned long long>(sz.QuadPart) > static_cast<unsigned long long>(SIZE_MAX)) {
         CloseHandle(f);
-        if (error) *error = "порожній або завеликий файл";
+        if (error) *error = tr("порожній або завеликий файл");
         return false;
     }
     HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr);
     if (!m) {
-        if (error) *error = std::format("не вдалося відобразити файл у пам'ять (код {})", GetLastError());
+        if (error) *error = trf("не вдалося відобразити файл у пам'ять (код {})", GetLastError());
         CloseHandle(f);
         return false;
     }
     void* v = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
     if (!v) {
-        if (error) *error = std::format("не вдалося відобразити файл у пам'ять (код {})", GetLastError());
+        if (error) *error = trf("не вдалося відобразити файл у пам'ять (код {})", GetLastError());
         CloseHandle(m);
         CloseHandle(f);
         return false;
@@ -86,19 +87,19 @@ bool MappedFile::open(const std::filesystem::path& path, std::string* error) {
     close();
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
-        if (error) *error = "не вдалося відкрити файл";
+        if (error) *error = tr("не вдалося відкрити файл");
         return false;
     }
     struct stat st {};
     if (fstat(fd, &st) != 0 || st.st_size <= 0) {
         ::close(fd);
-        if (error) *error = "порожній файл";
+        if (error) *error = tr("порожній файл");
         return false;
     }
     void* v = mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
     if (v == MAP_FAILED) {
         ::close(fd);
-        if (error) *error = "не вдалося відобразити файл у пам'ять";
+        if (error) *error = tr("не вдалося відобразити файл у пам'ять");
         return false;
     }
     madvise(v, static_cast<size_t>(st.st_size), MADV_SEQUENTIAL);

@@ -1,6 +1,7 @@
 #include "demo_file.hpp"
 
 #include "../util/file_util.hpp"
+#include "../util/i18n.hpp"
 
 #include <cstring>
 #include <format>
@@ -53,7 +54,7 @@ DemoFile::DemoFile(const std::filesystem::path& path) {
         size_ = mapped_.size();
     } else {
         auto data = read_file_bytes(path, &err);
-        if (!data) throw std::runtime_error("Не вдалося прочитати демо: " + err);
+        if (!data) throw std::runtime_error(tr("Не вдалося прочитати демо: ") + err);
         owned_ = std::move(*data);
         data_ = owned_.data();
         size_ = owned_.size();
@@ -68,12 +69,12 @@ DemoFile::DemoFile(std::vector<uint8_t> bytes) : owned_(std::move(bytes)) {
 }
 
 void DemoFile::parse_header() {
-    if (size_ < kHeaderSize) throw std::runtime_error("Файл занадто малий для демо-запису (.dem)");
+    if (size_ < kHeaderSize) throw std::runtime_error(tr("Файл занадто малий для демо-запису (.dem)"));
     const uint8_t* p = data_;
     header_.stamp = rd_fixed_string(p, 8);
     // Сучасний Garry's Mod пише власний підпис "GMODEMO"; решта формату — як у Source 2013.
     if (header_.stamp != "HL2DEMO" && header_.stamp != "GMODEMO")
-        throw std::runtime_error(std::format("Це не демо рушія Source / Garry's Mod (підпис файлу: \"{}\", "
+        throw std::runtime_error(trf("Це не демо рушія Source / Garry's Mod (підпис файлу: \"{}\", "
                                              "очікувався GMODEMO або HL2DEMO)", printable(header_.stamp)));
     header_.demo_protocol = rd_i32(p + 8);
     header_.network_protocol = rd_i32(p + 12);
@@ -86,7 +87,7 @@ void DemoFile::parse_header() {
     header_.playback_frames = rd_i32(p + 1064);
     header_.signon_length = rd_i32(p + 1068);
     if (header_.demo_protocol < 2 || header_.demo_protocol > 3)
-        throw std::runtime_error(std::format(
+        throw std::runtime_error(trf(
             "Непідтримувана версія демо-протоколу {} (Garry's Mod використовує 3)", header_.demo_protocol));
 }
 
@@ -121,7 +122,7 @@ bool DemoFile::next(DemoCommand& out) {
         const int32_t len = rd_i32(p + pos_);
         pos_ += 4;
         if (len < 0) {
-            error_ = std::format("від'ємна довжина блоку на позиції {}", pos_ - 4);
+            error_ = trf("від'ємна довжина блоку на позиції {}", pos_ - 4);
             pos_ = n;
             return false;
         }
@@ -164,7 +165,7 @@ bool DemoFile::next(DemoCommand& out) {
         out.cmd = DemoCmd::StringTables;
         return read_len_block();
     default:
-        error_ = std::format("невідома команда демо {} на позиції {}", cmd, out.file_offset);
+        error_ = trf("невідома команда демо {} на позиції {}", cmd, out.file_offset);
         pos_ = n;
         return false;
     }

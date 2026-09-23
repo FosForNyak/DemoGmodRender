@@ -1,6 +1,7 @@
 #include "subprocess.hpp"
 
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #include <chrono>
 #include <format>
@@ -70,7 +71,7 @@ ProcessResult run_process(const std::filesystem::path& exe, const std::vector<st
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE rd = nullptr, wr = nullptr;
     if (!CreatePipe(&rd, &wr, &sa, 0)) {
-        if (error) *error = std::format("не вдалося створити канал (код {})", GetLastError());
+        if (error) *error = trf("не вдалося створити канал (код {})", GetLastError());
         return r;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);   // читаємо лише ми
@@ -91,7 +92,7 @@ ProcessResult run_process(const std::filesystem::path& exe, const std::vector<st
                                    dir.empty() ? nullptr : dir.c_str(), &si, &pi);
     CloseHandle(wr);
     if (!ok) {
-        if (error) *error = std::format("не вдалося запустити {} (код {})", path_to_utf8(exe.filename()), GetLastError());
+        if (error) *error = trf("не вдалося запустити {} (код {})", path_to_utf8(exe.filename()), GetLastError());
         CloseHandle(rd);
         return r;
     }
@@ -185,7 +186,7 @@ ProcessResult run_process(const std::filesystem::path& exe, const std::vector<st
     int status = 0;
     waitpid(pid, &status, 0);
     r.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    if (r.exit_code == 127 && error) *error = "не вдалося запустити " + exe.filename().string();
+    if (r.exit_code == 127 && error) *error = tr("не вдалося запустити ") + exe.filename().string();
     return r;
 }
 #endif

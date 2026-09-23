@@ -23,6 +23,7 @@
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -136,11 +137,12 @@ void App::init(const std::vector<std::string>& args) {
     // ---- налаштування ----
     settings_path_ = path_to_utf8(app_data_dir() / "gmdr_settings.json");
     std::error_code ec;
-    if (fs::exists(path_from_utf8(settings_path_), ec)) {
-        std::string err;
-        if (render::load_settings(s_, settings_path_, &err)) log_info("Налаштування завантажено");
-        else log_warn("Не вдалося прочитати налаштування: {}", err);
-    }
+    std::string settings_err;
+    const bool settings_ok = fs::exists(path_from_utf8(settings_path_), ec) && render::load_settings(s_, settings_path_, &settings_err);
+    // Мова інтерфейсу — одразу після налаштувань, до першого тексту (змінюється лише з перезапуском)
+    set_ui_language(s_.ui_language);
+    if (settings_ok) log_info("{}", trf("Налаштування завантажено"));
+    else if (!settings_err.empty()) log_warn("{}", trf("Не вдалося прочитати налаштування: {}", settings_err));
     whole_demo_ = s_.start_tick <= 0 && s_.end_tick <= 0;
     platform_set_minimize_to_tray(s_.minimize_to_tray);
     load_queue();
@@ -148,18 +150,18 @@ void App::init(const std::vector<std::string>& args) {
     // (разом із GMDR_TEST_POWER_DRYRUN=1, щоб нічого не вимкнулось)
     if (const char* a = std::getenv("GMDR_TEST_AFTER_DONE"); a && std::getenv("GMDR_TEST_POWER_DRYRUN")) {
         if (auto pa = parse_power_action(a)) after_done_ = *pa;
-        on_job_finished(render::JobState::Succeeded, "Готово!", "Відео збережено:\nтест.mp4", false);
+        on_job_finished(render::JobState::Succeeded, tr("Готово!"), tr("Відео збережено:\nтест.mp4"), false);
     }
 
-    log_info("GMod Demo Render {} — рендер демо Garry's Mod у відео", GMDR_VERSION);
+    log_info("{}", trf("GMod Demo Render {} — рендер демо Garry's Mod у відео", GMDR_VERSION));
     log_info("FFmpeg: libavcodec {}.{}.{}", LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
     refresh_codec_lists();
     detect_gmod(false);
     detect_rtx_launcher();
     start_gpu_probe();
     if (game::game_audio_mute_pending())
-        log_warn("Минулий рендер перервався, і звук Garry's Mod міг лишитися вимкненим у мікшері гучності Windows. "
-                 "Програма ввімкне його під час наступного рендеру (або ввімкніть його в мікшері вручну).");
+        log_warn("{}", trf("Минулий рендер перервався, і звук Garry's Mod міг лишитися вимкненим у мікшері гучності Windows. "
+                 "Програма ввімкне його під час наступного рендеру (або ввімкніть його в мікшері вручну)."));
 
     // Демо з командного рядка (перетягнули на .exe)
     for (size_t i = 1; i < args.size(); ++i)
@@ -173,9 +175,9 @@ void App::refresh_codec_lists() {
     video_codecs_.clear();
     audio_codecs_.clear();
     for (const auto& k : kVideoCodecs)
-        if (avcodec_find_encoder_by_name(k.name)) video_codecs_.push_back({k.name, k.label, k.gpu, k.group});
+        if (avcodec_find_encoder_by_name(k.name)) video_codecs_.push_back({k.name, tr(k.label), k.gpu, tr(k.group)});
     for (const auto& k : kAudioCodecs)
-        if (avcodec_find_encoder_by_name(k.name)) audio_codecs_.push_back({k.name, k.label, false, ""});
+        if (avcodec_find_encoder_by_name(k.name)) audio_codecs_.push_back({k.name, tr(k.label), false, ""});
 }
 
 void App::start_gpu_probe() {
@@ -208,7 +210,7 @@ void App::start_gpu_probe() {
         }
         av_log_set_level(old_level);
         gpu_probe_running_ = false;
-        log_info("Перевірка відеокарти: доступно GPU-кодеків — {}", ok_count);
+        log_info("{}", trf("Перевірка відеокарти: доступно GPU-кодеків — {}", ok_count));
     });
 }
 
@@ -223,12 +225,12 @@ void App::detect_gmod(bool force) {
     }
     if (gmod_ && gmod_->valid()) {
         driver_state_ = game::driver_state(*gmod_);
-        gmod_status_ = std::format("Знайдено: {}", path_to_utf8(gmod_->root));
+        gmod_status_ = trf("Знайдено: {}", path_to_utf8(gmod_->root));
         log_info("Garry's Mod: {}", path_to_utf8(gmod_->root));
         render::recover_leftovers(*gmod_);
     } else {
         gmod_.reset();
-        gmod_status_ = "Garry's Mod не знайдено — вкажіть папку гри вручну";
+        gmod_status_ = tr("Garry's Mod не знайдено — вкажіть папку гри вручну");
         log_warn("{}", gmod_status_);
     }
 }
@@ -244,7 +246,7 @@ void App::load_demo(const std::string& path_in) {
     if (aec) demo_fs = path_from_utf8(path_in);
     const std::string path = path_to_utf8(demo_fs.make_preferred());
     if (job_running()) {
-        log_warn("Зачекайте завершення рендеру");
+        log_warn("{}", trf("Зачекайте завершення рендеру"));
         return;
     }
     if (analyze_job_ && analyze_job_->running()) analyze_job_->cancel();
@@ -267,7 +269,7 @@ void App::load_demo(const std::string& path_in) {
 bool App::job_running() const { return job_ && job_->running(); }
 
 void App::check_updates() {
-    log_info("Перевіряю оновлення на GitHub ({})...", kUpdateRepo);
+    log_info("{}", trf("Перевіряю оновлення на GitHub ({})...", kUpdateRepo));
     update_future_ = std::async(std::launch::async, [] {
         UpdateResult r;
         r.release = fetch_latest_release(kUpdateRepo, &r.error);
@@ -285,25 +287,25 @@ void App::poll_update_check() {
     popup_is_folder_ = false;
     popup_result_.clear();
     if (r.release && compare_versions(r.release->version, GMDR_VERSION) > 0) {
-        popup_title_ = "Є нова версія " + r.release->version;
-        popup_text_ = std::format("У вас {}. Нова версія опублікована {}.", GMDR_VERSION, r.release->published);
+        popup_title_ = tr("Є нова версія ") + r.release->version;
+        popup_text_ = trf("У вас {}. Нова версія опублікована {}.", GMDR_VERSION, r.release->published);
         if (!r.release->notes.empty()) popup_text_ += "\n\n" + r.release->notes;
         popup_result_ = r.release->url;
-        log_info("Є нова версія {}: {}", r.release->version, r.release->url);
+        log_info("{}", trf("Є нова версія {}: {}", r.release->version, r.release->url));
     } else if (r.release) {
-        popup_title_ = "Оновлень немає";
-        popup_text_ = std::format("У вас остання версія ({}).", GMDR_VERSION);
-        log_info("Оновлень немає (остання — {})", r.release->version);
+        popup_title_ = tr("Оновлень немає");
+        popup_text_ = trf("У вас остання версія ({}).", GMDR_VERSION);
+        log_info("{}", trf("Оновлень немає (остання — {})", r.release->version));
     } else {
-        popup_title_ = "Не вдалося перевірити оновлення";
+        popup_title_ = tr("Не вдалося перевірити оновлення");
         popup_text_ = r.error;
-        log_warn("Перевірка оновлень: {}", r.error);
+        log_warn("{}", trf("Перевірка оновлень: {}", r.error));
     }
     open_popup_ = true;
 }
 
 void App::make_report() {
-    const std::string path = save_file_dialog("Зберегти звіт про проблему", {{"ZIP-архів", "*.zip"}},
+    const std::string path = save_file_dialog(tr("Зберегти звіт про проблему"), {{tr("ZIP-архів"), "*.zip"}},
                                               render::default_report_name(), "zip");
     if (path.empty()) return;
     save_settings_now();
@@ -313,8 +315,8 @@ void App::make_report() {
         std::lock_guard lock(gpu_mutex_);
         std::string gpu;
         for (const auto& [name, st] : gpu_status_)
-            gpu += std::format("  {}: {}\n", name, st == 1 ? "працює" : st == 0 ? "не працює" : "перевіряється");
-        if (!gpu.empty()) in.extra_text = "Перевірка GPU-кодеків у програмі:\n" + gpu;
+            gpu += std::format("  {}: {}\n", name, st == 1 ? tr("працює") : st == 0 ? tr("не працює") : tr("перевіряється"));
+        if (!gpu.empty()) in.extra_text = tr("Перевірка GPU-кодеків у програмі:\n") + gpu;
     }
     std::vector<std::string> contents;
     std::string err;
@@ -322,16 +324,16 @@ void App::make_report() {
     popup_test_ok_ = false;
     popup_is_folder_ = false;
     if (render::make_problem_report(path_from_utf8(path), in, &contents, &err)) {
-        log_info("Звіт про проблему: {}", path);
+        log_info("{}", trf("Звіт про проблему: {}", path));
         std::string list;
         for (const auto& c : contents) list += "\n  • " + c;
-        popup_title_ = "Звіт готовий";
-        popup_text_ = "Файл: " + path + "\n\nУсередині:" + list +
-                      "\n\nШлях до вашого профілю Windows у текстах замінено на %USERPROFILE%. Архів нікуди не "
-                      "надсилається — перегляньте його і передайте сам (Discord, GitHub, пошта).";
+        popup_title_ = tr("Звіт готовий");
+        popup_text_ = tr("Файл: ") + path + tr("\n\nУсередині:") + list +
+                      tr("\n\nШлях до вашого профілю Windows у текстах замінено на %USERPROFILE%. Архів нікуди не "
+                      "надсилається — перегляньте його і передайте сам (Discord, GitHub, пошта).");
         popup_result_ = path;
     } else {
-        popup_title_ = "Не вдалося створити звіт";
+        popup_title_ = tr("Не вдалося створити звіт");
         popup_text_ = err;
         popup_result_.clear();
     }
@@ -341,15 +343,15 @@ void App::make_report() {
 void App::start_render(bool test_run) {
     if (!analysis_) return;
     if (!gmod_) {
-        popup_title_ = "Не знайдено Garry's Mod";
-        popup_text_ = "Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).";
+        popup_title_ = tr("Не знайдено Garry's Mod");
+        popup_text_ = tr("Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).");
         open_popup_ = true;
         return;
     }
     std::error_code ec;
     if (!test_run && !confirm_overwrite_ && !s_.output_path.empty() && s_.output_path.find('%') == std::string::npos &&
         fs::exists(path_from_utf8(s_.output_path), ec)) {
-        ImGui::OpenPopup("Перезаписати?");
+        ImGui::OpenPopup(tr("Перезаписати?"));
         return;
     }
     confirm_overwrite_ = false;
@@ -366,8 +368,8 @@ void App::start_encode_frames(const std::string& dir) {
     int64_t count = 0;
     const std::string prefix = render::detect_frame_prefix(path_from_utf8(dir), &count);
     if (count == 0) {
-        popup_title_ = "Кадрів не знайдено";
-        popup_text_ = "У вибраній папці немає послідовності кадрів (name0000.tga / .jpg / .png).";
+        popup_title_ = tr("Кадрів не знайдено");
+        popup_text_ = tr("У вибраній папці немає послідовності кадрів (name0000.tga / .jpg / .png).");
         open_popup_ = true;
         return;
     }
@@ -376,7 +378,7 @@ void App::start_encode_frames(const std::string& dir) {
     std::error_code ec;
     for (int i = 2; fs::exists(path_from_utf8(s.output_path), ec) && i < 1000; ++i)
         s.output_path = path_to_utf8(path_from_utf8(dir) / std::format("{} ({}).{}", prefix.empty() ? "video" : prefix, i, ext));
-    log_info("Кодую {} кадрів «{}» з папки {}", count, prefix, dir);
+    log_info("{}", trf("Кодую {} кадрів «{}» з папки {}", count, prefix, dir));
     job_ = std::make_unique<render::EncodeFramesJob>(s, path_from_utf8(dir), prefix, fs::path(), analysis_, voices_);
     job_reported_ = false;
     job_->start();
@@ -390,7 +392,7 @@ bool App::job_has_fraction_only() const {
 void App::export_voices(const std::string& dir) {
     if (!voices_ || !analysis_) return;
     if (job_running()) {
-        log_warn("Зачекайте завершення поточного завдання");
+        log_warn("{}", trf("Зачекайте завершення поточного завдання"));
         return;
     }
     job_ = std::make_unique<render::ExportVoicesJob>(s_, analysis_, voices_, path_from_utf8(dir));
@@ -459,7 +461,7 @@ void App::poll() {
                 if (std::getenv("GMDR_TEST_AUTOSTART")) start_render();   // лише для автотестів
             }
         } else if (analyze_job_->state() == render::JobState::Failed) {
-            popup_title_ = "Не вдалося відкрити демо";
+            popup_title_ = tr("Не вдалося відкрити демо");
             popup_text_ = analyze_job_->error();
             open_popup_ = true;
             s_.demo_path.clear();
@@ -473,7 +475,7 @@ void App::poll() {
         if (dynamic_cast<render::WatchJob*>(job_.get())) {
             // Перегляд у грі: без попапу, позначки вже на шкалі
             if (job_->state() == render::JobState::Failed) {
-                popup_title_ = "Перегляд у грі: помилка";
+                popup_title_ = tr("Перегляд у грі: помилка");
                 popup_text_ = job_->error();
                 popup_result_.clear();
                 popup_checks_.clear();
@@ -486,9 +488,9 @@ void App::poll() {
             finish_queue(*qj);
             popup_checks_.clear();
             popup_test_ok_ = false;
-            popup_title_ = job_->state() == render::JobState::Succeeded   ? "Черга завершена"
-                           : job_->state() == render::JobState::Cancelled ? "Чергу зупинено"
-                                                                          : "Черга: помилка";
+            popup_title_ = job_->state() == render::JobState::Succeeded   ? tr("Черга завершена")
+                           : job_->state() == render::JobState::Cancelled ? tr("Чергу зупинено")
+                                                                          : tr("Черга: помилка");
             popup_text_ = job_->report().empty() ? job_->error() : job_->report();
             popup_result_.clear();
             for (const auto& r : qj->results())
@@ -507,9 +509,9 @@ void App::poll() {
             // Розпізнавання мовлення: репліки одразу з'являються у вкладці «Чат»
             if (tj->state() == render::JobState::Succeeded) {
                 transcript_ = tj->transcript();
-                log_info("Розпізнано реплік: {} — вони у вкладці «Чат»", transcript_ ? transcript_->lines.size() : 0);
+                log_info("{}", trf("Розпізнано реплік: {} — вони у вкладці «Чат»", transcript_ ? transcript_->lines.size() : 0));
             } else if (tj->state() == render::JobState::Failed) {
-                popup_title_ = "Розпізнавання мовлення: помилка";
+                popup_title_ = tr("Розпізнавання мовлення: помилка");
                 popup_text_ = tj->error();
                 popup_result_.clear();
                 popup_checks_.clear();
@@ -521,7 +523,7 @@ void App::poll() {
         if (auto* dj = dynamic_cast<render::DownloadJob*>(job_.get())) {
             refresh_whisper_status(true);
             if (dj->state() == render::JobState::Failed) {
-                popup_title_ = "Завантаження: помилка";
+                popup_title_ = tr("Завантаження: помилка");
                 popup_text_ = dj->error();
                 popup_result_.clear();
                 popup_checks_.clear();
@@ -536,23 +538,23 @@ void App::poll() {
         popup_test_ok_ = false;
         switch (job_->state()) {
         case render::JobState::Succeeded:
-            popup_title_ = test ? "Тестовий прогін" : "Готово!";
+            popup_title_ = test ? tr("Тестовий прогін") : tr("Готово!");
             popup_is_folder_ = dynamic_cast<render::ExportVoicesJob*>(job_.get()) != nullptr;
             if (test) {
                 popup_text_ = job_->report();
-                popup_test_ok_ = popup_text_.rfind("Усе працює", 0) == 0;
+                popup_test_ok_ = popup_text_.rfind(tr("Усе працює."), 0) == 0;
             } else {
-                popup_text_ = (popup_is_folder_ ? "Голоси збережено в папку:\n" : "Відео збережено:\n") + job_->result();
+                popup_text_ = (popup_is_folder_ ? tr("Голоси збережено в папку:\n") : tr("Відео збережено:\n")) + job_->result();
             }
             popup_result_ = job_->result();
             break;
         case render::JobState::Cancelled:
-            popup_title_ = "Скасовано";
-            popup_text_ = dynamic_cast<render::ExportVoicesJob*>(job_.get()) ? "Збереження голосів перервано." : "Рендер перервано.";
+            popup_title_ = tr("Скасовано");
+            popup_text_ = dynamic_cast<render::ExportVoicesJob*>(job_.get()) ? tr("Збереження голосів перервано.") : tr("Рендер перервано.");
             popup_result_.clear();
             break;
         default:
-            popup_title_ = test ? "Тестовий прогін: помилка" : "Помилка";
+            popup_title_ = test ? tr("Тестовий прогін: помилка") : tr("Помилка");
             popup_text_ = job_->error();
             popup_result_.clear();
             if (render_job) popup_checks_ = job_->progress().checks;
@@ -587,12 +589,12 @@ void App::on_files_dropped(const std::vector<std::string>& files) {
         if (ends_with_i(f, ".wav") || ends_with_i(f, ".mp3") || ends_with_i(f, ".ogg") || ends_with_i(f, ".flac") ||
             ends_with_i(f, ".m4a") || ends_with_i(f, ".opus")) {
             s_.mic_file = f;
-            log_info("Файл мікрофона: {}", f);
+            log_info("{}", trf("Файл мікрофона: {}", f));
             mark_dirty();
             return;
         }
     }
-    log_warn("Перетягніть файл демо (.dem), папку з кадрами або аудіофайл мікрофона");
+    log_warn("{}", trf("Перетягніть файл демо (.dem), папку з кадрами або аудіофайл мікрофона"));
 }
 
 bool App::on_close_request() {
@@ -642,20 +644,20 @@ void App::frame() {
 
 void App::draw_menu_bar() {
     if (!ImGui::BeginMenuBar()) return;
-    if (ImGui::BeginMenu("Файл")) {
-        if (ImGui::MenuItem("Відкрити демо...", "Ctrl+O", false, !job_running())) {
-            auto f = open_file_dialog("Відкрити демо Garry's Mod", {{"Демо GMod (*.dem)", "*.dem"}, {"Усі файли", "*.*"}},
+    if (ImGui::BeginMenu(tr("Файл"))) {
+        if (ImGui::MenuItem(tr("Відкрити демо..."), "Ctrl+O", false, !job_running())) {
+            auto f = open_file_dialog(tr("Відкрити демо Garry's Mod"), {{tr("Демо GMod (*.dem)"), "*.dem"}, {tr("Усі файли"), "*.*"}},
                                       s_.demo_path.empty() && gmod_ ? path_to_utf8(gmod_->garrysmod / "demos") : s_.demo_path);
             if (!f.empty()) load_demo(f);
         }
-        if (ImGui::MenuItem("Закодувати готові кадри...", nullptr, false, !job_running())) {
-            auto d = pick_folder_dialog("Папка з кадрами startmovie (TGA/JPG) і WAV");
+        if (ImGui::MenuItem(tr("Закодувати готові кадри..."), nullptr, false, !job_running())) {
+            auto d = pick_folder_dialog(tr("Папка з кадрами startmovie (TGA/JPG) і WAV"));
             if (!d.empty()) start_encode_frames(d);
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Відкрити папку з відео", nullptr, false, !s_.output_path.empty()))
+        if (ImGui::MenuItem(tr("Відкрити папку з відео"), nullptr, false, !s_.output_path.empty()))
             open_path(path_to_utf8(path_from_utf8(s_.output_path).parent_path()));
-        if (ImGui::MenuItem("Скинути налаштування", nullptr, false, !job_running())) {
+        if (ImGui::MenuItem(tr("Скинути налаштування"), nullptr, false, !job_running())) {
             const std::string demo = s_.demo_path, out = s_.output_path, gd = s_.game_dir;
             s_ = render::RenderSettings{};
             s_.demo_path = demo;
@@ -664,68 +666,84 @@ void App::draw_menu_bar() {
             mark_dirty();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Вихід")) {
+        if (ImGui::MenuItem(tr("Вихід"))) {
             if (on_close_request()) quit_ = true;
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Інструменти")) {
-        if (ImGui::MenuItem("Сповіщати, коли рендер готовий", nullptr, s_.notify_when_done)) {
+    if (ImGui::BeginMenu(tr("Інструменти"))) {
+        if (ImGui::MenuItem(tr("Сповіщати, коли рендер готовий"), nullptr, s_.notify_when_done)) {
             s_.notify_when_done = !s_.notify_when_done;
             mark_dirty();
         }
-        if (ImGui::MenuItem("Згортати в трей", nullptr, s_.minimize_to_tray)) {
+        // Мова інтерфейсу: назви мов — кожна своєю мовою, щоб знайти свою
+        if (ImGui::BeginMenu("Мова / Language")) {
+            const std::string cur = s_.ui_language.empty() ? system_ui_language() : s_.ui_language;
+            for (const auto& [code, name] : {std::pair<const char*, const char*>{"uk", "Українська"}, {"en", "English"}})
+                if (ImGui::MenuItem(name, nullptr, cur == code) && cur != code) {
+                    s_.ui_language = code;
+                    mark_dirty();
+                    popup_title_ = code == std::string("en") ? "Language" : "Мова";
+                    popup_text_ = code == std::string("en") ? "The interface will switch to English after the program is restarted."
+                                                            : "Інтерфейс стане українським після перезапуску програми.";
+                    popup_result_.clear();
+                    popup_checks_.clear();
+                    open_popup_ = true;
+                }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem(tr("Згортати в трей"), nullptr, s_.minimize_to_tray)) {
             s_.minimize_to_tray = !s_.minimize_to_tray;
             platform_set_minimize_to_tray(s_.minimize_to_tray);
             mark_dirty();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Згорнуте вікно зникає з панелі задач, лишається значок біля годинника\n"
-                              "(з прогресом рендеру в підказці). Клік по значку повертає вікно.");
+            ImGui::SetTooltip("%s", tr("Згорнуте вікно зникає з панелі задач, лишається значок біля годинника\n"
+                                    "(з прогресом рендеру в підказці). Клік по значку повертає вікно."));
         ImGui::Separator();
-        if (ImGui::MenuItem("Перевірити GPU-кодеки ще раз", nullptr, false, !gpu_probe_running_)) start_gpu_probe();
-        if (ImGui::MenuItem("Знайти Garry's Mod автоматично", nullptr, false, !job_running())) detect_gmod(true);
+        if (ImGui::MenuItem(tr("Перевірити GPU-кодеки ще раз"), nullptr, false, !gpu_probe_running_)) start_gpu_probe();
+        if (ImGui::MenuItem(tr("Знайти Garry's Mod автоматично"), nullptr, false, !job_running())) detect_gmod(true);
         ImGui::Separator();
         const bool can = gmod_.has_value() && !job_running();
-        if (ImGui::MenuItem("Встановити драйвер у GMod", nullptr, false, can)) {
+        if (ImGui::MenuItem(tr("Встановити драйвер у GMod"), nullptr, false, can)) {
             std::string err;
             if (!game::install_driver(*gmod_, &err)) log_error("{}", err);
             driver_state_ = game::driver_state(*gmod_);
         }
-        if (ImGui::MenuItem("Видалити драйвер з GMod", nullptr, false, can)) {
+        if (ImGui::MenuItem(tr("Видалити драйвер з GMod"), nullptr, false, can)) {
             std::string err;
             if (!game::uninstall_driver(*gmod_, &err)) log_error("{}", err);
             driver_state_ = game::driver_state(*gmod_);
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Відкрити журнал (gmdr_log.txt)")) open_path(path_to_utf8(app_data_dir() / "gmdr_log.txt"));
+        if (ImGui::MenuItem(tr("Відкрити журнал (gmdr_log.txt)"))) open_path(path_to_utf8(app_data_dir() / "gmdr_log.txt"));
 #ifdef _WIN32
         {
             // Реєстр читаємо лише поки меню відкрите
             const fs::path exe = executable_dir() / "gmdr.exe";
             const bool assoc = dem_association_registered(exe);
-            if (ImGui::MenuItem("Відкривати .dem подвійним кліком", nullptr, assoc)) {
+            if (ImGui::MenuItem(tr("Відкривати .dem подвійним кліком"), nullptr, assoc)) {
                 std::string err;
                 if (assoc ? unregister_dem_association(&err) : register_dem_association(exe, &err))
-                    log_info("{}", assoc ? "Файли .dem більше не відкриваються цією програмою"
-                                   : "Файли .dem тепер відкриваються в GMod Demo Render (якщо Windows спитає, чим "
-                                     "відкривати, — виберіть її). Вимкнути — тут само.");
+                    log_info("{}", assoc ? tr("Файли .dem більше не відкриваються цією програмою")
+                                   : tr("Файли .dem тепер відкриваються в GMod Demo Render (якщо Windows спитає, чим "
+                                     "відкривати, — виберіть її). Вимкнути — тут само."));
                 else
-                    log_error("Не вдалося змінити асоціацію .dem: {}", err);
+                    log_error("{}", trf("Не вдалося змінити асоціацію .dem: {}", err));
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Лише для вашого облікового запису (HKCU), без прав адміністратора.\n"
-                                  "Якщо програма вже відкрита, демо відкриється в ній.");
+                ImGui::SetTooltip("%s", tr("Лише для вашого облікового запису (HKCU), без прав адміністратора.\n"
+                                        "Якщо програма вже відкрита, демо відкриється в ній."));
         }
 #endif
-        if (ImGui::MenuItem("Відкрити папку програми")) open_path(path_to_utf8(executable_dir()));
+        if (ImGui::MenuItem(tr("Відкрити папку програми"))) open_path(path_to_utf8(executable_dir()));
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Довідка")) {
-        if (ImGui::MenuItem("Як це працює")) show_help_ = true;
-        if (ImGui::MenuItem("Перевірити оновлення", nullptr, false, !update_future_.valid())) check_updates();
-        if (ImGui::MenuItem("Зібрати звіт про проблему...")) make_report();
-        if (ImGui::MenuItem("Про програму")) show_about_ = true;
+    if (ImGui::BeginMenu(tr("Довідка"))) {
+        if (ImGui::MenuItem(tr("Як це працює"))) show_help_ = true;
+        if (ImGui::MenuItem(tr("Перевірити оновлення"), nullptr, false, !update_future_.valid())) check_updates();
+        if (ImGui::MenuItem(tr("Зібрати звіт про проблему..."))) make_report();
+        if (ImGui::MenuItem(tr("Про програму"))) show_about_ = true;
         ImGui::EndMenu();
     }
     ImGui::EndMenuBar();
@@ -734,23 +752,23 @@ void App::draw_menu_bar() {
 void App::draw_demo_bar() {
     const float fs_ = ImGui::GetFontSize();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Демо:");
+    ImGui::TextUnformatted(tr("Демо:"));
     ImGui::SameLine();
-    std::string shown = s_.demo_path.empty() ? std::string("перетягніть сюди файл .dem або натисніть «Відкрити»") : s_.demo_path;
+    std::string shown = s_.demo_path.empty() ? std::string(tr("перетягніть сюди файл .dem або натисніть «Відкрити»")) : s_.demo_path;
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 9.5f);
     ImGui::BeginDisabled(true);
     ImGui::InputText("##demo", &shown, ImGuiInputTextFlags_ReadOnly);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(job_running());
-    if (ImGui::Button("Відкрити...", ImVec2(-1, 0))) {
-        auto f = open_file_dialog("Відкрити демо Garry's Mod", {{"Демо GMod (*.dem)", "*.dem"}, {"Усі файли", "*.*"}},
+    if (ImGui::Button(tr("Відкрити..."), ImVec2(-1, 0))) {
+        auto f = open_file_dialog(tr("Відкрити демо Garry's Mod"), {{tr("Демо GMod (*.dem)"), "*.dem"}, {tr("Усі файли"), "*.*"}},
                                   s_.demo_path.empty() && gmod_ ? path_to_utf8(gmod_->garrysmod / "demos") : s_.demo_path);
         if (!f.empty()) load_demo(f);
     }
     ImGui::EndDisabled();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O) && !job_running()) {
-        auto f = open_file_dialog("Відкрити демо Garry's Mod", {{"Демо GMod (*.dem)", "*.dem"}}, s_.demo_path);
+        auto f = open_file_dialog(tr("Відкрити демо Garry's Mod"), {{tr("Демо GMod (*.dem)"), "*.dem"}}, s_.demo_path);
         if (!f.empty()) load_demo(f);
     }
 }
@@ -763,32 +781,32 @@ void App::draw_settings_tabs() {
     }();
     auto flags = [&](int i) { return forced_tab == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None; };
     if (!ImGui::BeginTabBar("##tabs")) return;
-    if (ImGui::BeginTabItem("Відео", nullptr, flags(0))) {
+    if (ImGui::BeginTabItem(tr("Відео"), nullptr, flags(0))) {
         draw_tab_video();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Звук і голос", nullptr, flags(1))) {
+    if (ImGui::BeginTabItem(tr("Звук і голос"), nullptr, flags(1))) {
         draw_tab_audio();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Гра", nullptr, flags(2))) {
+    if (ImGui::BeginTabItem(tr("Гра"), nullptr, flags(2))) {
         draw_tab_game();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Фрагмент", nullptr, flags(3))) {
+    if (ImGui::BeginTabItem(tr("Фрагмент"), nullptr, flags(3))) {
         draw_tab_range();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Чат", nullptr, flags(4))) {
+    if (ImGui::BeginTabItem(tr("Чат"), nullptr, flags(4))) {
         draw_tab_chat();
         ImGui::EndTabItem();
     }
-    const std::string queue_label = queue_.empty() ? "Черга###queue" : std::format("Черга ({})###queue", queue_.size());
+    const std::string queue_label = queue_.empty() ? tr("Черга###queue") : trf("Черга ({})###queue", queue_.size());
     if (ImGui::BeginTabItem(queue_label.c_str(), nullptr, flags(5))) {
         draw_tab_queue();
         ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Демо", nullptr, flags(6))) {
+    if (ImGui::BeginTabItem(tr("Демо"), nullptr, flags(6))) {
         draw_tab_library();
         ImGui::EndTabItem();
     }
@@ -830,8 +848,8 @@ void App::update_taskbar() {
             const auto p = job_->progress();
             tip += " — " + p.stage;
             if (p.fraction > 0) tip += std::format(" {:.0f}%", p.fraction * 100);
-            if (p.eta >= 0) tip += ", залишилось ~" + format_duration(p.eta);
-            if (after_done_ != PowerAction::None) tip += std::string("; потім — ") + power_action_name(after_done_);
+            if (p.eta >= 0) tip += tr(", залишилось ~") + format_duration(p.eta);
+            if (after_done_ != PowerAction::None) tip += std::string(tr("; потім — ")) + power_action_name(after_done_);
         }
         platform_tray(busy || (s_.minimize_to_tray && platform_window_hidden()), tip);
     }
@@ -935,7 +953,7 @@ void App::apply_preset(int index) {
     default:
         return;
     }
-    log_info("Пресет «{}»: {}", kQuickPresets[index].label, kQuickPresets[index].tip);
+    log_info("{}", trf("Пресет «{}»: {}", tr(kQuickPresets[index].label), tr(kQuickPresets[index].tip)));
     mark_dirty();
 }
 
@@ -948,16 +966,16 @@ void App::on_job_finished(render::JobState state, const std::string& title, cons
     }
     if (after_done_ == PowerAction::None || test_run) return;
     if (state == render::JobState::Cancelled) {
-        log_info("Рендер зупинено вручну — «{}» після завершення скасовано", power_action_name(after_done_));
+        log_info("{}", trf("Рендер зупинено вручну — «{}» після завершення скасовано", power_action_name(after_done_)));
         after_done_ = PowerAction::None;
         return;
     }
     // Хвилина, щоб передумати: вікно виходить наперед із відліком і кнопкою «Скасувати»
     power_countdown_ = true;
     power_deadline_ = ImGui::GetTime() + power_countdown_seconds();
-    log_info("Після завершення: {} через {} с (можна скасувати)", power_action_name(after_done_), power_countdown_seconds());
-    platform_notify(after_done_ == PowerAction::Shutdown ? "ПК вимкнеться за хвилину" : "ПК засне за хвилину",
-                    "Рендер завершено. Відкрийте GMod Demo Render, щоб скасувати.");
+    log_info("{}", trf("Після завершення: {} через {} с (можна скасувати)", power_action_name(after_done_), power_countdown_seconds()));
+    platform_notify(after_done_ == PowerAction::Shutdown ? tr("ПК вимкнеться за хвилину") : tr("ПК засне за хвилину"),
+                    tr("Рендер завершено. Відкрийте GMod Demo Render, щоб скасувати."));
     platform_restore_window();
 }
 
@@ -965,19 +983,19 @@ void App::draw_after_done_combo() {
     const float fs_ = ImGui::GetFontSize();
     ImGui::SetNextItemWidth(fs_ * 9);
     const PowerAction opts[] = {PowerAction::None, PowerAction::Shutdown, PowerAction::Sleep};
-    const char* labels[] = {"нічого не робити", "вимкнути ПК", "сон"};
+    const char* labels[] = {tr("нічого не робити"), tr("вимкнути ПК"), tr("сон")};
     if (ImGui::BeginCombo("##afterdone", labels[static_cast<int>(after_done_)])) {
         for (int i = 0; i < 3; ++i)
             if (ImGui::Selectable(labels[i], after_done_ == opts[i])) {
                 after_done_ = opts[i];
                 if (after_done_ != PowerAction::None)
-                    log_info("Коли рендер закінчиться: {} (з хвилиною на скасування)", power_action_name(after_done_));
+                    log_info("{}", trf("Коли рендер закінчиться: {} (з хвилиною на скасування)", power_action_name(after_done_)));
             }
         ImGui::EndCombo();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Що зробити, коли рендер або вся черга закінчиться (успішно чи з помилкою).\n"
-                          "Перед цим — хвилина з кнопкою «Скасувати». Діє лише цього разу, не зберігається.");
+        ImGui::SetTooltip("%s", tr("Що зробити, коли рендер або вся черга закінчиться (успішно чи з помилкою).\n"
+                                "Перед цим — хвилина з кнопкою «Скасувати». Діє лише цього разу, не зберігається."));
 }
 
 void App::draw_power_countdown() {
@@ -986,20 +1004,20 @@ void App::draw_power_countdown() {
     const double left = power_deadline_ - ImGui::GetTime();
     if (!ImGui::IsPopupOpen("##power")) ImGui::OpenPopup("##power");
     if (ImGui::BeginPopupModal("##power", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-        ImGui::TextColored(kColWarn, "%s", after_done_ == PowerAction::Shutdown ? "Вимкнення ПК" : "Сон");
+        ImGui::TextColored(kColWarn, "%s", after_done_ == PowerAction::Shutdown ? tr("Вимкнення ПК") : tr("Сон"));
         ImGui::Separator();
-        ImGui::Text("Рендер завершено. %s через %d с.", after_done_ == PowerAction::Shutdown ? "ПК вимкнеться" : "ПК засне",
+        ImGui::Text(tr("Рендер завершено. %s через %d с."), after_done_ == PowerAction::Shutdown ? tr("ПК вимкнеться") : tr("ПК засне"),
                     std::max(0, static_cast<int>(std::ceil(left))));
         ImGui::Spacing();
         bool now = left <= 0;
-        if (ImGui::Button("Скасувати", ImVec2(fs_ * 8, 0))) {
-            log_info("«{}» після рендеру скасовано", power_action_name(after_done_));
+        if (ImGui::Button(tr("Скасувати"), ImVec2(fs_ * 8, 0))) {
+            log_info("{}", trf("«{}» після рендеру скасовано", power_action_name(after_done_)));
             after_done_ = PowerAction::None;
             power_countdown_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Зараз")) now = true;
+        if (ImGui::Button(tr("Зараз"))) now = true;
         if (now && power_countdown_) {
             power_countdown_ = false;
             ImGui::CloseCurrentPopup();
@@ -1007,8 +1025,8 @@ void App::draw_power_countdown() {
             std::string err;
             const PowerAction a = after_done_;
             after_done_ = PowerAction::None;
-            log_info("Після рендеру: {}", power_action_name(a));
-            if (!do_power_action(a, &err)) log_error("Не вдалося {}: {}", power_action_name(a), err);
+            log_info("{}", trf("Після рендеру: {}", power_action_name(a)));
+            if (!do_power_action(a, &err)) log_error("{}", trf("Не вдалося {}: {}", power_action_name(a), err));
         }
         ImGui::EndPopup();
     }
@@ -1023,20 +1041,22 @@ void App::draw_popups() {
     }
     ImGui::SetNextWindowSizeConstraints(ImVec2(fs_ * 22, 0), ImVec2(fs_ * 50, fs_ * 40));
     if (ImGui::BeginPopupModal("##result", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-        ImGui::TextColored(popup_title_ == "Готово!" ? kColOk : popup_title_.find("омилка") != std::string::npos ? kColErr : kColAccent, "%s",
+        // Заголовки помилок: «…помилка» / «…error» (англійський інтерфейс)
+        const bool popup_error = popup_title_.find("омилка") != std::string::npos || popup_title_.find("rror") != std::string::npos;
+        ImGui::TextColored(popup_title_ == tr("Готово!") ? kColOk : popup_error ? kColErr : kColAccent, "%s",
                            popup_title_.c_str());
         ImGui::Separator();
         ImGui::PushTextWrapPos(fs_ * 48);
         ImGui::TextUnformatted(popup_text_.c_str());
         ImGui::PopTextWrapPos();
         if (!popup_checks_.empty()) {
-            ImGui::SeparatorText("Кроки");
+            ImGui::SeparatorText(tr("Кроки"));
             draw_checks(popup_checks_);
         }
         ImGui::Spacing();
         if (popup_test_ok_ && analysis_ && !job_running()) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.30f, 1.0f));
-            if (ImGui::Button("Почати рендер")) {
+            if (ImGui::Button(tr("Почати рендер"))) {
                 ImGui::CloseCurrentPopup();
                 start_render(false);
             }
@@ -1045,31 +1065,31 @@ void App::draw_popups() {
         }
         if (!popup_result_.empty()) {
             if (popup_result_.rfind("https://", 0) == 0) {
-                if (ImGui::Button("Відкрити сторінку")) {
+                if (ImGui::Button(tr("Відкрити сторінку"))) {
                     open_path(popup_result_);
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
             } else if (ends_with_i(popup_result_, ".zip")) {
-                if (ImGui::Button("Показати в папці")) {
+                if (ImGui::Button(tr("Показати в папці"))) {
                     show_in_folder(popup_result_);
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
             } else if (popup_is_folder_) {
-                if (ImGui::Button("Відкрити папку")) {
+                if (ImGui::Button(tr("Відкрити папку"))) {
                     open_path(popup_result_);
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
             } else {
-                if (ImGui::Button(popup_title_.rfind("Тестовий", 0) == 0 ? "Відкрити тестове відео" : "Відкрити відео")) {
+                if (ImGui::Button(popup_title_.rfind(tr("Тестовий прогін"), 0) == 0 ? tr("Відкрити тестове відео") : tr("Відкрити відео"))) {
                     if (popup_result_.find('%') == std::string::npos) open_path(popup_result_);
                     else open_path(path_to_utf8(path_from_utf8(popup_result_).parent_path()));
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Показати в папці")) {
+                if (ImGui::Button(tr("Показати в папці"))) {
                     show_in_folder(popup_result_);
                     ImGui::CloseCurrentPopup();
                 }
@@ -1081,65 +1101,65 @@ void App::draw_popups() {
     }
 
     if (confirm_quit_) {
-        ImGui::OpenPopup("Вийти?");
+        ImGui::OpenPopup(tr("Вийти?"));
         confirm_quit_ = false;
     }
-    if (ImGui::BeginPopupModal("Вийти?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Рендер ще триває. Перервати його і закрити програму?");
-        if (ImGui::Button("Так, вийти", ImVec2(fs_ * 8, 0))) {
+    if (ImGui::BeginPopupModal(tr("Вийти?"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(tr("Рендер ще триває. Перервати його і закрити програму?"));
+        if (ImGui::Button(tr("Так, вийти"), ImVec2(fs_ * 8, 0))) {
             if (job_) job_->kill();
             quit_ = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Ні", ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(tr("Ні"), ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
     if (show_about_) {
-        ImGui::OpenPopup("Про програму");
+        ImGui::OpenPopup(tr("Про програму"));
         show_about_ = false;
     }
-    if (ImGui::BeginPopupModal("Про програму", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(tr("Про програму"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextColored(kColAccent, "GMod Demo Render " GMDR_VERSION);
-        ImGui::TextUnformatted("Рендер демо-записів Garry's Mod у відео будь-якого формату.");
-        ImGui::TextColored(kColDim, "Кодування: FFmpeg (libavcodec %d.%d). Інтерфейс: Dear ImGui %s.", LIBAVCODEC_VERSION_MAJOR,
+        ImGui::TextUnformatted(tr("Рендер демо-записів Garry's Mod у відео будь-якого формату."));
+        ImGui::TextColored(kColDim, tr("Кодування: FFmpeg (libavcodec %d.%d). Інтерфейс: Dear ImGui %s."), LIBAVCODEC_VERSION_MAJOR,
                            LIBAVCODEC_VERSION_MINOR, IMGUI_VERSION);
-        ImGui::TextColored(kColDim, "Ядер процесора: %u", std::max(1u, std::thread::hardware_concurrency()));
+        ImGui::TextColored(kColDim, tr("Ядер процесора: %u"), std::max(1u, std::thread::hardware_concurrency()));
         if (ImGui::Button("OK", ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
     if (show_help_) {
-        ImGui::OpenPopup("Як це працює");
+        ImGui::OpenPopup(tr("Як це працює"));
         show_help_ = false;
     }
     ImGui::SetNextWindowSize(ImVec2(fs_ * 44, fs_ * 30), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Як це працює", nullptr)) {
+    if (ImGui::BeginPopupModal(tr("Як це працює"), nullptr)) {
         ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(kColAccent, "Чому потрібна сама гра?");
-        ImGui::TextUnformatted("Файл .dem не містить картинки — лише мережеві пакети гри (рух сутностей, звуки, голос). "
-                               "Правильно намалювати їх може тільки рушій GMod з вашими картами, моделями й аддонами.");
-        ImGui::TextColored(kColAccent, "Що робить програма");
-        ImGui::BulletText("Розбирає демо: карта, тривалість, гравці, голосовий чат (Steam Voice / Opus).");
-        ImGui::BulletText("Запускає GMod з фіксованим кроком часу (host_framerate): кожен кадр відео — рівно 1/FPS секунди демо, "
-                          "незалежно від потужності ПК. Тому FPS і роздільна здатність можуть бути будь-якими.");
-        ImGui::BulletText("Невеликий Lua-драйвер у меню GMod вмикає startmovie точно на потрібному тіку і вимикає в кінці.");
-        ImGui::BulletText("Кадри (TGA/JPEG) і звук гри забираються одразу, як з'являються, декодуються на всіх ядрах, "
-                          "змішуються для motion blur, масштабуються і кодуються FFmpeg (CPU або GPU: NVENC/AMF/QSV).");
-        ImGui::BulletText("Голоси гравців декодуються прямо з демо і накладаються точно за часом. "
-                          "Можна додати окремий запис мікрофона.");
-        ImGui::TextColored(kColAccent, "Поради");
-        ImGui::BulletText("Перед довгим рендером натисніть «Тест 3 с»: програма перевірить кожен крок і порахує, скільки "
-                          "триватиме рендер і скільки важитиме файл.");
-        ImGui::BulletText("Гра працює у фоні (вікно за межами екрана), її звук у мікшері Windows вимкнено — на відео це "
-                          "не впливає. Подивитися на гру можна кнопкою «Показати гру».");
-        ImGui::BulletText("Якщо звук гри під час рендеру чути (режим «на екрані»), він грає пришвидшено — це нормально, "
-                          "у відео він правильний.");
-        ImGui::BulletText("Свій голос у демо: перед записом демо введіть voice_loopback 1.");
-        ImGui::BulletText("Демо з сервера програється, лише якщо у вас є ті самі карти й аддони.");
+        ImGui::TextColored(kColAccent, "%s", tr("Чому потрібна сама гра?"));
+        ImGui::TextUnformatted(tr("Файл .dem не містить картинки — лише мережеві пакети гри (рух сутностей, звуки, голос). "
+                               "Правильно намалювати їх може тільки рушій GMod з вашими картами, моделями й аддонами."));
+        ImGui::TextColored(kColAccent, "%s", tr("Що робить програма"));
+        ImGui::BulletText("%s", tr("Розбирає демо: карта, тривалість, гравці, голосовий чат (Steam Voice / Opus)."));
+        ImGui::BulletText("%s", tr("Запускає GMod з фіксованим кроком часу (host_framerate): кожен кадр відео — рівно 1/FPS секунди демо, "
+                                "незалежно від потужності ПК. Тому FPS і роздільна здатність можуть бути будь-якими."));
+        ImGui::BulletText("%s", tr("Невеликий Lua-драйвер у меню GMod вмикає startmovie точно на потрібному тіку і вимикає в кінці."));
+        ImGui::BulletText("%s", tr("Кадри (TGA/JPEG) і звук гри забираються одразу, як з'являються, декодуються на всіх ядрах, "
+                                "змішуються для motion blur, масштабуються і кодуються FFmpeg (CPU або GPU: NVENC/AMF/QSV)."));
+        ImGui::BulletText("%s", tr("Голоси гравців декодуються прямо з демо і накладаються точно за часом. "
+                                "Можна додати окремий запис мікрофона."));
+        ImGui::TextColored(kColAccent, "%s", tr("Поради"));
+        ImGui::BulletText("%s", tr("Перед довгим рендером натисніть «Тест 3 с»: програма перевірить кожен крок і порахує, скільки "
+                                "триватиме рендер і скільки важитиме файл."));
+        ImGui::BulletText("%s", tr("Гра працює у фоні (вікно за межами екрана), її звук у мікшері Windows вимкнено — на відео це "
+                                "не впливає. Подивитися на гру можна кнопкою «Показати гру»."));
+        ImGui::BulletText("%s", tr("Якщо звук гри під час рендеру чути (режим «на екрані»), він грає пришвидшено — це нормально, "
+                                "у відео він правильний."));
+        ImGui::BulletText("%s", tr("Свій голос у демо: перед записом демо введіть voice_loopback 1."));
+        ImGui::BulletText("%s", tr("Демо з сервера програється, лише якщо у вас є ті самі карти й аддони."));
         ImGui::PopTextWrapPos();
-        if (ImGui::Button("Зрозуміло", ImVec2(fs_ * 8, 0))) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(tr("Зрозуміло"), ImVec2(fs_ * 8, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }

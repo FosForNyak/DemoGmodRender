@@ -2,6 +2,7 @@
 
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -26,7 +27,7 @@ void GameAudioInput::pull() {
             bool found = false;
             for (std::filesystem::directory_iterator it(path_.parent_path(), ec), end; !ec && it != end; it.increment(ec)) {
                 if (ends_with_i(path_to_utf8(it->path().filename()), ".wav")) {
-                    log_info("Звук гри знайдено у файлі {}", path_to_utf8(it->path().filename()));
+                    log_info("{}", trf("Звук гри знайдено у файлі {}", path_to_utf8(it->path().filename())));
                     path_ = it->path();
                     found = true;
                     break;
@@ -44,12 +45,12 @@ void GameAudioInput::pull() {
                                 reader_.sample_rate(), 0, nullptr) < 0 ||
             swr_init(swr) < 0) {
             swr_free(&swr);
-            log_warn("Не вдалося налаштувати перетворення звуку гри");
+            log_warn("{}", trf("Не вдалося налаштувати перетворення звуку гри"));
             return;
         }
         swr_.reset(swr);
         opened_ = true;
-        log_info("Звук гри: {} Гц, {} кан., {} біт", reader_.sample_rate(), reader_.channels(), reader_.bits_per_sample());
+        log_info("{}", trf("Звук гри: {} Гц, {} кан., {} біт", reader_.sample_rate(), reader_.channels(), reader_.bits_per_sample()));
     }
     if (finished_) reader_.set_live(false);
     // Читаємо все, що вже записано
@@ -162,20 +163,20 @@ FileAudioInput::FileAudioInput(const std::filesystem::path& path, double offset_
     const std::string p = path_to_utf8(path);
     int r = avformat_open_input(&fmt_, p.c_str(), nullptr, nullptr);
     if (r < 0) {
-        error_ = "не вдалося відкрити аудіофайл: " + media::av_error_string(r);
+        error_ = tr("не вдалося відкрити аудіофайл: ") + media::av_error_string(r);
         return;
     }
     avformat_find_stream_info(fmt_, nullptr);
     const AVCodec* codec = nullptr;
     stream_ = av_find_best_stream(fmt_, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
     if (stream_ < 0 || !codec) {
-        error_ = "у файлі немає аудіопотоку";
+        error_ = tr("у файлі немає аудіопотоку");
         return;
     }
     dec_.reset(avcodec_alloc_context3(codec));
     avcodec_parameters_to_context(dec_.get(), fmt_->streams[stream_]->codecpar);
     if (avcodec_open2(dec_.get(), codec, nullptr) < 0) {
-        error_ = "не вдалося відкрити декодер аудіофайлу";
+        error_ = tr("не вдалося відкрити декодер аудіофайлу");
         return;
     }
     if (fmt_->duration > 0) duration_ = fmt_->duration / static_cast<double>(AV_TIME_BASE);
@@ -190,7 +191,7 @@ FileAudioInput::FileAudioInput(const std::filesystem::path& path, double offset_
         swr_init(swr) < 0) {
         swr_free(&swr);
         av_channel_layout_uninit(&in_l);
-        error_ = "не вдалося налаштувати ресемплер для аудіофайлу";
+        error_ = tr("не вдалося налаштувати ресемплер для аудіофайлу");
         return;
     }
     av_channel_layout_uninit(&in_l);
@@ -284,7 +285,7 @@ bool FilteredInput::open(const std::string& chain, const GateParams* gate, std::
 void FilteredInput::fail(const std::string& why) {
     if (failed_) return;
     failed_ = true;
-    log_warn("Обробку «{}» вимкнено ({}) — далі без неї", name_, why);
+    log_warn("{}", trf("Обробку «{}» вимкнено ({}) — далі без неї", name_, why));
 }
 
 int64_t FilteredInput::source_available() {
@@ -343,7 +344,7 @@ void FilteredInput::produce_until(int64_t end, int64_t avail) {
         // Джерело нескінченне (тиша після кінця), а фільтр нічого не віддає — щось не так
         if (avail == INT64_MAX && fed_ > static_cast<int64_t>(static_cast<double>(end) * std::max(1.0, input_rate_)) +
                                              10LL * kMixRate)
-            fail("фільтр не віддає звук");
+            fail(tr("фільтр не віддає звук"));
     }
 }
 
@@ -392,12 +393,12 @@ AudioMixer::AudioMixer(std::vector<std::unique_ptr<AudioInput>> inputs, std::vec
         auto c = std::make_unique<AudioFilterChain>();
         std::string err;
         if (c->open(tracks_[t].post_filter, 1, 2, &err)) post_[t] = std::move(c);
-        else log_warn("Доріжка «{}» — без фільтра: {}", tracks_[t].title, err);
+        else log_warn("{}", trf("Доріжка «{}» — без фільтра: {}", tracks_[t].title, err));
     }
 }
 
 void AudioMixer::log_post_failure(size_t t, const std::string& err) const {
-    log_warn("Фільтр доріжки «{}» вимкнено: {}", tracks_[t].title, err);
+    log_warn("{}", trf("Фільтр доріжки «{}» вимкнено: {}", tracks_[t].title, err));
 }
 
 int64_t AudioMixer::ready_until() {

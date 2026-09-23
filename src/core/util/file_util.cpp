@@ -1,6 +1,7 @@
 #include "file_util.hpp"
 
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -28,19 +29,19 @@ namespace gmdr {
 std::optional<std::vector<uint8_t>> read_file_bytes(const fs::path& p, std::string* error) {
     std::ifstream f(p, std::ios::binary);
     if (!f) {
-        if (error) *error = "не вдалося відкрити файл";
+        if (error) *error = tr("не вдалося відкрити файл");
         return std::nullopt;
     }
     f.seekg(0, std::ios::end);
     const std::streamoff size = f.tellg();
     if (size < 0) {
-        if (error) *error = "не вдалося визначити розмір файлу";
+        if (error) *error = tr("не вдалося визначити розмір файлу");
         return std::nullopt;
     }
     f.seekg(0, std::ios::beg);
     std::vector<uint8_t> data(static_cast<size_t>(size));
     if (size > 0 && !f.read(reinterpret_cast<char*>(data.data()), size)) {
-        if (error) *error = "помилка читання файлу";
+        if (error) *error = tr("помилка читання файлу");
         return std::nullopt;
     }
     return data;
@@ -62,12 +63,12 @@ bool write_file_text(const fs::path& p, const std::string& text, std::string* er
     if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     if (!f) {
-        if (error) *error = "не вдалося створити файл";
+        if (error) *error = tr("не вдалося створити файл");
         return false;
     }
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     if (!f) {
-        if (error) *error = "помилка запису файлу";
+        if (error) *error = tr("помилка запису файлу");
         return false;
     }
     return true;
@@ -94,14 +95,14 @@ bool write_file_atomic(const fs::path& p, const std::string& text, std::string* 
 bool copy_file_overwrite(const fs::path& from, const fs::path& to, std::string* error) {
     std::ifstream in(from, std::ios::binary);
     if (!in) {
-        if (error) *error = "не вдалося відкрити " + path_to_utf8(from.filename());
+        if (error) *error = tr("не вдалося відкрити ") + path_to_utf8(from.filename());
         return false;
     }
     std::error_code ec;
     if (to.has_parent_path()) fs::create_directories(to.parent_path(), ec);
     std::ofstream out(to, std::ios::binary | std::ios::trunc);
     if (!out) {
-        if (error) *error = "не вдалося створити " + path_to_utf8(to.filename());
+        if (error) *error = tr("не вдалося створити ") + path_to_utf8(to.filename());
         return false;
     }
     std::vector<char> buf(1 << 20);
@@ -110,7 +111,7 @@ bool copy_file_overwrite(const fs::path& from, const fs::path& to, std::string* 
         const std::streamsize n = in.gcount();
         if (n > 0) out.write(buf.data(), n);
         if (!out) {
-            if (error) *error = "помилка запису (диск заповнено?)";
+            if (error) *error = tr("помилка запису (диск заповнено?)");
             return false;
         }
     }

@@ -9,6 +9,7 @@
 #include "../util/log.hpp"
 #include "derived.hpp"
 #include "jobs.hpp"
+#include "../util/i18n.hpp"
 
 namespace gmdr::render {
 
@@ -16,13 +17,13 @@ namespace fs = std::filesystem;
 
 const std::vector<VersionPreset>& version_presets() {
     static const std::vector<VersionPreset> presets = {
-        {"discord", "Discord (до 10 МБ)", "H.264 до 720p, файл до ~10 МБ — влізе в Discord без Nitro"},
-        {"480p", "Легка копія 480p", "H.264 480p — швидко переслати або дивитися з телефона"},
-        {"vertical", "Вертикальне 9:16", "центр кадру, 1080×1920 — для YouTube Shorts, TikTok, Reels"},
-        {"master", "Для монтажу (ProRes)", "ProRes 422 HQ у MOV, звук без стиснення — для Premiere, DaVinci Resolve"},
-        {"thumb", "Обкладинка (JPG)", "найвиразніший кадр біля середини відео, до 1280×720 — для YouTube чи прев'ю", true},
-        {"gif", "GIF", "перші 15 с, 480 пікселів завширшки, 15 кадрів/с — для чатів і форумів", true},
-        {"webp", "WebP-анімація", "перші 15 с, 640 пікселів, 20 кадрів/с — менша й якісніша за GIF", true},
+        {"discord", tr("Discord (до 10 МБ)"), tr("H.264 до 720p, файл до ~10 МБ — влізе в Discord без Nitro")},
+        {"480p", tr("Легка копія 480p"), tr("H.264 480p — швидко переслати або дивитися з телефона")},
+        {"vertical", tr("Вертикальне 9:16"), tr("центр кадру, 1080×1920 — для YouTube Shorts, TikTok, Reels")},
+        {"master", tr("Для монтажу (ProRes)"), tr("ProRes 422 HQ у MOV, звук без стиснення — для Premiere, DaVinci Resolve")},
+        {"thumb", tr("Обкладинка (JPG)"), tr("найвиразніший кадр біля середини відео, до 1280×720 — для YouTube чи прев'ю"), true},
+        {"gif", "GIF", tr("перші 15 с, 480 пікселів завширшки, 15 кадрів/с — для чатів і форумів"), true},
+        {"webp", tr("WebP-анімація"), tr("перші 15 с, 640 пікселів, 20 кадрів/с — менша й якісніша за GIF"), true},
     };
     return presets;
 }
@@ -82,7 +83,7 @@ std::vector<ExtraOutput> make_extra_outputs(const std::string& ids, const Encode
         ExtraOutput x;
         if (id == "discord") {
             const int h = even(std::min(720, H));
-            x.label = "Discord (до 10 МБ)";
+            x.label = tr("Discord (до 10 МБ)");
             x.video = h264(main, even(static_cast<double>(h) * W / H), h, "medium");
             x.audio = aac(128000);
             // 9.5 МБ, а не 10: запас на контейнер і на неточність бітрейту кодека
@@ -91,21 +92,21 @@ std::vector<ExtraOutput> make_extra_outputs(const std::string& ids, const Encode
             x.output_path = version_path(main.output_path, id, "mp4");
         } else if (id == "480p") {
             const int h = even(std::min(480, H));
-            x.label = "Легка копія 480p";
+            x.label = tr("Легка копія 480p");
             x.video = h264(main, even(static_cast<double>(h) * W / H), h, "fast");
             x.video.quality = 24;
             x.audio = aac(160000);
             x.output_path = version_path(main.output_path, id, "mp4");
         } else if (id == "vertical") {
             const int h = H >= 1080 ? 1920 : 1280;
-            x.label = "Вертикальне 9:16";
+            x.label = tr("Вертикальне 9:16");
             x.video = h264(main, h * 9 / 16, h, "medium");
             x.video.crop_aspect = 9.0 / 16.0;
             x.video.quality = 20;
             x.audio = aac(192000);
             x.output_path = version_path(main.output_path, id, "mp4");
         } else if (id == "master") {
-            x.label = "Для монтажу (ProRes)";
+            x.label = tr("Для монтажу (ProRes)");
             x.video.codec = "prores_ks";
             x.video.width = W;
             x.video.height = H;
@@ -136,7 +137,7 @@ std::vector<std::string> make_post_versions(const std::string& ids, const std::s
         const std::string id = trim(raw);
         if (id != "thumb" && id != "gif" && id != "webp") continue;
         if (stem.find('%') != std::string::npos) {
-            log_warn("Обкладинка й анімації — лише для відеофайлу, не для послідовності зображень");
+            log_warn("{}", trf("Обкладинка й анімації — лише для відеофайлу, не для послідовності зображень"));
             break;
         }
         std::string out, err;
@@ -156,7 +157,7 @@ std::vector<std::string> make_post_versions(const std::string& ids, const std::s
         } else {
             std::error_code ec;
             fs::remove(path_from_utf8(out), ec);
-            log_warn("Не вдалося зробити {}: {}", out, err);
+            log_warn("{}", trf("Не вдалося зробити {}: {}", out, err));
         }
     }
     return made;

@@ -7,6 +7,7 @@
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
 #include "steam_voice.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -17,7 +18,7 @@
 namespace gmdr::voice {
 
 std::string SpeakerTrack::display_name() const {
-    std::string n = name.empty() ? std::format("Гравець #{}", slot) : name;
+    std::string n = name.empty() ? trf("Гравець #{}", slot) : name;
     if (steamid64) n += " (" + format_steamid(steamid64) + ")";
     return n;
 }
@@ -83,7 +84,7 @@ private:
         const AVCodec* codec = avcodec_find_decoder_by_name("opus");   // вбудований декодер FFmpeg
         if (!codec) codec = avcodec_find_decoder(AV_CODEC_ID_OPUS);
         if (!codec) {
-            log_error("У цій збірці FFmpeg немає декодера Opus — голос не буде декодовано");
+            log_error("{}", trf("У цій збірці FFmpeg немає декодера Opus — голос не буде декодовано"));
             return;
         }
         media::CodecCtxPtr ctx(avcodec_alloc_context3(codec));
@@ -92,7 +93,7 @@ private:
         ctx->pkt_timebase = AVRational{1, kVoiceRate};
         const int r = avcodec_open2(ctx.get(), codec, nullptr);
         if (r < 0) {
-            log_error("Не вдалося відкрити декодер Opus: {}", media::av_error_string(r));
+            log_error("{}", trf("Не вдалося відкрити декодер Opus: {}", media::av_error_string(r)));
             return;
         }
         ctx_ = std::move(ctx);
@@ -289,12 +290,12 @@ VoiceDecodeResult decode_voice(const demo::DemoAnalysis& a, const VoiceDecodeOpt
         return x.seconds > y.seconds;
     });
     if (res.bad_packets > 0)
-        res.warnings.push_back(std::format("{} з {} голосових пакетів мають невідомий формат або пошкоджені",
+        res.warnings.push_back(trf("{} з {} голосових пакетів мають невідомий формат або пошкоджені",
                                            res.bad_packets, res.total_packets));
     int unsupported = 0;
     for (auto& s : res.speakers) unsupported += s.unsupported_ops;
     if (unsupported > 0)
-        res.warnings.push_back(std::format("{} блоків голосу у старих кодеках (не Opus) пропущено", unsupported));
+        res.warnings.push_back(trf("{} блоків голосу у старих кодеках (не Opus) пропущено", unsupported));
     if (progress) progress(1.0);
     return res;
 }
@@ -426,7 +427,7 @@ bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path
         for (int64_t pos = from; pos < to; pos += chunk) {
             if (should_stop()) {
                 w.close(nullptr);
-                if (error) *error = "скасовано";
+                if (error) *error = tr("скасовано");
                 return false;
             }
             const auto n = static_cast<size_t>(std::min(chunk, to - pos));
@@ -460,7 +461,7 @@ bool export_speaker_audio(const SpeakerTrack& track, const std::filesystem::path
     for (int64_t pos = from; pos < to; pos += chunk) {
         if (should_stop()) {
             mux.abort();
-            if (error) *error = "скасовано";
+            if (error) *error = tr("скасовано");
             return false;
         }
         const auto n = static_cast<size_t>(std::min(chunk, to - pos));

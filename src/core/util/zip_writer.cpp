@@ -5,6 +5,7 @@
 
 #include "file_util.hpp"
 #include "strings.hpp"
+#include "i18n.hpp"
 
 namespace gmdr {
 
@@ -43,7 +44,7 @@ ZipWriter::~ZipWriter() {
 bool ZipWriter::open(const std::filesystem::path& path, std::string* error) {
     f_.open(path, std::ios::binary | std::ios::trunc);
     if (!f_) {
-        if (error) *error = "не вдалося створити " + path_to_utf8(path);
+        if (error) *error = tr("не вдалося створити ") + path_to_utf8(path);
         return false;
     }
     const std::time_t now = std::time(nullptr);
@@ -129,7 +130,7 @@ bool ZipWriter::close(std::string* error) {
     f_.write(end.data(), static_cast<std::streamsize>(end.size()));
     f_.close();
     if (!f_) {
-        if (error) *error = "не вдалося дописати архів";
+        if (error) *error = tr("не вдалося дописати архів");
         return false;
     }
     return true;

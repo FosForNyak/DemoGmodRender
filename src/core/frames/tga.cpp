@@ -1,4 +1,5 @@
 #include "tga.hpp"
+#include "../util/i18n.hpp"
 
 #include <cstring>
 #include <format>
@@ -17,7 +18,7 @@ struct TgaHeader {
 
 bool parse(const uint8_t* d, size_t size, TgaHeader& h, std::string* error) {
     if (size < 18) {
-        if (error) *error = "TGA: файл менший за заголовок";
+        if (error) *error = tr("TGA: файл менший за заголовок");
         return false;
     }
     h.id_len = d[0];
@@ -32,16 +33,16 @@ bool parse(const uint8_t* d, size_t size, TgaHeader& h, std::string* error) {
     h.data_offset = 18 + static_cast<size_t>(h.id_len) +
                     (h.cmap_type ? static_cast<size_t>(h.cmap_len) * ((h.cmap_bits + 7) / 8) : 0);
     if (h.type != 2 && h.type != 10 && h.type != 3 && h.type != 11) {
-        if (error) *error = std::format("TGA: непідтримуваний тип зображення {}", h.type);
+        if (error) *error = trf("TGA: непідтримуваний тип зображення {}", h.type);
         return false;
     }
     const bool gray = h.type == 3 || h.type == 11;
     if ((!gray && h.bpp != 24 && h.bpp != 32) || (gray && h.bpp != 8)) {
-        if (error) *error = std::format("TGA: непідтримувана глибина {} біт", h.bpp);
+        if (error) *error = trf("TGA: непідтримувана глибина {} біт", h.bpp);
         return false;
     }
     if (h.width <= 0 || h.height <= 0) {
-        if (error) *error = "TGA: нульовий розмір";
+        if (error) *error = tr("TGA: нульовий розмір");
         return false;
     }
     return true;
@@ -80,7 +81,7 @@ bool decode_tga(const uint8_t* d, size_t size, Image& out, std::string* error) {
     if (h.type == 2 || h.type == 3) {
         const size_t need = pixels * static_cast<size_t>(in_bpp);
         if (h.data_offset > size || static_cast<size_t>(end - src) < need) {
-            if (error) *error = "TGA: дані обрізані (файл ще записується?)";
+            if (error) *error = tr("TGA: дані обрізані (файл ще записується?)");
             return false;
         }
         const size_t row_bytes = static_cast<size_t>(h.width) * static_cast<size_t>(in_bpp);
@@ -114,23 +115,23 @@ bool decode_tga(const uint8_t* d, size_t size, Image& out, std::string* error) {
         ++written;
     };
     if (h.data_offset > size) {
-        if (error) *error = "TGA: RLE-дані обрізані";
+        if (error) *error = tr("TGA: RLE-дані обрізані");
         return false;
     }
     while (written < pixels) {
         if (src >= end) {
-            if (error) *error = "TGA: RLE-дані обрізані";
+            if (error) *error = tr("TGA: RLE-дані обрізані");
             return false;
         }
         const uint8_t hdr = *src++;
         const int count = (hdr & 0x7F) + 1;
         if (hdr & 0x80) {
-            if (end - src < in_bpp) { if (error) *error = "TGA: RLE-дані обрізані"; return false; }
+            if (end - src < in_bpp) { if (error) *error = tr("TGA: RLE-дані обрізані"); return false; }
             std::memcpy(px, src, static_cast<size_t>(in_bpp));
             src += in_bpp;
             for (int i = 0; i < count && written < pixels; ++i) put(px);
         } else {
-            if (end - src < static_cast<ptrdiff_t>(count) * in_bpp) { if (error) *error = "TGA: RLE-дані обрізані"; return false; }
+            if (end - src < static_cast<ptrdiff_t>(count) * in_bpp) { if (error) *error = tr("TGA: RLE-дані обрізані"); return false; }
             for (int i = 0; i < count && written < pixels; ++i) {
                 put(src);
                 src += in_bpp;
@@ -156,7 +157,7 @@ bool decode_tga_inplace(Image& img, size_t size, std::string* error) {
     const size_t row_bytes = static_cast<size_t>(h.width) * static_cast<size_t>(in_bpp);
     const size_t need = row_bytes * static_cast<size_t>(h.height);
     if (h.data_offset > size || size - h.data_offset < need) {
-        if (error) *error = "TGA: дані обрізані (файл ще записується?)";
+        if (error) *error = tr("TGA: дані обрізані (файл ще записується?)");
         return false;
     }
     img.width = h.width;

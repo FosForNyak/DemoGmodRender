@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 #include "log.hpp"
+#include "i18n.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -28,9 +29,9 @@ KeepAwake::~KeepAwake() = default;
 
 const char* power_action_name(PowerAction a) {
     switch (a) {
-    case PowerAction::Shutdown: return "вимкнути ПК";
-    case PowerAction::Sleep: return "сон";
-    default: return "нічого";
+    case PowerAction::Shutdown: return tr("вимкнути ПК");
+    case PowerAction::Sleep: return tr("сон");
+    default: return tr("нічого");
     }
 }
 
@@ -66,12 +67,12 @@ int power_countdown_seconds() {
 bool do_power_action(PowerAction a, std::string* error) {
     if (a == PowerAction::None) return true;
     if (std::getenv("GMDR_TEST_POWER_DRYRUN")) {   // для перевірки: нічого не вимикаємо
-        log_info("(перевірка) зараз було б: {}", power_action_name(a));
+        log_info("{}", trf("(перевірка) зараз було б: {}", power_action_name(a)));
         return true;
     }
 #ifdef _WIN32
     if (!enable_shutdown_privilege()) {
-        if (error) *error = "Windows не дає права вимкнути ПК";
+        if (error) *error = tr("Windows не дає права вимкнути ПК");
         return false;
     }
     BOOL ok = FALSE;
@@ -80,10 +81,10 @@ bool do_power_action(PowerAction a, std::string* error) {
                            SHTDN_REASON_MAJOR_APPLICATION | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED);
     else
         ok = SetSuspendState(FALSE, FALSE, FALSE);
-    if (!ok && error) *error = "код помилки Windows " + std::to_string(GetLastError());
+    if (!ok && error) *error = tr("код помилки Windows ") + std::to_string(GetLastError());
     return ok != FALSE;
 #else
-    if (error) *error = "лише у Windows";
+    if (error) *error = tr("лише у Windows");
     return false;
 #endif
 }

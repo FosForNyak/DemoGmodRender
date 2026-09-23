@@ -13,6 +13,7 @@
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <ctime>
@@ -61,14 +62,14 @@ void App::draw_tab_library() {
 
     // ---- Панель: пошук, оновити, додати теку ----
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 17);
-    ImGui::InputTextWithHint("##libsearch", "пошук: назва, карта, сервер, гравець", &library_search_);
+    ImGui::InputTextWithHint("##libsearch", tr("пошук: назва, карта, сервер, гравець"), &library_search_);
     ImGui::SameLine();
     ImGui::BeginDisabled(library_future_.valid());
-    if (ImGui::Button("Оновити")) rescan_library();
+    if (ImGui::Button(tr("Оновити"))) rescan_library();
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Додати теку...")) {
-        const std::string d = pick_folder_dialog("Тека з демо (разом із підтеками)");
+    if (ImGui::Button(tr("Додати теку..."))) {
+        const std::string d = pick_folder_dialog(tr("Тека з демо (разом із підтеками)"));
         if (!d.empty()) {
             s_.library_dirs += (s_.library_dirs.empty() ? "" : ";") + d;
             mark_dirty();
@@ -79,9 +80,9 @@ void App::draw_tab_library() {
     std::vector<const demo::LibraryEntry*> rows;
     for (const auto& e : library_)
         if (demo::library_match(e, library_search_)) rows.push_back(&e);
-    if (library_future_.valid()) ImGui::TextColored(kColDim, "Шукаю демо...");
-    else ImGui::TextColored(kColDim, "Демо: %zu%s", rows.size(),
-                            rows.size() != library_.size() ? std::format(" з {}", library_.size()).c_str() : "");
+    if (library_future_.valid()) ImGui::TextColored(kColDim, "%s", tr("Шукаю демо..."));
+    else ImGui::TextColored(kColDim, tr("Демо: %zu%s"), rows.size(),
+                            rows.size() != library_.size() ? trf(" з {}", library_.size()).c_str() : "");
 
     // ---- Таблиця ----
     const ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
@@ -89,12 +90,12 @@ void App::draw_tab_library() {
     const float table_h = std::max(fs_ * 8, ImGui::GetContentRegionAvail().y - fs_ * 3.2f);
     if (ImGui::BeginTable("##library", 5, tf, ImVec2(0, table_h))) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Демо", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        ImGui::TableSetupColumn("Карта", ImGuiTableColumnFlags_WidthStretch, 2.2f);
-        ImGui::TableSetupColumn("Тривалість", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-        ImGui::TableSetupColumn("Дата", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort |
+        ImGui::TableSetupColumn(tr("Демо"), ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        ImGui::TableSetupColumn(tr("Карта"), ImGuiTableColumnFlags_WidthStretch, 2.2f);
+        ImGui::TableSetupColumn(tr("Тривалість"), ImGuiTableColumnFlags_WidthStretch, 1.2f);
+        ImGui::TableSetupColumn(tr("Дата"), ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort |
                                             ImGuiTableColumnFlags_PreferSortDescending, 1.9f);
-        ImGui::TableSetupColumn("Розмір", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+        ImGui::TableSetupColumn(tr("Розмір"), ImGuiTableColumnFlags_WidthStretch, 1.1f);
         ImGui::TableHeadersRow();
         if (ImGuiTableSortSpecs* ss = ImGui::TableGetSortSpecs(); ss && ss->SpecsCount > 0) {
             const auto& sp = ss->Specs[0];
@@ -129,16 +130,16 @@ void App::draw_tab_library() {
                 if (ImGui::IsItemHovered()) {
                     std::string tip = e.folder;
                     if (!e.error.empty()) tip += "\n" + e.error;
-                    else tip += std::format("\nСервер: {}\nЗаписав: {}", e.server, e.recorded_by);
+                    else tip += trf("\nСервер: {}\nЗаписав: {}", e.server, e.recorded_by);
                     ImGui::SetTooltip("%s", tip.c_str());
                 }
                 if (ImGui::BeginPopupContextItem("##libctx")) {
                     ImGui::BeginDisabled(!e.error.empty());
-                    if (ImGui::MenuItem("Відкрити")) load_demo(e.path);
-                    if (ImGui::MenuItem("Додати до черги (усе демо)")) add_demo_to_queue(e.path);
+                    if (ImGui::MenuItem(tr("Відкрити"))) load_demo(e.path);
+                    if (ImGui::MenuItem(tr("Додати до черги (усе демо)"))) add_demo_to_queue(e.path);
                     ImGui::EndDisabled();
-                    if (ImGui::MenuItem("Показати в папці")) show_in_folder(e.path);
-                    if (ImGui::MenuItem("Копіювати шлях")) clipboard_text_set(e.path);
+                    if (ImGui::MenuItem(tr("Показати в папці"))) show_in_folder(e.path);
+                    if (ImGui::MenuItem(tr("Копіювати шлях"))) clipboard_text_set(e.path);
                     ImGui::EndPopup();
                 }
                 ImGui::PopID();
@@ -159,18 +160,18 @@ void App::draw_tab_library() {
     const auto dirs = library_dirs();
     std::string list;
     for (const auto& d : dirs) list += (list.empty() ? "" : "; ") + d;
-    ImGui::TextColored(kColDim, "Теки: %s", list.empty() ? "(гру не знайдено — додайте теку з демо)" : list.c_str());
+    ImGui::TextColored(kColDim, tr("Теки: %s"), list.empty() ? tr("(гру не знайдено — додайте теку з демо)") : list.c_str());
     if (!s_.library_dirs.empty()) {
         ImGui::SameLine();
-        if (ImGui::SmallButton("Прибрати мої теки")) {
+        if (ImGui::SmallButton(tr("Прибрати мої теки"))) {
             s_.library_dirs.clear();
             mark_dirty();
             rescan_library();
         }
     }
-    help_marker("Тека гри — верхній рівень garrysmod (туди пише консольна команда record) і garrysmod/demos з "
+    help_marker(tr("Тека гри — верхній рівень garrysmod (туди пише консольна команда record) і garrysmod/demos з "
                 "підтеками. Ваші теки переглядаються з підтеками. Подвійний клік — відкрити демо, правий клік — "
-                "додати ціле демо до черги з поточними налаштуваннями.");
+                "додати ціле демо до черги з поточними налаштуваннями."));
 }
 
 } // namespace gmdr::gui

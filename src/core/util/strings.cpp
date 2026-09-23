@@ -1,4 +1,5 @@
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -232,7 +233,7 @@ std::optional<double> parse_timecode(std::string_view s) {
 }
 
 std::string format_bytes(uint64_t bytes) {
-    const char* units[] = {"Б", "КіБ", "МіБ", "ГіБ", "ТіБ"};
+    const char* units[] = {tr("Б"), tr("КіБ"), tr("МіБ"), tr("ГіБ"), tr("ТіБ")};
     double v = static_cast<double>(bytes);
     int u = 0;
     while (v >= 1024.0 && u < 4) { v /= 1024.0; ++u; }

@@ -4,6 +4,7 @@
 #include <format>
 
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 namespace gmdr::render {
 
@@ -59,7 +60,7 @@ std::string safe_file_name(const std::string& title) {
     for (char c : title) o += std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos || (c >= 0 && c < 32) ? '_' : c;
     o = trim(o);
     while (!o.empty() && (o.back() == '.' || o.back() == ' ')) o.pop_back();   // Windows не любить крапку в кінці
-    return o.empty() ? "доріжка" : o;
+    return o.empty() ? tr("доріжка") : o;
 }
 
 std::string make_fcp7_xml(const EditProject& p) {
@@ -98,7 +99,7 @@ std::string make_fcp7_xml(const EditProject& p) {
         x += "<sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack>\n</clipitem>\n</track>\n";
     };
     // A1: звук самого відео (загальний мікс) — посилання на той самий файл
-    if (p.video_has_audio) audio_clip("clipitem-mix", "Мікс (з відео)", "<file id=\"file-video\"/>\n");
+    if (p.video_has_audio) audio_clip("clipitem-mix", tr("Мікс (з відео)"), "<file id=\"file-video\"/>\n");
     // Далі — окремі WAV: гра, гравці, мікрофон
     for (size_t i = 0; i < p.stems.size(); ++i) {
         const auto& st = p.stems[i];

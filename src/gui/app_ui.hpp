@@ -36,6 +36,15 @@ inline void label(const char* text, float width = 0) {
     ImGui::SameLine(width > 0 ? width : ImGui::GetFontSize() * 11.0f);
 }
 
+// SameLine перед галочкою з підписом next_label — або новий рядок, якщо вона не влазить
+// (англійські підписи бувають довшими за українські).
+inline void same_line_if_fits(const char* next_label) {
+    const float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
+                    ImGui::CalcTextSize(next_label, nullptr, true).x;
+    ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+}
+
 struct Resolution { const char* label; int w, h; };
 inline constexpr Resolution kResolutions[] = {
     {"854 × 480 (480p)", 854, 480},        {"1280 × 720 (HD)", 1280, 720},       {"1600 × 900", 1600, 900},

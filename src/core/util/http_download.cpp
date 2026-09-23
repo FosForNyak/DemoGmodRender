@@ -2,6 +2,7 @@
 
 #include "file_util.hpp"
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #include <format>
 #include <fstream>
@@ -35,11 +36,11 @@ bool download_file(const std::string& url, const fs::path& dest, const std::func
     uc.lpszUrlPath = path;
     uc.dwUrlPathLength = static_cast<DWORD>(std::size(path));
     if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc) || uc.nScheme != INTERNET_SCHEME_HTTPS)
-        return fail("неправильна адреса (потрібна https://): " + url);
+        return fail(tr("неправильна адреса (потрібна https://): ") + url);
     const std::wstring agent = utf8_to_wide(std::string("GModDemoRender/") + GMDR_VERSION);
     HINTERNET session = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) return fail("не вдалося почати з'єднання");
+    if (!session) return fail(tr("не вдалося почати з'єднання"));
     WinHttpSetTimeouts(session, 15000, 15000, 30000, 60000);
     HINTERNET conn = WinHttpConnect(session, host, uc.nPort, 0);
     // Переходи (Hugging Face віддає файл з CDN) WinHTTP робить сам
@@ -68,11 +69,11 @@ bool download_file(const std::string& url, const fs::path& dest, const std::func
     };
     if (!ok) {
         close_all();
-        return fail(std::format("немає зв'язку з {} (код {})", wide_to_utf8(host), net_err));
+        return fail(trf("немає зв'язку з {} (код {})", wide_to_utf8(host), net_err));
     }
     if (status != 200) {
         close_all();
-        return fail(std::format("сервер відповів кодом {}", status));
+        return fail(trf("сервер відповів кодом {}", status));
     }
     std::error_code ec;
     fs::create_directories(dest.parent_path(), ec);
@@ -80,29 +81,29 @@ bool download_file(const std::string& url, const fs::path& dest, const std::func
     std::ofstream f(part, std::ios::binary | std::ios::trunc);
     if (!f) {
         close_all();
-        return fail("не вдалося створити " + path_to_utf8(part));
+        return fail(tr("не вдалося створити ") + path_to_utf8(part));
     }
     std::vector<char> buf(1 << 20);
     uint64_t done = 0;
     std::string err;
     for (;;) {
         if (cancel && cancel->load()) {
-            err = "скасовано";
+            err = tr("скасовано");
             break;
         }
         DWORD avail = 0;
         if (!WinHttpQueryDataAvailable(req, &avail)) {
-            err = std::format("з'єднання обірвалось (код {})", GetLastError());
+            err = trf("з'єднання обірвалось (код {})", GetLastError());
             break;
         }
         if (avail == 0) break;   // кінець
         DWORD got = 0;
         if (!WinHttpReadData(req, buf.data(), std::min<DWORD>(avail, static_cast<DWORD>(buf.size())), &got) || got == 0) {
-            err = std::format("з'єднання обірвалось (код {})", GetLastError());
+            err = trf("з'єднання обірвалось (код {})", GetLastError());
             break;
         }
         if (!f.write(buf.data(), got)) {
-            err = "не вдалося записати файл (місце на диску?)";
+            err = tr("не вдалося записати файл (місце на диску?)");
             break;
         }
         done += got;
@@ -110,7 +111,7 @@ bool download_file(const std::string& url, const fs::path& dest, const std::func
     }
     f.close();
     close_all();
-    if (err.empty() && total > 0 && done != total) err = std::format("отримано {} з {} байтів", done, total);
+    if (err.empty() && total > 0 && done != total) err = trf("отримано {} з {} байтів", done, total);
     if (!err.empty()) {
         fs::remove(part, ec);
         return fail(err);
@@ -118,14 +119,14 @@ bool download_file(const std::string& url, const fs::path& dest, const std::func
     fs::rename(part, dest, ec);
     if (ec) {
         fs::remove(part, ec);
-        return fail("не вдалося перейменувати файл: " + ec.message());
+        return fail(tr("не вдалося перейменувати файл: ") + ec.message());
     }
     return true;
 }
 #else
 bool download_file(const std::string&, const fs::path&, const std::function<void(uint64_t, uint64_t)>&,
                    const std::atomic<bool>*, std::string* error) {
-    if (error) *error = "завантаження з програми є лише у Windows — завантажте файл вручну";
+    if (error) *error = tr("завантаження з програми є лише у Windows — завантажте файл вручну");
     return false;
 }
 #endif

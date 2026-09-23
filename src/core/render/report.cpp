@@ -7,6 +7,7 @@
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
 #include "../util/zip_writer.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -44,7 +45,7 @@ std::string os_description() {
             fn(&v);
     // Windows 11 теж повідомляє 10.0 — відрізняється номером збірки (22000+)
     const char* name = v.dwMajorVersion == 10 && v.dwBuildNumber >= 22000 ? "Windows 11" : "Windows";
-    return std::format("{} {}.{} (збірка {})", name, v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber);
+    return trf("{} {}.{} (збірка {})", name, v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber);
 }
 
 std::string cpu_name() {
@@ -59,7 +60,7 @@ std::string cpu_name() {
 std::string memory_description() {
     MEMORYSTATUSEX m{sizeof(m)};
     if (!GlobalMemoryStatusEx(&m)) return "?";
-    return std::format("{} (вільно {})", format_bytes(m.ullTotalPhys), format_bytes(m.ullAvailPhys));
+    return trf("{} (вільно {})", format_bytes(m.ullTotalPhys), format_bytes(m.ullAvailPhys));
 }
 
 std::vector<std::string> gpu_names() {
@@ -147,30 +148,30 @@ std::string system_summary() {
     const std::time_t now = std::time(nullptr);
     char when[32] = {};
     std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-    s += std::format("GMod Demo Render {}\nЗвіт створено: {}\n\n", GMDR_VERSION, when);
-    s += "ОС: " + os_description() + "\n";
-    s += std::format("Процесор: {} ({} потоків)\n", cpu_name(), std::thread::hardware_concurrency());
-    s += "Пам'ять: " + memory_description() + "\n";
-    for (const auto& g : gpu_names()) s += "Відеоадаптер: " + g + "\n";
+    s += trf("GMod Demo Render {}\nЗвіт створено: {}\n\n", GMDR_VERSION, when);
+    s += tr("ОС: ") + os_description() + "\n";
+    s += trf("Процесор: {} ({} потоків)\n", cpu_name(), std::thread::hardware_concurrency());
+    s += tr("Пам'ять: ") + memory_description() + "\n";
+    for (const auto& g : gpu_names()) s += tr("Відеоадаптер: ") + g + "\n";
     s += std::format("FFmpeg: {} (avcodec {}.{}, avformat {}.{})\n", av_version_info(), LIBAVCODEC_VERSION_MAJOR,
                      LIBAVCODEC_VERSION_MINOR, LIBAVFORMAT_VERSION_MAJOR, LIBAVFORMAT_VERSION_MINOR);
     std::string gpu_enc;
     for (const auto& e : media::list_encoders(true))
         if (e.hardware) gpu_enc += (gpu_enc.empty() ? "" : ", ") + e.name;
-    s += "GPU-кодеки у збірці FFmpeg: " + (gpu_enc.empty() ? std::string("немає") : gpu_enc) + "\n";
-    s += std::format("Папка програми: {} (вільно {})\n", path_to_utf8(app_data_dir()), format_bytes(free_disk_space(app_data_dir())));
+    s += tr("GPU-кодеки у збірці FFmpeg: ") + (gpu_enc.empty() ? std::string(tr("немає")) : gpu_enc) + "\n";
+    s += trf("Папка програми: {} (вільно {})\n", path_to_utf8(app_data_dir()), format_bytes(free_disk_space(app_data_dir())));
 
     s += "\nGarry's Mod:\n";
     if (auto g = game::detect_gmod()) {
-        s += "  папка: " + path_to_utf8(g->root) + std::format(" (вільно {})\n", format_bytes(free_disk_space(g->root)));
+        s += tr("  папка: ") + path_to_utf8(g->root) + trf(" (вільно {})\n", format_bytes(free_disk_space(g->root)));
         for (const auto& e : g->executables) s += "  exe: " + game::GModInstall::exe_label(e) + " — " + path_to_utf8(e) + "\n";
         const auto st = game::driver_state(*g);
-        s += std::string("  драйвер: ") +
-             (st == game::DriverState::Installed ? "встановлено" : st == game::DriverState::Outdated ? "застарілий" : "не встановлено") +
-             std::format(" (версія програми {})\n", game::kDriverVersion);
-        if (game::is_rtx_install(*g)) s += "  це копія GMod RTX\n";
+        s += std::string(tr("  драйвер: ")) +
+             (st == game::DriverState::Installed ? tr("встановлено") : st == game::DriverState::Outdated ? tr("застарілий") : tr("не встановлено")) +
+             trf(" (версія програми {})\n", game::kDriverVersion);
+        if (game::is_rtx_install(*g)) s += tr("  це копія GMod RTX\n");
     } else {
-        s += "  не знайдено автоматично\n";
+        s += tr("  не знайдено автоматично\n");
     }
     if (auto rtx = game::detect_rtx_install()) s += "GMod RTX: " + path_to_utf8(rtx->root) + "\n";
     return s;
@@ -180,7 +181,7 @@ std::string default_report_name() {
     const std::time_t now = std::time(nullptr);
     char buf[64] = {};
     std::strftime(buf, sizeof buf, "%Y-%m-%d_%H-%M", std::localtime(&now));
-    return std::string("gmdr_звіт_") + buf + ".zip";
+    return std::string(tr("gmdr_звіт_")) + buf + ".zip";
 }
 
 bool make_problem_report(const fs::path& out_zip, const ReportInput& in, std::vector<std::string>* contents,
@@ -195,28 +196,28 @@ bool make_problem_report(const fs::path& out_zip, const ReportInput& in, std::ve
     auto add_text_file = [&](const std::string& name, const fs::path& src) {
         if (auto t = read_file_text(src)) add_text(name, *t);
     };
-    add_text("ПРОЧИТАЙ.txt",
-             "Звіт GMod Demo Render для діагностики проблеми.\n\n"
+    add_text(tr("ПРОЧИТАЙ.txt"),
+             tr("Звіт GMod Demo Render для діагностики проблеми.\n\n"
              "журнал.txt — журнал програми (і попередній запуск);\n"
              "налаштування.json, черга.json — налаштування рендеру і черга;\n"
              "система.txt — ОС, процесор, пам'ять, відеокарти, FFmpeg, Garry's Mod і драйвер;\n"
              "консоль_gmod.txt — останні рядки консолі гри (garrysmod/console.log);\n"
              "*.dmp — останній дамп збою програми, якщо вона падала (у ньому пам'ять програми).\n\n"
              "Шлях до вашого профілю Windows у текстових файлах замінено на %USERPROFILE%.\n"
-             "Архів нікуди не надсилається автоматично — перегляньте його і передайте сам.\n");
+             "Архів нікуди не надсилається автоматично — перегляньте його і передайте сам.\n"));
     std::string sys = system_summary();
     if (!in.extra_text.empty()) sys += "\n" + in.extra_text + "\n";
-    add_text("система.txt", sys);
-    add_text_file("журнал.txt", app_data_dir() / "gmdr_log.txt");
-    add_text_file("журнал_попередній.txt", app_data_dir() / "gmdr_log.old.txt");
-    if (!in.settings_path.empty()) add_text_file("налаштування.json", path_from_utf8(in.settings_path));
-    add_text_file("черга.json", app_data_dir() / "gmdr_queue.json");
+    add_text(tr("система.txt"), sys);
+    add_text_file(tr("журнал.txt"), app_data_dir() / "gmdr_log.txt");
+    add_text_file(tr("журнал_попередній.txt"), app_data_dir() / "gmdr_log.old.txt");
+    if (!in.settings_path.empty()) add_text_file(tr("налаштування.json"), path_from_utf8(in.settings_path));
+    add_text_file(tr("черга.json"), app_data_dir() / "gmdr_queue.json");
     if (auto g = game::detect_gmod()) {
         const auto tail = game::console_log_tail(*g, 2000);
         if (!tail.empty()) {
             std::string t;
             for (const auto& l : tail) t += l + "\n";
-            add_text("консоль_gmod.txt", t);
+            add_text(tr("консоль_gmod.txt"), t);
         }
     }
     const fs::path dump = latest_crash_dump();

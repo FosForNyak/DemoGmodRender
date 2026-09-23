@@ -3,6 +3,7 @@
 #include "../util/file_util.hpp"
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <cstdlib>
 #include <regex>
@@ -63,7 +64,7 @@ std::optional<GModInstall> detect_rtx_install(std::vector<std::string>* log) {
     for (const auto& c : candidates) {
         auto g = gmod_from_dir(c);
         if (g && g->valid() && is_rtx_install(*g)) {
-            if (log) log->push_back("Знайдено GMod RTX (RTXLauncher): " + path_to_utf8(g->root));
+            if (log) log->push_back(tr("Знайдено GMod RTX (RTXLauncher): ") + path_to_utf8(g->root));
             return g;
         }
     }
@@ -90,7 +91,7 @@ bool apply_rtx_render_profile(const GModInstall& g, const fs::path& backup, std:
         out += line + "\n";
     }
     while (out.size() >= 2 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n') out.pop_back();
-    out += std::string(kProfileMarker) + ": налаштування на час рендеру (оригінал буде повернуто)\n";
+    out += std::string(kProfileMarker) + tr(": налаштування на час рендеру (оригінал буде повернуто)\n");
     for (const auto& [k, v] : kProfile) out += k + " = " + v + "\n";
     return write_file_text(conf, out, error);
 }
@@ -107,7 +108,7 @@ bool restore_rtx_profile(const GModInstall& g, const fs::path& backup) {
         ok = copy_file_overwrite(backup, conf, &err);
     }
     if (!ok) {
-        log_warn("Не вдалося повернути rtx.conf: {}", err.empty() ? ec.message() : err);
+        log_warn("{}", trf("Не вдалося повернути rtx.conf: {}", err.empty() ? ec.message() : err));
         return false;
     }
     fs::remove(backup, ec);

@@ -1,4 +1,5 @@
 #include "blender.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +18,7 @@ MotionBlender::MotionBlender(int samples, double shutter, bool high_depth, Threa
 std::optional<Image> MotionBlender::push(Image&& sub) {
     if (samples_ == 1) return std::move(sub);   // без розмиття — кадр як є
     if (layout_info(sub.layout).high_depth)
-        throw std::runtime_error("Motion blur: 16-бітні під-кадри не підтримуються");
+        throw std::runtime_error(tr("Motion blur: 16-бітні під-кадри не підтримуються"));
 
     const bool yuv = is_yuv(sub.layout);
     if (in_group_ == 0) {
@@ -42,7 +43,7 @@ std::optional<Image> MotionBlender::push(Image&& sub) {
     }
     if (sub.width != width_ || sub.height != height_ || is_yuv(in_layout_) != yuv ||
         (yuv && sub.layout != in_layout_))
-        throw std::runtime_error("Motion blur: розмір або формат кадрів змінився посеред запису");
+        throw std::runtime_error(tr("Motion blur: розмір або формат кадрів змінився посеред запису"));
 
     if (in_group_ < used_) {
         const int bpp = bytes_per_pixel(sub.layout);

@@ -2,6 +2,7 @@
 
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -149,7 +150,7 @@ std::unique_ptr<GameProcess> GameProcess::launch(const std::filesystem::path& ex
     const BOOL ok = CreateProcessW(exe.c_str(), cmd_buf.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT,
                                    env_block.data(), working_dir.empty() ? nullptr : working_dir.c_str(), &si, &pi);
     if (!ok) {
-        if (error) *error = std::format("не вдалося запустити гру (код помилки Windows {})", GetLastError());
+        if (error) *error = trf("не вдалося запустити гру (код помилки Windows {})", GetLastError());
         return nullptr;
     }
     CloseHandle(pi.hThread);
@@ -164,7 +165,7 @@ std::unique_ptr<GameProcess> GameProcess::attach(uint32_t pid, std::string* erro
                                PROCESS_TERMINATE | PROCESS_SET_INFORMATION,
                            FALSE, pid);
     if (!h) {
-        if (error) *error = std::format("не вдалося підключитися до процесу {} (код {})", pid, GetLastError());
+        if (error) *error = trf("не вдалося підключитися до процесу {} (код {})", pid, GetLastError());
         return nullptr;
     }
     auto p = std::unique_ptr<GameProcess>(new GameProcess());
@@ -411,7 +412,7 @@ std::unique_ptr<GameProcess> GameProcess::launch(const std::filesystem::path& ex
 
 std::unique_ptr<GameProcess> GameProcess::attach(uint32_t pid, std::string* error) {
     if (kill(static_cast<pid_t>(pid), 0) != 0) {
-        if (error) *error = "процес не знайдено";
+        if (error) *error = tr("процес не знайдено");
         return nullptr;
     }
     auto p = std::unique_ptr<GameProcess>(new GameProcess());

@@ -20,6 +20,7 @@
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
 #include "../speech/transcribe.hpp"
+#include "../util/i18n.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
 #include "settings.hpp"
@@ -37,7 +38,7 @@ struct CheckItem {
 };
 
 struct Progress {
-    std::string stage = "Очікування";
+    std::string stage = tr("Очікування");
     double      fraction = 0.0;        // 0..1 загальний прогрес (-1 — невідомо)
     int32_t     demo_tick = 0;
     int32_t     demo_total = 0;
@@ -122,7 +123,7 @@ private:
 class AnalyzeJob final : public Job {
 public:
     explicit AnalyzeJob(std::string demo_path) : path_(std::move(demo_path)) {}
-    std::string name() const override { return "Аналіз демо"; }
+    std::string name() const override { return tr("Аналіз демо"); }
     std::shared_ptr<const demo::DemoAnalysis>      analysis() const;
     std::shared_ptr<const voice::VoiceDecodeResult> voices() const;
 
@@ -167,7 +168,7 @@ public:
     RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
               std::shared_ptr<const voice::VoiceDecodeResult> voices, bool test_run = false,
               std::shared_ptr<GameHandoff> handoff = nullptr, bool keep_game = false);
-    std::string name() const override { return test_run_ ? "Тестовий прогін" : "Рендер демо"; }
+    std::string name() const override { return tr(test_run_ ? "Тестовий прогін" : "Рендер демо"); }
     bool is_test_run() const { return test_run_; }
     bool can_show_game() const override;
     void set_show_game(bool show) override { show_game_ = show; }
@@ -222,7 +223,7 @@ public:
         double      seconds = 0;   // скільки тривав пункт
     };
     explicit QueueJob(std::vector<RenderSettings> items);
-    std::string name() const override { return "Черга рендерів"; }
+    std::string name() const override { return tr("Черга рендерів"); }
     bool can_show_game() const override { return true; }
     void set_show_game(bool show) override;
     size_t size() const { return items_.size(); }
@@ -248,7 +249,7 @@ private:
 class WatchJob final : public Job {
 public:
     WatchJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis, int32_t from_tick);
-    std::string name() const override { return "Перегляд у грі"; }
+    std::string name() const override { return tr("Перегляд у грі"); }
     std::vector<game::DriverMark> take_marks();
 
 protected:
@@ -269,7 +270,7 @@ public:
     EncodeFramesJob(RenderSettings s, std::filesystem::path frames_dir, std::string prefix,
                     std::filesystem::path wav_path, std::shared_ptr<const demo::DemoAnalysis> analysis,
                     std::shared_ptr<const voice::VoiceDecodeResult> voices);
-    std::string name() const override { return "Кодування кадрів"; }
+    std::string name() const override { return tr("Кодування кадрів"); }
 
 protected:
     void run() override;
@@ -291,7 +292,7 @@ class ExportVoicesJob final : public Job {
 public:
     ExportVoicesJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
                     std::shared_ptr<const voice::VoiceDecodeResult> voices, std::filesystem::path out_dir);
-    std::string name() const override { return "Збереження голосів"; }
+    std::string name() const override { return tr("Збереження голосів"); }
 
 protected:
     void run() override;
@@ -311,7 +312,7 @@ class TranscribeJob final : public Job {
 public:
     TranscribeJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis> analysis,
                   std::shared_ptr<const voice::VoiceDecodeResult> voices, bool range_only = false);
-    std::string name() const override { return "Розпізнавання мовлення"; }
+    std::string name() const override { return tr("Розпізнавання мовлення"); }
     // Уся розшифровка демо (після завершення)
     std::optional<speech::Transcript> transcript() const;
 
@@ -331,7 +332,7 @@ private:
 class DownloadJob final : public Job {
 public:
     DownloadJob(std::string url, std::filesystem::path dest, std::string what);
-    std::string name() const override { return "Завантаження"; }
+    std::string name() const override { return tr("Завантаження"); }
 
 protected:
     void run() override;

@@ -2,6 +2,7 @@
 
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -104,7 +105,7 @@ AVPixelFormat choose_pix_fmt(const AVCodec* codec, int depth, int chroma, const 
     if (!forced.empty() && forced != "auto") {
         const AVPixelFormat f = av_get_pix_fmt(forced.c_str());
         if (f != AV_PIX_FMT_NONE) return f;
-        log_warn("Невідомий формат пікселів '{}' — обираю автоматично", forced);
+        log_warn("{}", trf("Невідомий формат пікселів '{}' — обираю автоматично", forced));
     }
     auto supported = codec_pix_fmts(codec);
     std::vector<AVPixelFormat> sw;
@@ -166,7 +167,7 @@ bool VideoEncoder::setup_hw_frames(const AVCodec* codec, std::string* error) {
         const char* dev_name = s_.hw_device.empty() ? nullptr : s_.hw_device.c_str();
         int r = av_hwdevice_ctx_create(&dev, cfg->device_type, dev_name, nullptr, 0);
         if (r < 0) {
-            if (error) *error = std::format("не вдалося відкрити GPU-пристрій {}: {}",
+            if (error) *error = trf("не вдалося відкрити GPU-пристрій {}: {}",
                                             av_hwdevice_get_type_name(cfg->device_type), av_error_string(r));
             continue;
         }
@@ -181,7 +182,7 @@ bool VideoEncoder::setup_hw_frames(const AVCodec* codec, std::string* error) {
         r = av_hwframe_ctx_init(frames_ref);
         if (r < 0) {
             av_buffer_unref(&frames_ref);
-            if (error) *error = "не вдалося створити пул GPU-кадрів: " + av_error_string(r);
+            if (error) *error = tr("не вдалося створити пул GPU-кадрів: ") + av_error_string(r);
             continue;
         }
         hw_frames_.reset(frames_ref);
@@ -190,7 +191,7 @@ bool VideoEncoder::setup_hw_frames(const AVCodec* codec, std::string* error) {
         sw_fmt_ = fc->sw_format;
         return true;
     }
-    if (error && error->empty()) *error = "кодек вимагає апаратних кадрів, але жоден GPU-пристрій не підійшов";
+    if (error && error->empty()) *error = tr("кодек вимагає апаратних кадрів, але жоден GPU-пристрій не підійшов");
     return false;
 }
 
@@ -218,11 +219,11 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
     in_h_ = in_h;
     const AVCodec* codec = avcodec_find_encoder_by_name(s.codec.c_str());
     if (!codec) {
-        if (error) *error = std::format("кодек '{}' відсутній у цій збірці FFmpeg", s.codec);
+        if (error) *error = trf("кодек '{}' відсутній у цій збірці FFmpeg", s.codec);
         return false;
     }
     if (codec->type != AVMEDIA_TYPE_VIDEO) {
-        if (error) *error = std::format("'{}' — не відеокодек", s.codec);
+        if (error) *error = trf("'{}' — не відеокодек", s.codec);
         return false;
     }
     ctx_.reset(avcodec_alloc_context3(codec));
@@ -257,7 +258,7 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
     } else {
         sw_fmt_ = choose_pix_fmt(codec, s.bit_depth, chroma, s.pix_fmt);
         if (sw_fmt_ == AV_PIX_FMT_NONE) {
-            if (error) *error = "не вдалося підібрати формат пікселів для кодека";
+            if (error) *error = tr("не вдалося підібрати формат пікселів для кодека");
             return false;
         }
         c->pix_fmt = sw_fmt_;
@@ -370,12 +371,12 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
     // Невідомі параметри залишаються у словнику — попереджаємо
     AVDictionaryEntry* e = nullptr;
     while ((e = av_dict_get(opts, "", e, AV_DICT_IGNORE_SUFFIX)))
-        log_warn("Кодек {} не знає параметра '{}={}'", name, e->key, e->value);
+        log_warn("{}", trf("Кодек {} не знає параметра '{}={}'", name, e->key, e->value));
     av_dict_free(&opts);
     if (r < 0) {
         if (error) {
-            *error = std::format("не вдалося відкрити кодек {}: {}", name, av_error_string(r));
-            if (hardware_) *error += " (перевірте, що відеокарта підтримує цей кодек і драйвер оновлено)";
+            *error = trf("не вдалося відкрити кодек {}: {}", name, av_error_string(r));
+            if (hardware_) *error += tr(" (перевірте, що відеокарта підтримує цей кодек і драйвер оновлено)");
         }
         return false;
     }
@@ -388,7 +389,7 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
     frame_->color_primaries = c->color_primaries;
     frame_->color_trc = c->color_trc;
     if (av_frame_get_buffer(frame_.get(), 64) < 0) {
-        if (error) *error = "не вистачає пам'яті для кадру";
+        if (error) *error = tr("не вистачає пам'яті для кадру");
         return false;
     }
     if (hw_frames_) hw_frame_ = make_frame();
@@ -417,7 +418,7 @@ bool VideoEncoder::init_legacy_sws(const frames::Image& img, int src_w, int src_
     if (sws_init_context(sws_, nullptr, nullptr) < 0) {
         sws_freeContext(sws_);
         sws_ = nullptr;
-        if (error) *error = "swscale: неможливе перетворення формату";
+        if (error) *error = tr("swscale: неможливе перетворення формату");
         return false;
     }
     const bool dst_rgb = pix_fmt_is_rgb(static_cast<AVPixelFormat>(dst->format));
@@ -469,7 +470,7 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
     src->color_trc = dst->color_trc;
 
     if (av_frame_make_writable(dst) < 0) {
-        if (error) *error = "кадр енкодера зайнятий";
+        if (error) *error = tr("кадр енкодера зайнятий");
         return false;
     }
     int r = 0;
@@ -503,7 +504,7 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
     }
     convert_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     if (r < 0) {
-        if (error) *error = "помилка перетворення кольору: " + av_error_string(r);
+        if (error) *error = tr("помилка перетворення кольору: ") + av_error_string(r);
         return false;
     }
     return true;
@@ -512,20 +513,20 @@ bool VideoEncoder::convert(const frames::Image& img, AVFrame* dst, std::string* 
 bool VideoEncoder::send(AVFrame* frame, const PacketSink& sink, std::string* error) {
     int r = avcodec_send_frame(ctx_.get(), frame);
     if (r < 0 && r != AVERROR_EOF) {
-        if (error) *error = "помилка кодування кадру: " + av_error_string(r);
+        if (error) *error = tr("помилка кодування кадру: ") + av_error_string(r);
         return false;
     }
     for (;;) {
         r = avcodec_receive_packet(ctx_.get(), pkt_.get());
         if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
         if (r < 0) {
-            if (error) *error = "помилка отримання пакета: " + av_error_string(r);
+            if (error) *error = tr("помилка отримання пакета: ") + av_error_string(r);
             return false;
         }
         const bool ok = sink(pkt_.get());
         av_packet_unref(pkt_.get());
         if (!ok) {
-            if (error && error->empty()) *error = "помилка запису відео у файл";
+            if (error && error->empty()) *error = tr("помилка запису відео у файл");
             return false;
         }
     }
@@ -544,7 +545,7 @@ bool VideoEncoder::encode(const frames::Image& img, int64_t pts, const PacketSin
         int r = av_hwframe_get_buffer(hw_frames_.get(), hw_frame_.get(), 0);
         if (r >= 0) r = av_hwframe_transfer_data(hw_frame_.get(), frame_.get(), 0);
         if (r < 0) {
-            if (error) *error = "не вдалося передати кадр у відеокарту: " + av_error_string(r);
+            if (error) *error = tr("не вдалося передати кадр у відеокарту: ") + av_error_string(r);
             return false;
         }
         hw_frame_->pts = pts;

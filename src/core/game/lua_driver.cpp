@@ -1,6 +1,7 @@
 #include "lua_driver.hpp"
 
 #include "../util/file_util.hpp"
+#include "../util/i18n.hpp"
 #include "../util/json.hpp"
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
@@ -41,7 +42,7 @@ DriverState driver_state(const GModInstall& g) {
 bool install_driver(const GModInstall& g, std::string* error) {
     auto menu = read_file_text(menu_lua(g), error);
     if (!menu) {
-        if (error) *error = "не знайдено " + path_to_utf8(menu_lua(g)) + " — це точно папка Garry's Mod?";
+        if (error) *error = tr("не знайдено ") + path_to_utf8(menu_lua(g)) + tr(" — це точно папка Garry's Mod?");
         return false;
     }
     if (!write_file_text(driver_lua(g), driver_lua_source(), error)) return false;
@@ -57,7 +58,7 @@ bool install_driver(const GModInstall& g, std::string* error) {
         text += "\n";
         if (!write_file_text(menu_lua(g), text, error)) return false;
     }
-    log_info("Драйвер рендеру встановлено у {}", path_to_utf8(driver_lua(g)));
+    log_info("{}", trf("Драйвер рендеру встановлено у {}", path_to_utf8(driver_lua(g))));
     return true;
 }
 
@@ -72,7 +73,7 @@ bool uninstall_driver(const GModInstall& g, std::string* error) {
         if (!write_file_text(menu_lua(g), out, error)) return false;
     }
     remove_file_quiet(driver_lua(g));
-    log_info("Драйвер рендеру видалено");
+    log_info("{}", trf("Драйвер рендеру видалено"));
     return true;
 }
 
@@ -82,8 +83,8 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
     std::string flags;
     for (const auto& f : job.movie_flags) flags += " " + f;
     std::string c;
-    c += "// GMod Demo Render — тимчасовий конфіг завдання " + job.id + "\n";
-    c += "// Створено автоматично, можна видалити.\n";
+    c += tr("// GMod Demo Render — тимчасовий конфіг завдання ") + job.id + "\n";
+    c += tr("// Створено автоматично, можна видалити.\n");
     c += "sv_cheats 1\n";
     if (job.mode == "watch") {
         // Перегляд: звичайне відтворення, налаштування гравця не чіпаємо
@@ -92,7 +93,7 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
         if (job.seek_tick > 0) c += std::format("alias gmdr_seek \"demo_gototick {} 0 0\"\n", job.seek_tick);
         c += "alias gmdr_quit \"quit\"\n";
         c += "alias gmdr_restore \"\"\n";
-        c += "echo \"[GMDR] конфіг перегляду завантажено\"\n";
+        c += tr("echo \"[GMDR] конфіг перегляду завантажено\"\n");
         return c;
     }
     c += std::format("host_framerate {}\n", job.host_framerate);
@@ -109,7 +110,7 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
     if (job.hide_hud) c += "cl_drawhud 0\n";
     if (job.hide_viewmodel) c += "r_drawviewmodel 0\n";
     if (!trim(extra).empty()) {
-        c += "// Додаткові команди користувача\n";
+        c += tr("// Додаткові команди користувача\n");
         for (const auto& line : split(replace_all(extra, "\r", ""), '\n')) c += trim(line) + "\n";
     }
     c += "alias gmdr_play " + q("playdemo " + job.demo) + "\n";
@@ -121,7 +122,7 @@ std::string make_job_cfg(const DriverJob& job, bool mute_engine_voice, const std
     std::string restore;
     for (const auto& [k, v] : originals) restore += std::format("{} {};", k, v);
     c += "alias gmdr_restore " + q(restore) + "\n";
-    c += "echo \"[GMDR] конфіг завдання завантажено\"\n";
+    c += tr("echo \"[GMDR] конфіг завдання завантажено\"\n");
     return c;
 }
 
@@ -240,7 +241,7 @@ bool restore_config(const GModInstall& g, const fs::path& backup_path) {
     if (!fs::exists(backup_path, ec)) return false;
     std::string err;
     if (!copy_file_overwrite(backup_path, g.garrysmod / "cfg" / "config.cfg", &err)) {
-        log_warn("Не вдалося відновити config.cfg: {}", err);
+        log_warn("{}", trf("Не вдалося відновити config.cfg: {}", err));
         return false;
     }
     fs::remove(backup_path, ec);

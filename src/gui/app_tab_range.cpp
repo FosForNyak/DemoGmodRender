@@ -14,6 +14,7 @@
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -34,12 +35,12 @@ void App::draw_tab_range() {
     const float lw = fs_ * 11.5f;
     bool changed = false;
     if (!analysis_) {
-        ImGui::TextColored(kColDim, "Спершу відкрийте демо.");
+        ImGui::TextColored(kColDim, "%s", tr("Спершу відкрийте демо."));
         return;
     }
     const double ti = analysis_->tick_interval;
     const int32_t last = analysis_->last_tick;
-    if (ImGui::Checkbox("Увесь запис", &whole_demo_)) {
+    if (ImGui::Checkbox(tr("Увесь запис"), &whole_demo_)) {
         if (whole_demo_) {
             s_.start_tick = 0;
             s_.end_tick = -1;
@@ -47,28 +48,28 @@ void App::draw_tab_range() {
         changed = true;
     }
     ImGui::SameLine();
-    ImGui::TextColored(kColDim, "   Шкала: протягніть — фрагмент, Ctrl+клік — позначка, правий клік — меню (?)");
+    ImGui::TextColored(kColDim, "%s", tr("   Шкала: протягніть — фрагмент, Ctrl+клік — позначка, правий клік — меню (?)"));
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Протягніть лівою кнопкою — вибрати фрагмент\n"
-                          "Коліщатко — масштаб, протягніть правою — зсунути, подвійний клік — уся шкала\n"
-                          "Ctrl+клік — позначка (стане розділом у відео)\n"
-                          "Правий клік — меню: позначка, початок/кінець фрагмента, перегляд у грі\n"
-                          "Під смугою голосів — чат (світлі риски), входи (зелені) і виходи (червоні); наведіть, щоб прочитати");
+        ImGui::SetTooltip("%s", tr("Протягніть лівою кнопкою — вибрати фрагмент\n"
+                                "Коліщатко — масштаб, протягніть правою — зсунути, подвійний клік — уся шкала\n"
+                                "Ctrl+клік — позначка (стане розділом у відео)\n"
+                                "Правий клік — меню: позначка, початок/кінець фрагмента, перегляд у грі\n"
+                                "Під смугою голосів — чат (світлі риски), входи (зелені) і виходи (червоні); наведіть, щоб прочитати"));
     draw_timeline(0);
     ImGui::BeginDisabled(job_running());
-    if (ImGui::Button("Переглянути в грі")) start_watch(whole_demo_ ? 0 : std::max(0, s_.start_tick));
+    if (ImGui::Button(tr("Переглянути в грі"))) start_watch(whole_demo_ ? 0 : std::max(0, s_.start_tick));
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Запустити гру і програти демо з початку фрагмента (у реальному часі, зі звуком).\n"
-                          "У грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка. Вони одразу з'являться тут.\n"
-                          "Коли надивитеся — просто закрийте гру.");
+        ImGui::SetTooltip("%s", tr("Запустити гру і програти демо з початку фрагмента (у реальному часі, зі звуком).\n"
+                                "У грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка. Вони одразу з'являться тут.\n"
+                                "Коли надивитеся — просто закрийте гру."));
     ImGui::SameLine();
-    ImGui::TextColored(kColDim, "у грі: F9 — початок, F11 — кінець фрагмента, F6 — позначка");
+    ImGui::TextColored(kColDim, "%s", tr("у грі: F9 — початок, F11 — кінець фрагмента, F6 — позначка"));
     ImGui::BeginDisabled(whole_demo_);
     float start_s = static_cast<float>(std::max(0, s_.start_tick) * ti);
     float end_s = static_cast<float>((s_.end_tick > 0 ? s_.end_tick : last) * ti);
     const float max_s = static_cast<float>(last * ti);
-    label("Початок", lw);
+    label(tr("Початок"), lw);
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 8);
     if (ImGui::SliderFloat("##start", &start_s, 0.0f, max_s, format_duration(start_s).c_str())) {
         s_.start_tick = static_cast<int32_t>(start_s / ti);
@@ -76,8 +77,8 @@ void App::draw_tab_range() {
         changed = true;
     }
     ImGui::SameLine();
-    ImGui::Text("тік %d", s_.start_tick);
-    label("Кінець", lw);
+    ImGui::Text(tr("тік %d"), s_.start_tick);
+    label(tr("Кінець"), lw);
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 8);
     if (ImGui::SliderFloat("##end", &end_s, 0.0f, max_s, format_duration(end_s).c_str())) {
         s_.end_tick = static_cast<int32_t>(end_s / ti);
@@ -86,8 +87,8 @@ void App::draw_tab_range() {
         changed = true;
     }
     ImGui::SameLine();
-    ImGui::Text("тік %d", s_.end_tick > 0 ? s_.end_tick : last);
-    label("Точні тіки", lw);
+    ImGui::Text(tr("тік %d"), s_.end_tick > 0 ? s_.end_tick : last);
+    label(tr("Точні тіки"), lw);
     ImGui::SetNextItemWidth(fs_ * 6);
     changed |= ImGui::InputInt("##st", &s_.start_tick, 0);
     ImGui::SameLine();
@@ -100,7 +101,7 @@ void App::draw_tab_range() {
         changed = true;
     }
     // Точний час — зручно для довгих демо (повзунок на кількагодинному записі грубий)
-    label("Точний час", lw);
+    label(tr("Точний час"), lw);
     auto time_input = [&](const char* id, std::string& buf, bool& active, int32_t tick, auto&& apply) {
         if (!active) buf = format_timecode(tick * ti);
         ImGui::SetNextItemWidth(fs_ * 7);
@@ -111,10 +112,10 @@ void App::draw_tab_range() {
                 apply(static_cast<int32_t>(std::llround(*t / ti)));
                 changed = true;
             } else {
-                log_warn("Не розумію час «{}». Приклади: 95.5 — секунди, 1:35 — хв:с, 1:02:03 — год:хв:с", buf);
+                log_warn("{}", trf("Не розумію час «{}». Приклади: 95.5 — секунди, 1:35 — хв:с, 1:02:03 — год:хв:с", buf));
             }
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("год:хв:сек, хв:сек або секунди, напр. 1:02:03.5");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("год:хв:сек, хв:сек або секунди, напр. 1:02:03.5"));
     };
     time_input("##stime", start_time_buf_, start_time_active_, s_.start_tick, [&](int32_t t) {
         s_.start_tick = t;
@@ -131,19 +132,19 @@ void App::draw_tab_range() {
     if (s_.end_tick == 0 || s_.end_tick > last) s_.end_tick = -1;
     ImGui::EndDisabled();
     const double dur = ((s_.end_tick > 0 ? s_.end_tick : last) - s_.start_tick) * ti;
-    ImGui::TextColored(kColAccent, "Тривалість відео: %s", format_duration(dur).c_str());
+    ImGui::TextColored(kColAccent, tr("Тривалість відео: %s"), format_duration(dur).c_str());
     if (auto fps = parse_rational(s_.fps))
-        ImGui::TextColored(kColDim, "Кадрів відео: %.0f, кадрів рендеру гри: %.0f", dur * fps->value(),
+        ImGui::TextColored(kColDim, tr("Кадрів відео: %.0f, кадрів рендеру гри: %.0f"), dur * fps->value(),
                            dur * fps->value() * std::max(1, s_.motion_blur));
     if (dur > 30 * 60) {
         ImGui::PushStyleColor(ImGuiCol_Text, kColWarn);
-        ImGui::TextWrapped("Це довгий відрізок: рендер триватиме годинами, а файл буде великим. "
-                           "Для кліпу зніміть «Увесь запис» і виберіть фрагмент.");
+        ImGui::TextWrapped("%s", tr("Це довгий відрізок: рендер триватиме годинами, а файл буде великим. "
+                                 "Для кліпу зніміть «Увесь запис» і виберіть фрагмент."));
         ImGui::PopStyleColor();
     }
-    ImGui::TextWrapped("Підказка: у самій грі номер тіку видно в панелі демо (Shift+F2). "
-                       "До далекого фрагмента гра швидко перемотає демо (demo_gototick) і почне запис "
-                       "за кілька секунд до нього, тож чекати, поки програється початок, не доведеться.");
+    ImGui::TextWrapped("%s", tr("Підказка: у самій грі номер тіку видно в панелі демо (Shift+F2). "
+                             "До далекого фрагмента гра швидко перемотає демо (demo_gototick) і почне запис "
+                             "за кілька секунд до нього, тож чекати, поки програється початок, не доведеться."));
     if (changed) mark_dirty();
     draw_markers_list();
 }
@@ -245,19 +246,19 @@ void App::draw_timeline(float) {
     }
     if (ImGui::BeginPopup("##tlctx")) {
         const int32_t tick = static_cast<int32_t>(std::llround(tl_ctx_time_ / ti));
-        ImGui::TextColored(kColDim, "%s (тік %d)", format_timecode(tl_ctx_time_).c_str(), tick);
+        ImGui::TextColored(kColDim, tr("%s (тік %d)"), format_timecode(tl_ctx_time_).c_str(), tick);
         ImGui::Separator();
-        if (ImGui::MenuItem("Додати позначку тут")) add_marker_at(tick, {});
+        if (ImGui::MenuItem(tr("Додати позначку тут"))) add_marker_at(tick, {});
         ImGui::BeginDisabled(job_running());
-        if (ImGui::MenuItem("Почати фрагмент тут")) set_fragment_start(tick);
-        if (ImGui::MenuItem("Закінчити фрагмент тут")) set_fragment_end(tick);
-        if (ImGui::MenuItem("Переглянути в грі звідси")) start_watch(tick);
+        if (ImGui::MenuItem(tr("Почати фрагмент тут"))) set_fragment_start(tick);
+        if (ImGui::MenuItem(tr("Закінчити фрагмент тут"))) set_fragment_end(tick);
+        if (ImGui::MenuItem(tr("Переглянути в грі звідси"))) start_watch(tick);
         ImGui::EndDisabled();
         // Найближча позначка (у межах кількох пікселів) — видалити
         for (size_t i = 0; i < markers_.size(); ++i) {
             if (std::abs(t2x(markers_[i].tick * ti) - t2x(tl_ctx_time_)) > 4.0f) continue;
             ImGui::Separator();
-            if (ImGui::MenuItem(std::format("Видалити позначку «{}»", markers_[i].title).c_str())) {
+            if (ImGui::MenuItem(trf("Видалити позначку «{}»", markers_[i].title).c_str())) {
                 auto m = markers_;
                 m.erase(m.begin() + static_cast<std::ptrdiff_t>(i));
                 set_markers(std::move(m));
@@ -344,7 +345,7 @@ void App::draw_timeline(float) {
         dl->AddText(tp, IM_COL32(235, 238, 245, 255), lane.name.c_str());
     }
     if (lanes == 0) {
-        const char* msg = "Голосу в демо немає — шкала показує лише фрагмент";
+        const char* msg = tr("Голосу в демо немає — шкала показує лише фрагмент");
         dl->AddText(ImVec2(p0.x + 6, p0.y + act_h + ev_h + fs * 0.1f), IM_COL32(150, 155, 165, 255), msg);
     }
     // Вибраний фрагмент
@@ -393,7 +394,7 @@ void App::draw_timeline(float) {
                     break;
                 }
         std::string extra;
-        if (hovered_marker >= 0) extra += "\nПозначка: " + markers_[static_cast<size_t>(hovered_marker)].title;
+        if (hovered_marker >= 0) extra += tr("\nПозначка: ") + markers_[static_cast<size_t>(hovered_marker)].title;
         // Чат і події біля курсора (±4 px)
         if (ev_h > 0) {
             const double tol = 4.0 / W * (view_t1_ - view_t0_);
@@ -404,16 +405,19 @@ void App::draw_timeline(float) {
                 if (shown++ < 6) extra += "\n" + format_duration(te).substr(0, format_duration(te).find('.')) + "  " + demo::format_event(e);
                 else ++more;
             }
-            if (more > 0) extra += std::format("\n… і ще {}", more);
+            if (more > 0) extra += trf("\n… і ще {}", more);
         }
-        ImGui::SetTooltip("%s (тік %d)%s%s%s", format_timecode(t).c_str(), static_cast<int>(t / ti), who.empty() ? "" : "\nГоворить: ",
+        ImGui::SetTooltip(tr("%s (тік %d)%s%s%s"), format_timecode(t).c_str(), static_cast<int>(t / ti), who.empty() ? "" : tr("\nГоворить: "),
                           who.c_str(), extra.c_str());
     }
     dl->PopClipRect();
-    if (static_cast<int>(timeline_.size()) > lanes)
-        ImGui::TextColored(kColDim, "На шкалі — %d гравців, що говорили найбільше (ще %d — у таблиці голосів). "
-                           "Верхня смуга: синій — говорить один, жовтий — двоє, червоний — троє і більше.",
+    if (static_cast<int>(timeline_.size()) > lanes) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kColDim);
+        ImGui::TextWrapped(tr("На шкалі — %d гравців, що говорили найбільше (ще %d — у таблиці голосів). "
+                              "Верхня смуга: синій — говорить один, жовтий — двоє, червоний — троє і більше."),
                            lanes, static_cast<int>(timeline_.size()) - lanes);
+        ImGui::PopStyleColor();
+    }
 }
 
 } // namespace gmdr::gui

@@ -37,6 +37,7 @@
 #include "core/util/update_check.hpp"
 #include "core/media/muxer.hpp"
 #include "core/util/file_util.hpp"
+#include "core/util/i18n.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
 #include "core/util/json.hpp"
@@ -1317,6 +1318,28 @@ static void test_game_audio_segments() {
 
 // Розпізнавання мовлення без whisper: фрази -> стиснуте аудіо -> час демо, розбір JSON,
 // фільтр "галюцинацій", покриття відрізків і субтитри з текстом
+static void test_i18n() {
+    std::printf("[i18n]\n");
+    CHECK(translation_count() > 1000);
+    CHECK(ui_language() == UiLang::Uk);
+    CHECK(std::string(tr("Звук гри")) == "Звук гри");
+    set_ui_language("en");
+    CHECK(ui_language() == UiLang::En);
+    CHECK(std::string(tr("Звук гри")) == "Game audio");
+    CHECK(trf("Знайдено: {}", "C:/x") == "Found: C:/x");
+    CHECK(std::string(tr("Огляд...##mic")) == "Browse...##mic");
+    CHECK(trf("Черга ({})###queue", 3) == "Queue (3)###queue");
+    CHECK(tr(std::string("Прев'ю")) == "Preview");
+    // Немає перекладу — лишається як є (імена гравців, шляхи тощо)
+    CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
+    CHECK(std::string(tr("")).empty());
+    set_ui_language("uk");
+    CHECK(ui_language() == UiLang::Uk);
+    CHECK(std::string(tr("Огляд...##mic")) == "Огляд...##mic");
+    const std::string sys = system_ui_language();
+    CHECK(sys == "uk" || sys == "en");
+}
+
 static void test_speech() {
     std::printf("[speech]\n");
     voice::SpeakerTrack t;
@@ -1705,6 +1728,7 @@ int main(int argc, char** argv) {
     test_speed();
     test_game_audio_segments();
     test_speech();
+    test_i18n();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

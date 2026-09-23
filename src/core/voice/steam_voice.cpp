@@ -1,4 +1,5 @@
 #include "steam_voice.hpp"
+#include "../util/i18n.hpp"
 
 #include <array>
 #include <cstring>
@@ -48,7 +49,7 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
         if (error) *error = why;
         return false;
     };
-    if (size < 8 + 4) return fail("пакет занадто короткий");
+    if (size < 8 + 4) return fail(tr("пакет занадто короткий"));
     out.steamid64 = rd64(data);
     out.crc_ok = crc32_ieee(data, size - 4) == rd32(data + size - 4);
     size_t pos = 8;
@@ -57,18 +58,18 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
         const uint8_t op = data[pos++];
         switch (op) {
         case 11: {   // частота
-            if (pos + 2 > end) return fail("обрізана операція частоти");
+            if (pos + 2 > end) return fail(tr("обрізана операція частоти"));
             out.sample_rate = rd16(data + pos);
             pos += 2;
             break;
         }
         case 10: {   // невідомо, 2 байти
-            if (pos + 2 > end) return fail("обрізана операція 10");
+            if (pos + 2 > end) return fail(tr("обрізана операція 10"));
             pos += 2;
             break;
         }
         case 0: {    // тиша
-            if (pos + 2 > end) return fail("обрізана операція тиші");
+            if (pos + 2 > end) return fail(tr("обрізана операція тиші"));
             SteamVoiceOp o;
             o.kind = SteamVoiceOp::Kind::Silence;
             o.opcode = op;
@@ -78,10 +79,10 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
             break;
         }
         case 6: {    // Opus з PLC
-            if (pos + 2 > end) return fail("обрізаний блок Opus");
+            if (pos + 2 > end) return fail(tr("обрізаний блок Opus"));
             const size_t len = rd16(data + pos);
             pos += 2;
-            if (pos + len > end) return fail("блок Opus виходить за межі пакета");
+            if (pos + len > end) return fail(tr("блок Opus виходить за межі пакета"));
             SteamVoiceOp o;
             o.kind = SteamVoiceOp::Kind::Opus;
             o.opcode = op;
@@ -96,10 +97,10 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
                     o.frames.push_back(f);
                     continue;
                 }
-                if (flen < 0 || p + 2 > block_end) return fail("пошкоджений кадр Opus");
+                if (flen < 0 || p + 2 > block_end) return fail(tr("пошкоджений кадр Opus"));
                 f.seq = rd16(data + p);
                 p += 2;
-                if (p + static_cast<size_t>(flen) > block_end) return fail("кадр Opus виходить за межі блоку");
+                if (p + static_cast<size_t>(flen) > block_end) return fail(tr("кадр Opus виходить за межі блоку"));
                 f.data = data + p;
                 f.size = static_cast<size_t>(flen);
                 p += static_cast<size_t>(flen);
@@ -113,10 +114,10 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
         case 2:
         case 4:
         case 5: {    // інші кодеки (legacy, SILK, Opus без PLC) — пропускаємо
-            if (pos + 2 > end) return fail("обрізаний блок кодека");
+            if (pos + 2 > end) return fail(tr("обрізаний блок кодека"));
             const size_t len = rd16(data + pos);
             pos += 2 + len;
-            if (pos > end) return fail("блок кодека виходить за межі пакета");
+            if (pos > end) return fail(tr("блок кодека виходить за межі пакета"));
             SteamVoiceOp o;
             o.kind = SteamVoiceOp::Kind::Unsupported;
             o.opcode = op;
@@ -132,7 +133,7 @@ bool parse_steam_voice(const uint8_t* data, size_t size, SteamVoicePacket& out, 
             break;
         }
         default:
-            return fail(std::format("невідома операція Steam Voice 0x{:02x}", op));
+            return fail(trf("невідома операція Steam Voice 0x{:02x}", op));
         }
     }
     return true;

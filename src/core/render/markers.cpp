@@ -3,6 +3,7 @@
 #include "../util/file_util.hpp"
 #include "../util/json.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -61,12 +62,12 @@ std::vector<Chapter> chapters_for_range(const std::vector<Marker>& markers, int3
         if (m.tick < start_tick || m.tick >= end_tick) continue;
         Chapter c;
         c.start = (m.tick - start_tick) * ti;
-        c.title = m.title.empty() ? std::format("Позначка {}", out.size() + 1) : m.title;
+        c.title = m.title.empty() ? trf("Позначка {}", out.size() + 1) : m.title;
         if (!out.empty() && c.start - out.back().start < 0.5) continue;   // надто близько — зайвий розділ
         out.push_back(std::move(c));
     }
     if (out.empty()) return out;
-    if (out.front().start >= 1.0) out.insert(out.begin(), Chapter{0, 0, "Початок"});
+    if (out.front().start >= 1.0) out.insert(out.begin(), Chapter{0, 0, tr("Початок")});
     else out.front().start = 0;
     for (size_t i = 0; i < out.size(); ++i) out[i].end = i + 1 < out.size() ? out[i + 1].start : total;
     return out;

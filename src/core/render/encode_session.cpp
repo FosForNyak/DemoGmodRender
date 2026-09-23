@@ -3,6 +3,7 @@
 #include "../util/log.hpp"
 #include "edit_package.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -74,8 +75,8 @@ bool EncodeSession::game_audio_opened() const {
 }
 
 std::string EncodeSession::audio_description() const {
-    if (side_wav_) return "WAV поруч із кадрами";
-    if (audio_encoders_.empty()) return "без звуку";
+    if (side_wav_) return tr("WAV поруч із кадрами");
+    if (audio_encoders_.empty()) return tr("без звуку");
     return std::format("{} × {}", audio_encoders_.size(), audio_encoders_.front()->describe());
 }
 
@@ -107,7 +108,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
     }
     if (!muxer_.open(s_.output_path, s_.container, error)) return false;
     if (!muxer_.supports_codec(s_.video.codec)) {
-        if (error) *error = std::format("контейнер '{}' не підтримує кодек {} — оберіть інший формат файлу",
+        if (error) *error = trf("контейнер '{}' не підтримує кодек {} — оберіть інший формат файлу",
                                         muxer_.format()->name, s_.video.codec);
         return false;
     }
@@ -115,21 +116,21 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
     if (!video_.open(s_.video, frame_w, frame_h, global_header, error)) return false;
     video_stream_ = muxer_.add_stream(video_.context(), "GMod demo");
     video_desc_ = video_.describe();
-    log_info("Відео: {}", video_desc_);
+    log_info("{}", trf("Відео: {}", video_desc_));
 
     // Motion blur: 16-бітне змішування, якщо вихід >8 біт
     const bool high_depth = media::pix_fmt_bit_depth(video_.output_pix_fmt()) > 8;
     blender_ = std::make_unique<frames::MotionBlender>(s_.motion_blur_samples, s_.shutter_degrees, high_depth, pool_);
     if (s_.motion_blur_samples > 1)
-        log_info("Motion blur: {} під-кадрів, затвор {:.0f}° (усереднюється {})", s_.motion_blur_samples,
-                 s_.shutter_degrees, blender_->used_samples());
+        log_info("{}", trf("Motion blur: {} під-кадрів, затвор {:.0f}° (усереднюється {})", s_.motion_blur_samples,
+                 s_.shutter_degrees, blender_->used_samples()));
 
     // ---- Звук ----
     // Уповільнення/прискорення: звук гри, голоси й мікрофон записані в часі демо — розтягуємо
     // їх (atempo, висота тону та сама) до часу відео; або відео без звуку
     const bool tempo = std::abs(spec.speed - 1.0) > 1e-6;
-    if (s_.audio_enabled && tempo && spec.speed_mute) log_info("Швидкість ×{:g}: відео без звуку", spec.speed);
-    else if (s_.audio_enabled && tempo) log_info("Швидкість ×{:g}: звук розтягнуто (atempo), висота тону та сама", spec.speed);
+    if (s_.audio_enabled && tempo && spec.speed_mute) log_info("{}", trf("Швидкість ×{:g}: відео без звуку", spec.speed));
+    else if (s_.audio_enabled && tempo) log_info("{}", trf("Швидкість ×{:g}: звук розтягнуто (atempo), висота тону та сама", spec.speed));
     if (s_.audio_enabled && !(tempo && spec.speed_mute)) {
         std::vector<std::unique_ptr<audio::AudioInput>> inputs;
         // Джерело в часі демо -> у часі відео. Джерело переходить у володіння обгортки: мікшер
@@ -142,7 +143,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 in->name(), std::vector<std::vector<audio::TrackSource>>{{{in, 1.0f}}}, mono);
             std::string ferr;
             if (!f->open(audio::tempo_filter(spec.speed), nullptr, &ferr)) {
-                log_warn("{}: не вдалося змінити темп ({}) — звук без розтягування", in->name(), ferr);
+                log_warn("{}", trf("{}: не вдалося змінити темп ({}) — звук без розтягування", in->name(), ferr));
                 return in;
             }
             f->set_input_rate(spec.speed);
@@ -154,7 +155,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         };
         std::vector<audio::AudioTrackPlan> tracks;
         audio::AudioTrackPlan mix;
-        mix.title = "Мікс";
+        mix.title = tr("Мікс");
         audio::AudioInput* game = nullptr;
         audio::AudioInput* mic = nullptr;
         std::vector<audio::AudioInput*> voices;
@@ -181,12 +182,12 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 std::string ferr;
                 bool ok = f->open(audio::denoise_filter(cl->profile.noise_db), &gp, &ferr);
                 if (!ok) {
-                    log_warn("{}: без afftdn ({}), лише гейт", vi->name(), ferr);
+                    log_warn("{}", trf("{}: без afftdn ({}), лише гейт", vi->name(), ferr));
                     ok = f->open({}, &gp, &ferr);
                 }
                 if (ok) {
-                    log_info("  {}: шумодав, фон {:.0f} дБ, мова {:.0f} дБ, гейт від {:.0f} дБ", vi->name(),
-                             cl->profile.noise_db, cl->profile.speech_db, gp.open_db);
+                    log_info("{}", trf("  {}: шумодав, фон {:.0f} дБ, мова {:.0f} дБ, гейт від {:.0f} дБ", vi->name(),
+                             cl->profile.noise_db, cl->profile.speech_db, gp.open_db));
                     f->own(std::move(vi));
                     v = f.get();
                     inputs.push_back(std::move(f));
@@ -200,7 +201,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         if (!spec.mic_file.empty()) {
             auto m = std::make_unique<audio::FileAudioInput>(spec.mic_file, spec.mic_offset);
             if (!m->ok()) {
-                log_warn("Файл мікрофона не додано: {}", m->error());
+                log_warn("{}", trf("Файл мікрофона не додано: {}", m->error()));
             } else {
                 mic = m.get();
                 inputs.push_back(std::move(m));
@@ -214,28 +215,28 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             for (size_t i = 0; i < voices.size(); ++i) sidechain.push_back({voices[i], voice_gains[i]});
             if (mic) sidechain.push_back({mic, spec.mic_gain});
             auto d = std::make_unique<audio::FilteredInput>(
-                "Гра (стихає під голоси)", std::vector<std::vector<audio::TrackSource>>{{{game, 1.0f}}, sidechain}, false);
+                tr("Гра (стихає під голоси)"), std::vector<std::vector<audio::TrackSource>>{{{game, 1.0f}}, sidechain}, false);
             std::string ferr;
             if (d->open(audio::duck_filter(), nullptr, &ferr)) {
                 game_in_mix = d.get();
                 inputs.push_back(std::move(d));
             } else {
-                log_warn("Гра не стихатиме під голоси: {}", ferr);
+                log_warn("{}", trf("Гра не стихатиме під голоси: {}", ferr));
             }
         }
         if (game_in_mix) mix.sources.push_back({game_in_mix, spec.game_gain});
         for (size_t i = 0; i < voices.size(); ++i) mix.sources.push_back({voices[i], voice_gains[i]});
         if (mic) mix.sources.push_back({mic, spec.mic_gain});
         mix.post_filter = audio::loudness_filter(spec.loudness_target);
-        if (!mix.post_filter.empty()) log_info("Гучність міксу — {:.0f} LUFS (EBU R128, loudnorm)", spec.loudness_target);
+        if (!mix.post_filter.empty()) log_info("{}", trf("Гучність міксу — {:.0f} LUFS (EBU R128, loudnorm)", spec.loudness_target));
         if (!mix.sources.empty()) {
             tracks.push_back(mix);
             const bool stems = !s_.stems_dir.empty();
             if (s_.separate_tracks || stems) {
-                if (game) tracks.push_back({"Гра", {{game, spec.game_gain}}});
+                if (game) tracks.push_back({tr("Гра"), {{game, spec.game_gain}}});
                 for (size_t i = 0; i < voices.size(); ++i)
                     tracks.push_back({voices[i]->name(), {{voices[i], voice_gains[i]}}});
-                if (mic) tracks.push_back({"Мікрофон", {{mic, spec.mic_gain}}});
+                if (mic) tracks.push_back({tr("Мікрофон"), {{mic, spec.mic_gain}}});
             }
             if (muxer_.is_image_sequence()) {
                 // У послідовність зображень звук не вбудувати — пишемо WAV поруч
@@ -243,7 +244,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                 std::filesystem::path wav = out.parent_path() / "audio.wav";
                 side_wav_ = std::make_unique<audio::WavWriter>();
                 if (!side_wav_->open(wav, kMixRate, 2, audio::WavWriter::Format::Int16, error)) return false;
-                log_info("Звук буде збережено окремо: {}", path_to_utf8(wav));
+                log_info("{}", trf("Звук буде збережено окремо: {}", path_to_utf8(wav)));
             } else {
                 // У файл — лише мікс, або всі доріжки ("окремі доріжки для монтажу")
                 const size_t encoded = s_.separate_tracks ? tracks.size() : 1;
@@ -252,14 +253,14 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                     auto enc = std::make_unique<media::AudioEncoder>();
                     if (!enc->open(s_.audio, global_header, error)) return false;
                     if (!muxer_.supports_codec(s_.audio.codec)) {
-                        if (error) *error = std::format("контейнер '{}' не підтримує аудіокодек {}",
+                        if (error) *error = trf("контейнер '{}' не підтримує аудіокодек {}",
                                                         muxer_.format()->name, s_.audio.codec);
                         return false;
                     }
                     audio_streams_.push_back(muxer_.add_stream(enc->context(), t.title));
                     audio_encoders_.push_back(std::move(enc));
                 }
-                log_info("Звук: {} доріжк(и), {}", audio_encoders_.size(), audio_encoders_.front()->describe());
+                log_info("{}", trf("Звук: {} доріжк(и), {}", audio_encoders_.size(), audio_encoders_.front()->describe()));
             }
             if (stems) {
                 // Пакет для монтажу: кожне джерело — окремий WAV 24 біт, від першого кадру відео
@@ -275,16 +276,16 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                     stem_wavs_[i] = std::move(w);
                     stem_files_.push_back({tracks[i].title, path_to_utf8(p)});
                 }
-                log_info("Пакет для монтажу: {} окремих WAV у {}", stem_files_.size(), s_.stems_dir);
+                log_info("{}", trf("Пакет для монтажу: {} окремих WAV у {}", stem_files_.size(), s_.stems_dir));
             }
             for (const auto& t : tracks) {
                 std::string names;
                 for (const auto& src : t.sources) names += (names.empty() ? "" : " + ") + src.input->name();
-                log_info("  Доріжка «{}»: {}", t.title, names);
+                log_info("{}", trf("  Доріжка «{}»: {}", t.title, names));
             }
             mixer_ = std::make_unique<audio::AudioMixer>(std::move(inputs), std::move(tracks));
         } else {
-            log_info("Звук: немає джерел — відео буде без звуку");
+            log_info("{}", trf("Звук: немає джерел — відео буде без звуку"));
         }
     }
     // Додаткові версії: помилка в одній не зупиняє основний рендер
@@ -293,18 +294,18 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         e->cfg = x;
         std::string xerr;
         if (open_extra(*e, mixer_ != nullptr, &xerr)) {
-            log_info("Додаткова версія «{}»: {} → {}", x.label, e->video.describe(), x.output_path);
+            log_info("{}", trf("Додаткова версія «{}»: {} → {}", x.label, e->video.describe(), x.output_path));
             extras_.push_back(std::move(e));
         } else {
             e->muxer.abort();
             std::error_code ec;
             std::filesystem::remove(path_from_utf8(x.output_path), ec);
-            log_warn("Додаткову версію «{}» пропущено: {}", x.label, xerr);
+            log_warn("{}", trf("Додаткову версію «{}» пропущено: {}", x.label, xerr));
         }
     }
     if (!muxer_.write_header(s_.faststart, s_.crash_safe, error)) return false;
     if (s_.crash_safe && muxer_.is_fragmented())
-        log_info("Файл пишеться фрагментами: навіть якщо гра чи ПК впадуть, уже записане відео відкриється");
+        log_info("{}", trf("Файл пишеться фрагментами: навіть якщо гра чи ПК впадуть, уже записане відео відкриється"));
     started_ = true;
     worker_ = std::thread([this] { worker_loop(); });
     return true;
@@ -316,7 +317,7 @@ bool EncodeSession::open_extra(Extra& e, bool with_audio, std::string* error) {
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
     if (!e.muxer.open(e.cfg.output_path, e.cfg.container, error)) return false;
     if (!e.muxer.supports_codec(e.cfg.video.codec)) {
-        if (error) *error = std::format("контейнер '{}' не підтримує кодек {}", e.muxer.format()->name, e.cfg.video.codec);
+        if (error) *error = trf("контейнер '{}' не підтримує кодек {}", e.muxer.format()->name, e.cfg.video.codec);
         return false;
     }
     const bool global_header = e.muxer.needs_global_header();
@@ -324,20 +325,20 @@ bool EncodeSession::open_extra(Extra& e, bool with_audio, std::string* error) {
     e.video_stream = e.muxer.add_stream(e.video.context(), "GMod demo");
     if (with_audio && !e.cfg.audio.codec.empty()) {
         if (!e.muxer.supports_codec(e.cfg.audio.codec)) {
-            if (error) *error = std::format("контейнер '{}' не підтримує аудіокодек {}", e.muxer.format()->name,
+            if (error) *error = trf("контейнер '{}' не підтримує аудіокодек {}", e.muxer.format()->name,
                                             e.cfg.audio.codec);
             return false;
         }
         e.audio = std::make_unique<media::AudioEncoder>();
         if (!e.audio->open(e.cfg.audio, global_header, error)) return false;
-        e.audio_stream = e.muxer.add_stream(e.audio->context(), "Мікс");
+        e.audio_stream = e.muxer.add_stream(e.audio->context(), tr("Мікс"));
     }
     return e.muxer.write_header(true, false, error);
 }
 
 void EncodeSession::fail_extra(Extra& e, const std::string& error) {
     if (!e.ok.exchange(false)) return;
-    log_warn("Додаткова версія «{}» не вдалася: {} — основне відео пишеться далі", e.cfg.label, error);
+    log_warn("{}", trf("Додаткова версія «{}» не вдалася: {} — основне відео пишеться далі", e.cfg.label, error));
     e.muxer.abort();
     std::error_code ec;
     std::filesystem::remove(path_from_utf8(e.cfg.output_path), ec);
@@ -399,7 +400,7 @@ void EncodeSession::worker_loop() {
             {
                 std::lock_guard lock(q_mutex_);
                 worker_failed_ = true;
-                worker_error_ = err.empty() ? "помилка кодування" : err;
+                worker_error_ = err.empty() ? tr("помилка кодування") : err;
                 queue_.clear();
             }
             q_space_cv_.notify_all();
@@ -445,7 +446,7 @@ void EncodeSession::draw_overlay(frames::Image& img) {
 
 bool EncodeSession::push_subframe(frames::Image&& img, std::string* error) {
     if (!started_) {
-        if (error) *error = "сесію кодування не запущено";
+        if (error) *error = tr("сесію кодування не запущено");
         return false;
     }
     {

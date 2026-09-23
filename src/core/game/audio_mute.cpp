@@ -1,6 +1,7 @@
 #include "audio_mute.hpp"
 
 #include "../util/file_util.hpp"
+#include "../util/i18n.hpp"
 
 #include <system_error>
 
@@ -87,7 +88,7 @@ int set_process_audio_mute(uint32_t pid, bool mute) {
 }
 
 void mark_game_audio_muted(bool muted) {
-    if (muted) write_file_text(marker_path(), "GMod Demo Render вимкнув звук Garry's Mod у мікшері Windows\n", nullptr);
+    if (muted) write_file_text(marker_path(), tr("GMod Demo Render вимкнув звук Garry's Mod у мікшері Windows\n"), nullptr);
     else remove_file_quiet(marker_path());
 }
 

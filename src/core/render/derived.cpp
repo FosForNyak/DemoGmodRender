@@ -4,6 +4,7 @@
 #include "../media/muxer.hpp"
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -32,18 +33,18 @@ public:
     bool open(const std::string& path, std::string* error) {
         AVFormatContext* ic = nullptr;
         int r = avformat_open_input(&ic, path.c_str(), nullptr, nullptr);
-        if (r < 0) return fail(error, "не вдалося відкрити відео: " + av_error_string(r));
+        if (r < 0) return fail(error, tr("не вдалося відкрити відео: ") + av_error_string(r));
         in_.reset(ic);
-        if (avformat_find_stream_info(ic, nullptr) < 0) return fail(error, "не вдалося прочитати відео");
+        if (avformat_find_stream_info(ic, nullptr) < 0) return fail(error, tr("не вдалося прочитати відео"));
         stream_ = av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-        if (stream_ < 0) return fail(error, "у файлі немає відео");
+        if (stream_ < 0) return fail(error, tr("у файлі немає відео"));
         const AVStream* st = ic->streams[stream_];
         const AVCodec* dec = avcodec_find_decoder(st->codecpar->codec_id);
-        if (!dec) return fail(error, "немає декодера для цього відео");
+        if (!dec) return fail(error, tr("немає декодера для цього відео"));
         dec_.reset(avcodec_alloc_context3(dec));
         avcodec_parameters_to_context(dec_.get(), st->codecpar);
         dec_->thread_count = 0;
-        if ((r = avcodec_open2(dec_.get(), dec, nullptr)) < 0) return fail(error, "декодер: " + av_error_string(r));
+        if ((r = avcodec_open2(dec_.get(), dec, nullptr)) < 0) return fail(error, tr("декодер: ") + av_error_string(r));
         return true;
     }
 
@@ -65,7 +66,7 @@ public:
         if (r >= 0)
             r = avfilter_graph_create_filter(&sink_, avfilter_get_by_name("buffersink"), "out", nullptr, nullptr,
                                              graph_.get());
-        if (r < 0) return fail(error, "фільтри: " + av_error_string(r));
+        if (r < 0) return fail(error, tr("фільтри: ") + av_error_string(r));
         const std::string full = chain + std::format(",format={}", av_get_pix_fmt_name(out_fmt));
         AVFilterInOut* outputs = avfilter_inout_alloc();
         AVFilterInOut* inputs = avfilter_inout_alloc();
@@ -77,7 +78,7 @@ public:
         avfilter_inout_free(&inputs);
         avfilter_inout_free(&outputs);
         if (r >= 0) r = avfilter_graph_config(graph_.get(), nullptr);
-        if (r < 0) return fail(error, "фільтри (" + full + "): " + av_error_string(r));
+        if (r < 0) return fail(error, tr("фільтри (") + full + "): " + av_error_string(r));
         return true;
     }
 
@@ -102,7 +103,7 @@ public:
             for (;;) {
                 const int r = av_buffersink_get_frame(sink_, out.get());
                 if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
-                if (r < 0) return fail(error, "фільтри: " + av_error_string(r));
+                if (r < 0) return fail(error, tr("фільтри: ") + av_error_string(r));
                 if (!stop && !on_frame(out.get())) stop = true;
                 av_frame_unref(out.get());
             }
@@ -116,7 +117,7 @@ public:
             }
             f->pts = f->best_effort_timestamp;
             if (av_buffersrc_add_frame_flags(src_, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0)
-                return fail(error, "фільтри не прийняли кадр");
+                return fail(error, tr("фільтри не прийняли кадр"));
             return drain();
         };
         while (more && !stop) {
@@ -143,7 +144,7 @@ public:
                 if (!ok) return false;
             }
         }
-        if (av_buffersrc_add_frame_flags(src_, nullptr, 0) < 0) return fail(error, "фільтри не завершились");
+        if (av_buffersrc_add_frame_flags(src_, nullptr, 0) < 0) return fail(error, tr("фільтри не завершились"));
         return drain();
     }
 
@@ -183,7 +184,7 @@ bool make_thumbnail(const std::string& video, const std::string& out_jpg, double
     if (!pipe.set_filters(chain, AV_PIX_FMT_YUVJ420P, error)) return false;
 
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
-    if (!codec) return fail(error, "немає кодека JPEG");
+    if (!codec) return fail(error, tr("немає кодека JPEG"));
     CodecCtxPtr enc;
     std::vector<uint8_t> jpeg;
     std::string enc_err;
@@ -211,10 +212,10 @@ bool make_thumbnail(const std::string& video, const std::string& out_jpg, double
         return false;   // потрібен лише один кадр
     }, error);
     if (!ok) return false;
-    if (jpeg.empty()) return fail(error, enc_err.empty() ? "не вдалося взяти кадр для обкладинки" : enc_err);
+    if (jpeg.empty()) return fail(error, enc_err.empty() ? tr("не вдалося взяти кадр для обкладинки") : enc_err);
     std::ofstream f(path_from_utf8(out_jpg), std::ios::binary | std::ios::trunc);
     f.write(reinterpret_cast<const char*>(jpeg.data()), static_cast<std::streamsize>(jpeg.size()));
-    if (!f) return fail(error, "не вдалося записати " + out_jpg);
+    if (!f) return fail(error, tr("не вдалося записати ") + out_jpg);
     return true;
 }
 
@@ -225,7 +226,7 @@ bool make_animation(const std::string& video, const std::string& out_path, AnimF
     const bool gif = format == AnimFormat::Gif;
     const char* codec_name = gif ? "gif" : "libwebp_anim";
     const AVCodec* codec = avcodec_find_encoder_by_name(codec_name);
-    if (!codec) return fail(error, std::format("кодек {} відсутній у цій збірці FFmpeg", codec_name));
+    if (!codec) return fail(error, trf("кодек {} відсутній у цій збірці FFmpeg", codec_name));
     // GIF: палітра на 256 кольорів саме під це відео; "rectangle" — перераховуються лише змінені області
     width = std::max(2, std::min(width, pipe.in_w()) & ~1);   // не більше за саме відео
     const std::string scale = std::format("fps={},scale={}:-2:flags=lanczos", fps, width);
@@ -260,7 +261,7 @@ bool make_animation(const std::string& video, const std::string& out_path, AnimF
     };
     const bool ok = pipe.run(0, max_seconds, [&](AVFrame* f) {
         if (avcodec_send_frame(enc.get(), f) < 0) {
-            werr = "кодек не прийняв кадр";
+            werr = tr("кодек не прийняв кадр");
             return false;
         }
         pull();

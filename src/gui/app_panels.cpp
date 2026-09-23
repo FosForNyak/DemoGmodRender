@@ -15,6 +15,7 @@
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -45,7 +46,7 @@ void App::draw_info_panel() {
         if (render_job) {
             const auto p = job_->progress();
             if (job_->running() || render_job->is_test_run()) {
-                ImGui::SeparatorText(render_job->is_test_run() ? "Тестовий прогін" : "Кроки");
+                ImGui::SeparatorText(render_job->is_test_run() ? tr("Тестовий прогін") : tr("Кроки"));
                 draw_checks(p.checks);
             }
         }
@@ -53,13 +54,13 @@ void App::draw_info_panel() {
         ImGui::Spacing();
     }
     if (!analysis_) {
-        ImGui::TextColored(kColAccent, "Як почати:");
-        ImGui::BulletText("Відкрийте або перетягніть у вікно демо (.dem)");
-        ImGui::BulletText("Налаштуйте відео і звук ліворуч");
-        ImGui::BulletText("Натисніть «Тест 3 с», щоб перевірити, що все працює");
-        ImGui::BulletText("Натисніть «Почати рендер» — програма сама\nзапустить Garry's Mod у фоні і все запише");
+        ImGui::TextColored(kColAccent, "%s", tr("Як почати:"));
+        ImGui::BulletText("%s", tr("Відкрийте або перетягніть у вікно демо (.dem)"));
+        ImGui::BulletText("%s", tr("Налаштуйте відео і звук ліворуч"));
+        ImGui::BulletText("%s", tr("Натисніть «Тест 3 с», щоб перевірити, що все працює"));
+        ImGui::BulletText("%s", tr("Натисніть «Почати рендер» — програма сама\nзапустить Garry's Mod у фоні і все запише"));
         ImGui::Spacing();
-        ImGui::TextWrapped("Демо GMod лежать у папці garrysmod\\demos. Записати демо в грі: консоль → record назва, зупинити → stop.");
+        ImGui::TextWrapped("%s", tr("Демо GMod лежать у папці garrysmod\\demos. Записати демо в грі: консоль → record назва, зупинити → stop."));
         return;
     }
     const auto& a = *analysis_;
@@ -71,15 +72,15 @@ void App::draw_info_panel() {
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(v.c_str());
         };
-        row("Карта", a.header.map_name);
-        row("Сервер", a.header.server_name.empty() ? a.server_info.host_name : a.header.server_name);
-        if (!a.server_info.gamemode.empty()) row("Режим", a.server_info.gamemode);
-        row("Записав", a.header.client_name);
-        row("Тривалість", std::format("{}  ({} тіків, {:.0f} тік/с)", format_duration(a.duration_seconds), a.last_tick,
+        row(tr("Карта"), a.header.map_name);
+        row(tr("Сервер"), a.header.server_name.empty() ? a.server_info.host_name : a.header.server_name);
+        if (!a.server_info.gamemode.empty()) row(tr("Режим"), a.server_info.gamemode);
+        row(tr("Записав"), a.header.client_name);
+        row(tr("Тривалість"), trf("{}  ({} тіків, {:.0f} тік/с)", format_duration(a.duration_seconds), a.last_tick,
                                       1.0 / a.tick_interval));
-        row("Гравців", std::to_string(a.players.size()));
+        row(tr("Гравців"), std::to_string(a.players.size()));
         if (a.packets_failed > 0)
-            row("Розбір", std::format("{} з {} пакетів частково", a.packets_failed, a.packets_total));
+            row(tr("Розбір"), trf("{} з {} пакетів частково", a.packets_failed, a.packets_total));
         ImGui::EndTable();
     }
     for (const auto& w : a.warnings) ImGui::TextColored(kColWarn, "%s", w.c_str());
@@ -114,25 +115,25 @@ void App::poll_voice_clip() {
     if (!clip_future_.valid() || clip_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
     const audio::VoiceClip clip = clip_future_.get();
     if (clip.mono.empty()) {
-        log_info("Прослуховування: у цього гравця немає мовлення");
+        log_info("{}", trf("Прослуховування: у цього гравця немає мовлення"));
         return;
     }
     std::string err;
     if (player_.play(clip.mono, &err)) {
         playing_key_ = clip_key_;
-        log_info("Прослуховування: {} с мовлення з {} демо{}", static_cast<int>(std::lround(clip.speech_seconds)),
+        log_info("{}", trf("Прослуховування: {} с мовлення з {} демо{}", static_cast<int>(std::lround(clip.speech_seconds)),
                  format_duration(static_cast<double>(clip.start) / voice::kVoiceRate),
-                 render::needs_voice_cleanup(s_) ? " (з обробкою, як у відео)" : "");
+                 render::needs_voice_cleanup(s_) ? tr(" (з обробкою, як у відео)") : ""));
     } else {
-        log_warn("Прослуховування: {}", err);
+        log_warn("{}", trf("Прослуховування: {}", err));
     }
 }
 
 void App::draw_voice_table() {
-    ImGui::SeparatorText("Голоси в демо");
+    ImGui::SeparatorText(tr("Голоси в демо"));
     if (!voices_ || voices_->speakers.empty()) {
-        ImGui::TextColored(kColDim, "Голосового чату в демо немає.");
-        ImGui::TextWrapped("Щоб у майбутніх демо записувався ваш голос: перед record введіть у консолі voice_loopback 1.");
+        ImGui::TextColored(kColDim, "%s", tr("Голосового чату в демо немає."));
+        ImGui::TextWrapped("%s", tr("Щоб у майбутніх демо записувався ваш голос: перед record введіть у консолі voice_loopback 1."));
         return;
     }
     const bool selectable = s_.voice_mode == "selected";
@@ -156,10 +157,10 @@ void App::draw_voice_table() {
     if (ImGui::BeginTable("##voices", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
                           ImVec2(0, std::min(ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * below,
                                              ImGui::GetFrameHeightWithSpacing() * (voices_->speakers.size() + 1.3f))))) {
-        ImGui::TableSetupColumn("Гравець", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Гравець"), ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("SteamID", ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn("Мовлення", ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn("Гучність", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.5f);
+        ImGui::TableSetupColumn(tr("Мовлення"), ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn(tr("Гучність"), ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.5f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         for (const auto& sp : voices_->speakers) {
@@ -188,33 +189,33 @@ void App::draw_voice_table() {
             const bool denoised = s_.voice_denoise ||
                                   std::find(denoise_keys.begin(), denoise_keys.end(), sp.key) != denoise_keys.end();
             const ImVec4 name_col = vol <= 0.0 ? kColDim : sp.is_local ? kColAccent : ImGui::GetStyleColorVec4(ImGuiCol_Text);
-            ImGui::TextColored(name_col, "%s%s", sp.name.c_str(), sp.is_local ? " (ви)" : "");
+            ImGui::TextColored(name_col, "%s%s", sp.name.c_str(), sp.is_local ? tr(" (ви)") : "");
             if (ImGui::BeginPopupContextItem(("##vctx" + sp.key).c_str())) {
                 if (playing_key_ == sp.key) {
-                    if (ImGui::MenuItem("Зупинити прослуховування")) {
+                    if (ImGui::MenuItem(tr("Зупинити прослуховування"))) {
                         player_.stop();
                         playing_key_.clear();
                     }
-                } else if (ImGui::MenuItem("Прослухати (15 с з початку фрагмента)", nullptr, false,
+                } else if (ImGui::MenuItem(tr("Прослухати (15 с з початку фрагмента)"), nullptr, false,
                                            VoicePlayer::supported() && !clip_future_.valid())) {
                     listen_voice(sp);
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Лише цей гравець (соло)", nullptr, false, !job_running())) {
+                if (ImGui::MenuItem(tr("Лише цей гравець (соло)"), nullptr, false, !job_running())) {
                     s_.voice_mode = "selected";
                     s_.voice_selected = sp.key;
                     mark_dirty();
                 }
-                if (ImGui::MenuItem("Вимкнути цього гравця", nullptr, false, !job_running())) {
+                if (ImGui::MenuItem(tr("Вимкнути цього гравця"), nullptr, false, !job_running())) {
                     volumes[sp.key] = 0.0;
                     store_volumes();
                 }
-                if (ImGui::MenuItem("Гучність 100%", nullptr, false, !job_running())) {
+                if (ImGui::MenuItem(tr("Гучність 100%"), nullptr, false, !job_running())) {
                     volumes.erase(sp.key);
                     store_volumes();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem(s_.voice_denoise ? "Шумодав (увімкнено для всіх)" : "Шумодав для цього гравця", nullptr,
+                if (ImGui::MenuItem(s_.voice_denoise ? tr("Шумодав (увімкнено для всіх)") : tr("Шумодав для цього гравця"), nullptr,
                                     denoised, !job_running() && !s_.voice_denoise)) {
                     std::string list;
                     for (const auto& k : denoise_keys)
@@ -227,7 +228,7 @@ void App::draw_voice_table() {
             }
             if (denoised) {
                 ImGui::SameLine();
-                ImGui::TextColored(kColDim, "· шумодав");
+                ImGui::TextColored(kColDim, "%s", tr("· шумодав"));
             }
             ImGui::TableNextColumn();
             ImGui::TextColored(kColDim, "%s", sp.steamid64 ? format_steamid(sp.steamid64).c_str() : "—");
@@ -237,11 +238,11 @@ void App::draw_voice_table() {
             ImGui::BeginDisabled(job_running());
             int pct = static_cast<int>(std::lround(vol * 100));
             ImGui::SetNextItemWidth(-1);
-            if (ImGui::SliderInt(("##vol" + sp.key).c_str(), &pct, 0, 300, pct == 0 ? "вимк." : "%d%%")) {
+            if (ImGui::SliderInt(("##vol" + sp.key).c_str(), &pct, 0, 300, pct == 0 ? tr("вимк.") : "%d%%")) {
                 volumes[sp.key] = pct / 100.0;
                 store_volumes();
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Гучність цього гравця (0 — вимкнути). Ctrl+клік — ввести число.\nПравий клік на імені — соло.");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Гучність цього гравця (0 — вимкнути). Ctrl+клік — ввести число.\nПравий клік на імені — соло."));
             ImGui::EndDisabled();
         }
         ImGui::EndTable();
@@ -253,22 +254,22 @@ void App::draw_voice_table() {
         return key;
     };
     if (!playing_key_.empty()) {
-        ImGui::TextColored(kColAccent, "Грає: %s  %s / %s", speaker_name(playing_key_).c_str(),
+        ImGui::TextColored(kColAccent, tr("Грає: %s  %s / %s"), speaker_name(playing_key_).c_str(),
                            format_duration(player_.position()).c_str(), format_duration(player_.duration()).c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Стоп##listen")) {
+        if (ImGui::SmallButton(tr("Стоп##listen"))) {
             player_.stop();
             playing_key_.clear();
         }
     } else if (clip_future_.valid()) {
-        ImGui::TextColored(kColDim, "Готую уривок голосу: %s...", speaker_name(clip_key_).c_str());
+        ImGui::TextColored(kColDim, tr("Готую уривок голосу: %s..."), speaker_name(clip_key_).c_str());
     }
     if (!has_local)
-        ImGui::TextColored(kColDim, "Вашого голосу немає (не було voice_loopback 1).");
-    if (!selectable) ImGui::TextColored(kColDim, "Правий клік на імені — прослухати, соло, шумодав; повзунок — гучність.");
+        ImGui::TextColored(kColDim, "%s", tr("Вашого голосу немає (не було voice_loopback 1)."));
+    if (!selectable) ImGui::TextColored(kColDim, "%s", tr("Правий клік на імені — прослухати, соло, шумодав; повзунок — гучність."));
     ImGui::BeginDisabled(job_running());
-    if (ImGui::Button("Зберегти голоси у файли...")) {
-        auto d = pick_folder_dialog("Папка для голосів", path_to_utf8(path_from_utf8(s_.demo_path).parent_path()));
+    if (ImGui::Button(tr("Зберегти голоси у файли..."))) {
+        auto d = pick_folder_dialog(tr("Папка для голосів"), path_to_utf8(path_from_utf8(s_.demo_path).parent_path()));
         if (!d.empty()) export_voices(d);
     }
     ImGui::EndDisabled();
@@ -291,7 +292,7 @@ void App::draw_preview() {
         const ImVec2 p0 = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), IM_COL32(20, 22, 26, 255), 4.0f);
-        const char* msg = job_running() ? "Прев'ю з'явиться, щойно гра почне записувати кадри" : "Прев'ю";
+        const char* msg = job_running() ? tr("Прев'ю з'явиться, щойно гра почне записувати кадри") : tr("Прев'ю");
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         dl->AddText(ImVec2(p0.x + (w - ts.x) / 2, p0.y + (h - ts.y) / 2), IM_COL32(150, 155, 165, 255), msg);
         ImGui::Dummy(ImVec2(w, h));
@@ -325,15 +326,15 @@ void App::draw_checks(const std::vector<render::CheckItem>& checks) {
 void App::draw_output_bar() {
     const float fs_ = ImGui::GetFontSize();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Зберегти як:");
+    ImGui::TextUnformatted(tr("Зберегти як:"));
     ImGui::SameLine();
     ImGui::BeginDisabled(job_running());
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 33.5f);
     if (ImGui::InputText("##out", &s_.output_path)) mark_dirty();
     ImGui::SameLine();
-    if (ImGui::Button("Огляд...##out")) {
+    if (ImGui::Button(tr("Огляд...##out"))) {
         const std::string ext = current_container();
-        auto f = save_file_dialog("Зберегти відео як", {{"Відео (*." + ext + ")", "*." + ext}, {"Усі файли", "*.*"}},
+        auto f = save_file_dialog(tr("Зберегти відео як"), {{tr("Відео (*.") + ext + ")", "*." + ext}, {tr("Усі файли"), "*.*"}},
                                   s_.output_path, ext);
         if (!f.empty()) {
             s_.output_path = f;
@@ -345,64 +346,64 @@ void App::draw_output_bar() {
     const bool can_start = analysis_ && !job_running() && !(analyze_job_ && analyze_job_->running());
     if (!job_running()) {
         ImGui::BeginDisabled(!can_start || s_.manual_mode);
-        if (ImGui::Button("Тест 3 с", ImVec2(fs_ * 5.5f, 0))) start_render(true);
+        if (ImGui::Button(tr("Тест 3 с"), ImVec2(fs_ * 5.5f, 0))) start_render(true);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Тестовий прогін: 3 секунди з початку фрагмента в тимчасовий файл.\n"
-                              "Перевіряє кожен крок (гра, драйвер, демо, кадри, звук, кодек) і рахує,\n"
-                              "скільки триватиме весь рендер і скільки важитиме файл.");
+            ImGui::SetTooltip("%s", tr("Тестовий прогін: 3 секунди з початку фрагмента в тимчасовий файл.\n"
+                                    "Перевіряє кожен крок (гра, драйвер, демо, кадри, звук, кодек) і рахує,\n"
+                                    "скільки триватиме весь рендер і скільки важитиме файл."));
         ImGui::SameLine();
         ImGui::BeginDisabled(!can_start || s_.manual_mode || s_.output_path.empty());
-        if (ImGui::Button("До черги", ImVec2(fs_ * 5.5f, 0))) add_to_queue();
+        if (ImGui::Button(tr("До черги"), ImVec2(fs_ * 5.5f, 0))) add_to_queue();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Додати цей рендер (демо, фрагмент, файл і всі налаштування) до черги.\n"
-                              "Черга — на вкладці «Черга»: кілька рендерів підряд, гра запускається один раз.");
+            ImGui::SetTooltip("%s", tr("Додати цей рендер (демо, фрагмент, файл і всі налаштування) до черги.\n"
+                                    "Черга — на вкладці «Черга»: кілька рендерів підряд, гра запускається один раз."));
         ImGui::SameLine();
         ImGui::BeginDisabled(!can_start);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.30f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.66f, 0.36f, 1.0f));
-        if (ImGui::Button("Почати рендер", ImVec2(-1, 0))) start_render();
+        if (ImGui::Button(tr("Почати рендер"), ImVec2(-1, 0))) start_render();
         ImGui::PopStyleColor(2);
         ImGui::EndDisabled();
     } else {
         if (job_->can_show_game()) {
-            if (ImGui::Button(show_game_ ? "Сховати гру" : "Показати гру", ImVec2(fs_ * 7.0f, 0))) {
+            if (ImGui::Button(show_game_ ? tr("Сховати гру") : tr("Показати гру"), ImVec2(fs_ * 7.0f, 0))) {
                 show_game_ = !show_game_;
                 job_->set_show_game(show_game_);
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Тимчасово показати вікно гри поверх інших, щоб перевірити, що відбувається.\n"
-                                  "Не клацайте в самій грі під час рендеру.");
+                ImGui::SetTooltip("%s", tr("Тимчасово показати вікно гри поверх інших, щоб перевірити, що відбувається.\n"
+                                        "Не клацайте в самій грі під час рендеру."));
             ImGui::SameLine();
         }
         const bool watching = dynamic_cast<render::WatchJob*>(job_.get()) != nullptr;
-        if (ImGui::Button(watching ? "Закрити гру" : "Зупинити", ImVec2(fs_ * 7.5f, 0))) job_->cancel();
+        if (ImGui::Button(watching ? tr("Закрити гру") : tr("Зупинити"), ImVec2(fs_ * 7.5f, 0))) job_->cancel();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(watching ? "Закрити гру (позначки, зроблені в грі, вже збережено)"
-                                       : "Зупинити запис і зберегти вже відрендерену частину");
+            ImGui::SetTooltip("%s", watching ? tr("Закрити гру (позначки, зроблені в грі, вже збережено)")
+                                       : tr("Зупинити запис і зберегти вже відрендерену частину"));
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
-        if (ImGui::Button("Перервати", ImVec2(-1, 0))) job_->kill();
+        if (ImGui::Button(tr("Перервати"), ImVec2(-1, 0))) job_->kill();
         ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Негайно закрити гру і перервати рендер");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Негайно закрити гру і перервати рендер"));
     }
-    if (ImGui::BeginPopupModal("Перезаписати?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Файл уже існує:\n%s\n\nПерезаписати?", s_.output_path.c_str());
-        if (ImGui::Button("Так", ImVec2(fs_ * 6, 0))) {
+    if (ImGui::BeginPopupModal(tr("Перезаписати?"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text(tr("Файл уже існує:\n%s\n\nПерезаписати?"), s_.output_path.c_str());
+        if (ImGui::Button(tr("Так"), ImVec2(fs_ * 6, 0))) {
             confirm_overwrite_ = true;
             ImGui::CloseCurrentPopup();
             start_render();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Ні", ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(tr("Ні"), ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }
 
 void App::draw_progress() {
     if (!job_) {
-        ImGui::ProgressBar(0.0f, ImVec2(-1, 0), "Очікування");
+        ImGui::ProgressBar(0.0f, ImVec2(-1, 0), tr("Очікування"));
         return;
     }
     const auto p = job_->progress();
@@ -413,51 +414,51 @@ void App::draw_progress() {
     ImGui::ProgressBar(static_cast<float>(std::clamp(p.fraction, 0.0, 1.0)), ImVec2(-1, 0), text.c_str());
     std::string stats;
     if (p.frames > 0 || p.subframes > 0) {
-        stats = std::format("Кадрів: {}  |  Відео: {} з {}", p.frames, format_duration(p.video_seconds),
+        stats = trf("Кадрів: {}  |  Відео: {} з {}", p.frames, format_duration(p.video_seconds),
                             format_duration(p.expected_seconds));
-        if (p.speed_fps > 0) stats += std::format("  |  {:.1f} кадр/с", p.speed_fps);
-        if (p.eta >= 0 && job_->running()) stats += "  |  Залишилось ~" + format_duration(p.eta);
-        stats += "  |  Файл: " + format_bytes(static_cast<uint64_t>(std::max<int64_t>(0, p.bytes_written)));
-        if (p.pending_files > 0) stats += std::format("  |  Черга: {}", p.pending_files);
+        if (p.speed_fps > 0) stats += trf("  |  {:.1f} кадр/с", p.speed_fps);
+        if (p.eta >= 0 && job_->running()) stats += tr("  |  Залишилось ~") + format_duration(p.eta);
+        stats += tr("  |  Файл: ") + format_bytes(static_cast<uint64_t>(std::max<int64_t>(0, p.bytes_written)));
+        if (p.pending_files > 0) stats += trf("  |  Черга: {}", p.pending_files);
     } else if (p.demo_total > 0 && job_->running()) {
-        stats = std::format("Гра: {}  |  тік {} / {}", p.driver_state, p.demo_tick, p.demo_total);
+        stats = trf("Гра: {}  |  тік {} / {}", p.driver_state, p.demo_tick, p.demo_total);
     }
-    if (p.elapsed > 0) stats += (stats.empty() ? "" : "  |  ") + std::string("Минуло: ") + format_duration(p.elapsed);
+    if (p.elapsed > 0) stats += (stats.empty() ? "" : "  |  ") + std::string(tr("Минуло: ")) + format_duration(p.elapsed);
     ImGui::TextColored(kColDim, "%s", stats.c_str());
     // Що зробити, коли рендер чи черга закінчиться (вимкнути ПК / сон)
     if (job_->running() && !dynamic_cast<render::WatchJob*>(job_.get()) && !job_has_fraction_only()) {
         ImGui::SameLine();
-        ImGui::TextColored(kColDim, "  |  Потім:");
+        ImGui::TextColored(kColDim, "%s", tr("  |  Потім:"));
         ImGui::SameLine();
         draw_after_done_combo();
     }
     if (p.disk_low) {
         ImGui::SameLine();
-        ImGui::TextColored(kColErr, "  [гру призупинено: закінчується місце на диску]");
+        ImGui::TextColored(kColErr, "%s", tr("  [гру призупинено: закінчується місце на диску]"));
     } else if (p.game_paused) {
         ImGui::SameLine();
-        ImGui::TextColored(kColWarn, "  [гра на паузі — кодер наздоганяє]");
+        ImGui::TextColored(kColWarn, "%s", tr("  [гра на паузі — кодер наздоганяє]"));
     }
     if (p.game_restarts > 0) {
         ImGui::SameLine();
-        ImGui::TextColored(kColWarn, "  [гру перезапущено після збою: %d]", p.game_restarts);
+        ImGui::TextColored(kColWarn, tr("  [гру перезапущено після збою: %d]"), p.game_restarts);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Гра впала чи зависла, і програма перезапустила її з того самого місця демо.\n"
-                              "Відео дописується в той самий файл без шва — деталі в журналі.");
+            ImGui::SetTooltip("%s", tr("Гра впала чи зависла, і програма перезапустила її з того самого місця демо.\n"
+                                    "Відео дописується в той самий файл без шва — деталі в журналі."));
     }
     if (!p.video_desc.empty()) ImGui::TextColored(kColDim, "%s  •  %s", p.video_desc.c_str(), p.audio_desc.c_str());
     // Час етапів конвеєра — щоб було видно, що гальмує
     if (p.frames > 0) {
-        std::string st = std::format("Етапи, мс/кадр: читання {:.1f} · декодування {:.1f}", p.stat_read_ms, p.stat_decode_ms);
-        if (p.stat_blend_ms > 0) st += std::format(" · змішування {:.1f}", p.stat_blend_ms);
-        st += std::format(" · колір {:.1f} · кодування {:.1f} · звук {:.1f}", p.stat_convert_ms, p.stat_encode_ms, p.stat_audio_ms);
-        if (p.stat_game_wait >= 0) st += std::format("  |  чекали на гру {:.0f}% часу", p.stat_game_wait * 100);
+        std::string st = trf("Етапи, мс/кадр: читання {:.1f} · декодування {:.1f}", p.stat_read_ms, p.stat_decode_ms);
+        if (p.stat_blend_ms > 0) st += trf(" · змішування {:.1f}", p.stat_blend_ms);
+        st += trf(" · колір {:.1f} · кодування {:.1f} · звук {:.1f}", p.stat_convert_ms, p.stat_encode_ms, p.stat_audio_ms);
+        if (p.stat_game_wait >= 0) st += trf("  |  чекали на гру {:.0f}% часу", p.stat_game_wait * 100);
         ImGui::TextColored(kColDim, "%s", st.c_str());
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Читання і декодування йдуть паралельно на кількох ядрах, змішування — у потоці подачі кадрів,\n"
-                              "колір, кодування і звук — в окремому потоці кодера.\n"
-                              "«Чекали на гру» — частка часу, коли всі кадри вже оброблено і програма чекала нових від гри:\n"
-                              "близько 100%% — швидкість визначає гра (роздільна здатність, motion blur, RTX), а не кодування.");
+            ImGui::SetTooltip("%s", tr("Читання і декодування йдуть паралельно на кількох ядрах, змішування — у потоці подачі кадрів,\n"
+                                    "колір, кодування і звук — в окремому потоці кодера.\n"
+                                    "«Чекали на гру» — частка часу, коли всі кадри вже оброблено і програма чекала нових від гри:\n"
+                                    "близько 100% — швидкість визначає гра (роздільна здатність, motion blur, RTX), а не кодування."));
     }
 }
 
@@ -490,17 +491,17 @@ void App::draw_log() {
         log_scroll_to_bottom_ = false;
     }
     if (ImGui::BeginPopupContextWindow("##logctx")) {
-        if (ImGui::MenuItem("Копіювати журнал")) {
+        if (ImGui::MenuItem(tr("Копіювати журнал"))) {
             std::string all;
             std::lock_guard lock(log_mutex_);
             for (const auto& l : log_) all += l.time + " " + l.text + "\n";
             clipboard_text_set(all);
         }
-        if (ImGui::MenuItem("Очистити")) {
+        if (ImGui::MenuItem(tr("Очистити"))) {
             std::lock_guard lock(log_mutex_);
             log_.clear();
         }
-        ImGui::MenuItem("Показувати технічні повідомлення", nullptr, &show_debug_log_);
+        ImGui::MenuItem(tr("Показувати технічні повідомлення"), nullptr, &show_debug_log_);
         ImGui::EndPopup();
     }
     ImGui::EndChild();

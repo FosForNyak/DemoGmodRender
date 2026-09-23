@@ -4,6 +4,7 @@
 #include "../voice/steam_voice.hpp"
 #include "bitreader.hpp"
 #include "game_events.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -17,7 +18,7 @@ std::string DemoAnalysis::player_name(int slot) const {
     auto it = players.find(slot);
     if (it != players.end() && !it->second.name.empty()) return it->second.name;
     if (slot == local_slot && !header.client_name.empty()) return header.client_name;
-    return std::format("Гравець #{}", slot);
+    return trf("Гравець #{}", slot);
 }
 
 size_t DemoAnalysis::count_events(DemoEventKind k) const {
@@ -37,7 +38,7 @@ public:
     bool wants_events() const override { return events_; }
 
     void on_game_event_list(const RawBitsMsg& m) override {
-        if (!game_events_.load_list(m)) warn("список ігрових подій пошкоджений");
+        if (!game_events_.load_list(m)) warn(tr("список ігрових подій пошкоджений"));
     }
     void on_game_event(const RawBitsMsg& m) override {
         auto ev = game_events_.decode(m);
@@ -69,8 +70,8 @@ public:
             e.who = a_.player_name(e.slot);
             const std::string weapon = ev->get_str("weapon");
             e.text = attacker >= 0 && attacker != victim
-                         ? std::format("{} вбив {}", a_.player_name(attacker), a_.player_name(victim))
-                         : std::format("{} загинув", a_.player_name(victim));
+                         ? trf("{} вбив {}", a_.player_name(attacker), a_.player_name(victim))
+                         : trf("{} загинув", a_.player_name(victim));
             if (!weapon.empty()) e.text += " (" + weapon + ")";
         } else if (ev->name == "player_say") {
             // Запасне джерело чату: якщо SayText не знайдеться, беремо ці події
@@ -96,7 +97,7 @@ public:
         if (parse_say_text(m, ent, p.ev.text, team, dead)) {
             p.ev.kind = DemoEventKind::Chat;
             p.ev.slot = ent - 1;
-            p.ev.who = ent == 0 ? "Сервер" : a_.player_name(ent - 1);
+            p.ev.who = ent == 0 ? tr("Сервер") : a_.player_name(ent - 1);
             if (team) p.ev.channel = "team";
         } else if (parse_text_msg(m, dest, p.ev.text)) {
             if (dest != 3) return;   // лише те, що сервер пише в чат (HUD_PRINTTALK)
@@ -148,11 +149,11 @@ public:
         a_.local_slot = si.player_slot;
     }
     void on_create_string_table(const CreateStringTableMsg& m) override {
-        if (!st_.on_create(m)) warn(std::format("таблиця рядків '{}': {}", m.name, st_.last_error()));
+        if (!st_.on_create(m)) warn(trf("таблиця рядків '{}': {}", m.name, st_.last_error()));
         else if (m.name == "userinfo") refresh_players();   // імена потрібні вже для перших повідомлень чату
     }
     void on_update_string_table(const UpdateStringTableMsg& m) override {
-        if (!st_.on_update(m)) warn(std::format("оновлення таблиці: {}", st_.last_error()));
+        if (!st_.on_update(m)) warn(trf("оновлення таблиці: {}", st_.last_error()));
         else refresh_players();
     }
     void on_voice_init(const VoiceInitMsg& m) override {
@@ -276,14 +277,14 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
     DemoAnalysis a;
     a.header = file.header();
     if (a.header.network_protocol != 24)
-        a.warnings.push_back(std::format("Мережевий протокол {} (для GMod очікується 24) — розбір може бути неточним",
+        a.warnings.push_back(trf("Мережевий протокол {} (для GMod очікується 24) — розбір може бути неточним",
                                          a.header.network_protocol));
     if (!a.header.game_dir.empty() && a.header.game_dir != "garrysmod")
-        a.warnings.push_back(std::format("Демо записане у грі '{}', а не в Garry's Mod", a.header.game_dir));
+        a.warnings.push_back(trf("Демо записане у грі '{}', а не в Garry's Mod", a.header.game_dir));
 
     int detect_fail = 0;
     a.variant = detect_protocol_variant(file, opt.detect_packets, &detect_fail);
-    log_info("Варіант протоколу: {} (збоїв на пробі: {})", a.variant.describe(), detect_fail);
+    log_info("{}", trf("Варіант протоколу: {} (збоїв на пробі: {})", a.variant.describe(), detect_fail));
 
     StringTableSet tables;
     Collector collector(a, tables, opt.collect_voice, opt.collect_events);
@@ -294,7 +295,7 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
     int32_t min_tick = INT32_MAX, max_tick = 0;
     size_t last_progress_pos = 0;
     while (file.next(cmd)) {
-        if (cancel && cancel->load()) throw std::runtime_error("Аналіз скасовано");
+        if (cancel && cancel->load()) throw std::runtime_error(tr("Аналіз скасовано"));
         if (progress && file.position() - last_progress_pos > (1u << 20)) {
             last_progress_pos = file.position();
             progress(static_cast<double>(file.position()) / static_cast<double>(file.file_size()));
@@ -345,8 +346,8 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
             break;
         }
     }
-    if (!file.error().empty()) a.warnings.push_back("Файл демо: " + file.error());
-    if (!file.reached_stop()) a.warnings.push_back("Демо не має маркера кінця (можливо, запис перервано) — використано наявні дані");
+    if (!file.error().empty()) a.warnings.push_back(tr("Файл демо: ") + file.error());
+    if (!file.reached_stop()) a.warnings.push_back(tr("Демо не має маркера кінця (можливо, запис перервано) — використано наявні дані"));
     collector.refresh_players();
     collector.finish_warnings();
     collector.finish_events();
@@ -360,7 +361,7 @@ DemoAnalysis analyze_demo(DemoFile& file, const AnalyzeOptions& opt, const Progr
     if (a.packets_failed > 0) {
         std::string types;
         for (auto& [t, n] : a.fail_types) types += std::format(" {}×{}", net_message_name(t), n);
-        a.warnings.push_back(std::format("Не вдалося повністю розібрати {} з {} пакетів (на:{}). Голос шукали за CRC, знайдено додатково {}.",
+        a.warnings.push_back(trf("Не вдалося повністю розібрати {} з {} пакетів (на:{}). Голос шукали за CRC, знайдено додатково {}.",
                                          a.packets_failed, a.packets_total, types, a.voice_scavenged));
     }
     if (progress) progress(1.0);

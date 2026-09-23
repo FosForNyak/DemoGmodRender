@@ -1,4 +1,5 @@
 #include "voice_player.hpp"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -55,7 +56,7 @@ bool VoicePlayer::play(const std::vector<float>& mono, std::string* error) {
     wf.nAvgBytesPerSec = kRate * 2;
     if (waveOutOpen(&m.wo, WAVE_MAPPER, &wf, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
         m.wo = nullptr;
-        if (error) *error = "не вдалося відкрити пристрій відтворення звуку";
+        if (error) *error = tr("не вдалося відкрити пристрій відтворення звуку");
         return false;
     }
     m.hdr.lpData = reinterpret_cast<LPSTR>(m.pcm.data());
@@ -63,7 +64,7 @@ bool VoicePlayer::play(const std::vector<float>& mono, std::string* error) {
     if (waveOutPrepareHeader(m.wo, &m.hdr, sizeof(m.hdr)) != MMSYSERR_NOERROR ||
         waveOutWrite(m.wo, &m.hdr, sizeof(m.hdr)) != MMSYSERR_NOERROR) {
         m.close();
-        if (error) *error = "не вдалося відтворити звук";
+        if (error) *error = tr("не вдалося відтворити звук");
         return false;
     }
     return true;
@@ -93,7 +94,7 @@ VoicePlayer::VoicePlayer() : impl_(std::make_unique<Impl>()) {}
 VoicePlayer::~VoicePlayer() = default;
 bool VoicePlayer::supported() { return false; }
 bool VoicePlayer::play(const std::vector<float>&, std::string* error) {
-    if (error) *error = "прослуховування поки є лише у версії для Windows";
+    if (error) *error = tr("прослуховування поки є лише у версії для Windows");
     return false;
 }
 void VoicePlayer::stop() {}

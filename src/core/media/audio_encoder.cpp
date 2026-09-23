@@ -2,6 +2,7 @@
 
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,11 +14,11 @@ bool AudioEncoder::open(const AudioEncoderSettings& s, bool global_header, std::
     s_ = s;
     const AVCodec* codec = avcodec_find_encoder_by_name(s.codec.c_str());
     if (!codec) {
-        if (error) *error = std::format("аудіокодек '{}' відсутній у цій збірці FFmpeg", s.codec);
+        if (error) *error = trf("аудіокодек '{}' відсутній у цій збірці FFmpeg", s.codec);
         return false;
     }
     if (codec->type != AVMEDIA_TYPE_AUDIO) {
-        if (error) *error = std::format("'{}' — не аудіокодек", s.codec);
+        if (error) *error = trf("'{}' — не аудіокодек", s.codec);
         return false;
     }
     ctx_.reset(avcodec_alloc_context3(codec));
@@ -30,7 +31,7 @@ bool AudioEncoder::open(const AudioEncoderSettings& s, bool global_header, std::
         int best = rates.front();
         for (int r : rates)
             if (std::abs(r - rate) < std::abs(best - rate)) best = r;
-        log_warn("Кодек {} не підтримує {} Гц — використовую {} Гц", s.codec, rate, best);
+        log_warn("{}", trf("Кодек {} не підтримує {} Гц — використовую {} Гц", s.codec, rate, best));
         rate = best;
     }
     c->sample_rate = rate;
@@ -72,7 +73,7 @@ bool AudioEncoder::open(const AudioEncoderSettings& s, bool global_header, std::
     int r = avcodec_open2(c, codec, &opts);
     av_dict_free(&opts);
     if (r < 0) {
-        if (error) *error = std::format("не вдалося відкрити аудіокодек {}: {}", s.codec, av_error_string(r));
+        if (error) *error = trf("не вдалося відкрити аудіокодек {}: {}", s.codec, av_error_string(r));
         return false;
     }
     frame_size_ = (codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE) || c->frame_size <= 0 ? 1024 : c->frame_size;
@@ -85,7 +86,7 @@ bool AudioEncoder::open(const AudioEncoderSettings& s, bool global_header, std::
                             kMixRate, 0, nullptr);
     if (r < 0 || !swr || swr_init(swr) < 0) {
         swr_free(&swr);
-        if (error) *error = "не вдалося налаштувати swresample";
+        if (error) *error = tr("не вдалося налаштувати swresample");
         return false;
     }
     swr_.reset(swr);
@@ -97,8 +98,8 @@ bool AudioEncoder::open(const AudioEncoderSettings& s, bool global_header, std::
 
 std::string AudioEncoder::describe() const {
     if (!ctx_) return "—";
-    return std::format("{} {} Гц {} кан.{}", s_.codec, ctx_->sample_rate, ctx_->ch_layout.nb_channels,
-                       ctx_->bit_rate > 0 ? std::format(" {} кбіт/с", ctx_->bit_rate / 1000) : std::string());
+    return trf("{} {} Гц {} кан.{}", s_.codec, ctx_->sample_rate, ctx_->ch_layout.nb_channels,
+                       ctx_->bit_rate > 0 ? trf(" {} кбіт/с", ctx_->bit_rate / 1000) : std::string());
 }
 
 bool AudioEncoder::push(const float* in, size_t frames, const PacketSink& sink, std::string* error) {
@@ -108,7 +109,7 @@ bool AudioEncoder::push(const float* in, size_t frames, const PacketSink& sink, 
         uint8_t** out = nullptr;
         int linesize = 0;
         if (av_samples_alloc_array_and_samples(&out, &linesize, ctx_->ch_layout.nb_channels, out_max, ctx_->sample_fmt, 0) < 0) {
-            if (error) *error = "немає пам'яті для аудіо";
+            if (error) *error = tr("немає пам'яті для аудіо");
             return false;
         }
         const uint8_t* in_planes[1] = {reinterpret_cast<const uint8_t*>(in)};
@@ -117,7 +118,7 @@ bool AudioEncoder::push(const float* in, size_t frames, const PacketSink& sink, 
         av_freep(&out[0]);
         av_freep(&out);
         if (got < 0) {
-            if (error) *error = "помилка swresample";
+            if (error) *error = tr("помилка swresample");
             return false;
         }
     }
@@ -127,14 +128,14 @@ bool AudioEncoder::push(const float* in, size_t frames, const PacketSink& sink, 
 bool AudioEncoder::send(AVFrame* f, const PacketSink& sink, std::string* error) {
     int r = avcodec_send_frame(ctx_.get(), f);
     if (r < 0 && r != AVERROR_EOF) {
-        if (error) *error = "помилка кодування аудіо: " + av_error_string(r);
+        if (error) *error = tr("помилка кодування аудіо: ") + av_error_string(r);
         return false;
     }
     for (;;) {
         r = avcodec_receive_packet(ctx_.get(), pkt_.get());
         if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
         if (r < 0) {
-            if (error) *error = "помилка аудіопакета: " + av_error_string(r);
+            if (error) *error = tr("помилка аудіопакета: ") + av_error_string(r);
             return false;
         }
         const bool ok = sink(pkt_.get());
@@ -155,7 +156,7 @@ bool AudioEncoder::encode_from_fifo(bool final_flush, const PacketSink& sink, st
         frame_->sample_rate = ctx_->sample_rate;
         av_channel_layout_copy(&frame_->ch_layout, &ctx_->ch_layout);
         if (av_frame_get_buffer(frame_.get(), 0) < 0) {
-            if (error) *error = "немає пам'яті для аудіокадру";
+            if (error) *error = tr("немає пам'яті для аудіокадру");
             return false;
         }
         av_audio_fifo_read(fifo_.get(), reinterpret_cast<void**>(frame_->data), n);

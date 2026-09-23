@@ -211,10 +211,16 @@ jobs:
           python3 tests/tools/make_test_demo.py build/td/test20c.dem build/td/truth20.json --pe-bits 20 --compress-userinfo
           python3 tests/tools/make_test_demo.py build/td/test2026.dem build/td/truth2026.json --pe-bits 24 --compress-userinfo --gmod2026
           ./build/gmdr-tests build/td
+          ./build/gmdr-cli --lang en info build/td/test24.dem | grep -q '^Map: *gm_construct'
+          ./build/gmdr-cli info build/td/test24.dem | grep -q '^Карта: *gm_construct'
 
       - name: Lua-драйвер (імітація меню GMod)
         if: matrix.sanitize == ''
         run: lua5.1 tests/lua/driver_mock_test.lua src/core/game/gmdr_driver.lua
+
+      - name: Переклад інтерфейсу (кожен рядок має англійський варіант)
+        if: matrix.sanitize == ''
+        run: python3 scripts/i18n.py check
 
   fuzz:
     runs-on: ubuntu-24.04

@@ -1,6 +1,7 @@
 #include "string_tables.hpp"
 
 #include "bitreader.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -115,13 +116,13 @@ bool StringTableSet::on_create(const CreateStringTableMsg& msg) {
         const uint32_t uncompressed = br.read_ubits(32);
         const uint32_t compressed = br.read_ubits(32);
         if (br.overflowed() || compressed > br.bits_left() / 8) {
-            error_ = "стиснена таблиця рядків пошкоджена";
+            error_ = tr("стиснена таблиця рядків пошкоджена");
             return false;
         }
         std::vector<uint8_t> block = br.read_bits_to_bytes(static_cast<size_t>(compressed) * 8);
         auto raw = lzss_decompress(block.data(), block.size());
         if (!raw || raw->size() != uncompressed) {
-            error_ = std::format("не вдалося розпакувати таблицю '{}'", msg.name);
+            error_ = trf("не вдалося розпакувати таблицю '{}'", msg.name);
             return false;
         }
         return apply_update(table, raw->data(), raw->size() * 8, msg.num_entries);
@@ -131,7 +132,7 @@ bool StringTableSet::on_create(const CreateStringTableMsg& msg) {
 
 bool StringTableSet::on_update(const UpdateStringTableMsg& msg) {
     if (msg.table_id < 0 || static_cast<size_t>(msg.table_id) >= tables_.size()) {
-        error_ = std::format("оновлення невідомої таблиці {}", msg.table_id);
+        error_ = trf("оновлення невідомої таблиці {}", msg.table_id);
         return false;
     }
     return apply_update(tables_[static_cast<size_t>(msg.table_id)], msg.data.data(), msg.data_bits,
@@ -168,7 +169,7 @@ bool StringTableSet::apply_update_bits(StringTable& t, const uint8_t* data, size
         if (!br.read_bit()) index = static_cast<int>(br.read_ubits(entry_bits));
         last_entry = index;
         if (index < 0 || index >= t.max_entries) {
-            error_ = std::format("таблиця '{}': індекс {} поза межами", t.name, index);
+            error_ = trf("таблиця '{}': індекс {} поза межами", t.name, index);
             return false;
         }
         std::string key;
@@ -197,7 +198,7 @@ bool StringTableSet::apply_update_bits(StringTable& t, const uint8_t* data, size
             }
         }
         if (br.overflowed()) {
-            error_ = std::format("таблиця '{}': дані обрізані", t.name);
+            error_ = trf("таблиця '{}': дані обрізані", t.name);
             return false;
         }
         StringTableEntry& e = t.entries[static_cast<size_t>(index)];
@@ -208,7 +209,7 @@ bool StringTableSet::apply_update_bits(StringTable& t, const uint8_t* data, size
         history.push_back(e.key);
     }
     if (br.bits_left() >= 8) {
-        error_ = std::format("таблиця '{}': зайві дані після записів ({} біт)", t.name, br.bits_left());
+        error_ = trf("таблиця '{}': зайві дані після записів ({} біт)", t.name, br.bits_left());
         return false;
     }
     return true;

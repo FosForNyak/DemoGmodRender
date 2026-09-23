@@ -14,6 +14,7 @@
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "imstb_truetype.h"
+#include "../util/i18n.hpp"
 
 namespace gmdr::render {
 
@@ -117,13 +118,13 @@ bool SpeakerOverlay::init(std::vector<Speaker> speakers, int frame_w, int frame_
     frame_w_ = frame_w;
     frame_h_ = frame_h;
     if (speakers_.empty()) {
-        if (error) *error = "у фрагменті ніхто не говорить";
+        if (error) *error = tr("у фрагменті ніхто не говорить");
         return false;
     }
     auto font_data = read_file_bytes(path_from_utf8(font_path));
     stbtt_fontinfo font{};
     if (!font_data || !stbtt_InitFont(&font, font_data->data(), stbtt_GetFontOffsetForIndex(font_data->data(), 0))) {
-        if (error) *error = "не вдалося прочитати шрифт " + font_path;
+        if (error) *error = tr("не вдалося прочитати шрифт ") + font_path;
         return false;
     }
     const int px = std::max(12, static_cast<int>(std::lround(frame_h * 0.028)));   // 1080p -> 30 px

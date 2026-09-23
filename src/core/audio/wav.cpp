@@ -1,4 +1,5 @@
 #include "wav.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -51,7 +52,7 @@ bool WavReader::open(const std::filesystem::path& path, bool live, std::string* 
     header_ok_ = false;
     frames_read_ = 0;
     if (!file_) {
-        if (error) *error = "не вдалося відкрити WAV";
+        if (error) *error = tr("не вдалося відкрити WAV");
         return false;
     }
     return parse_header(error);
@@ -60,17 +61,17 @@ bool WavReader::open(const std::filesystem::path& path, bool live, std::string* 
 bool WavReader::parse_header(std::string* error) {
     const int64_t size = file_size_now(file_, path_);
     if (size < 44) {
-        if (error) *error = "WAV ще порожній";
+        if (error) *error = tr("WAV ще порожній");
         return false;
     }
     std::vector<uint8_t> head(static_cast<size_t>(std::min<int64_t>(size, 1 << 16)));
     seek64(file_, 0);
     if (std::fread(head.data(), 1, head.size(), file_) != head.size()) {
-        if (error) *error = "помилка читання заголовка WAV";
+        if (error) *error = tr("помилка читання заголовка WAV");
         return false;
     }
     if (std::memcmp(head.data(), "RIFF", 4) != 0 || std::memcmp(head.data() + 8, "WAVE", 4) != 0) {
-        if (error) *error = "це не WAV (RIFF/WAVE)";
+        if (error) *error = tr("це не WAV (RIFF/WAVE)");
         return false;
     }
     size_t pos = 12;
@@ -93,7 +94,7 @@ bool WavReader::parse_header(std::string* error) {
         } else if (std::memcmp(ck, "data", 4) == 0) {
             if (!have_fmt || channels_ <= 0 || rate_ <= 0 ||
                 (bits_ != 8 && bits_ != 16 && bits_ != 24 && bits_ != 32)) {
-                if (error) *error = "непідтримуваний формат WAV";
+                if (error) *error = tr("непідтримуваний формат WAV");
                 return false;
             }
             data_offset_ = static_cast<int64_t>(pos + 8);
@@ -105,7 +106,7 @@ bool WavReader::parse_header(std::string* error) {
         pos += 8 + len + (len & 1);
         if (len > (1u << 30)) break;   // дивний розмір — ймовірно ще не виправлений заголовок
     }
-    if (error) *error = "у WAV немає блоку data (можливо, ще не записано)";
+    if (error) *error = tr("у WAV немає блоку data (можливо, ще не записано)");
     return false;
 }
 
@@ -167,7 +168,7 @@ bool WavWriter::open(const std::filesystem::path& path, int rate, int channels, 
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
     file_ = open_file_utf8(path, "wb");
     if (!file_) {
-        if (error) *error = "не вдалося створити WAV";
+        if (error) *error = tr("не вдалося створити WAV");
         return false;
     }
     rate_ = rate;
@@ -239,7 +240,7 @@ bool WavWriter::close(std::string* error) {
     write_header();
     const bool ok = std::fclose(file_) == 0;
     file_ = nullptr;
-    if (!ok && error) *error = "помилка закриття WAV";
+    if (!ok && error) *error = tr("помилка закриття WAV");
     return ok;
 }
 

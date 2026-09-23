@@ -96,6 +96,7 @@ struct RenderSettings {
     std::string whisper_language = "auto";   // мова розмов: auto, uk, ru, en...
     std::string whisper_model;            // файл моделі ggml-*.bin (порожньо — найкраща знайдена)
     std::string whisper_cli;              // whisper-cli (порожньо — поруч із програмою)
+    std::string ui_language;              // мова інтерфейсу: "uk", "en"; порожньо — за мовою або регіоном Windows
     bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"

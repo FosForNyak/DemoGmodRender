@@ -6,6 +6,7 @@
 
 #include "json.hpp"
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -54,7 +55,7 @@ int compare_versions(const std::string& a, const std::string& b) {
 std::optional<ReleaseInfo> parse_latest_release(const std::string& text, std::string* error) {
     auto j = json::parse(text);
     if (!j || !j->is_object()) {
-        if (error) *error = "незрозуміла відповідь GitHub";
+        if (error) *error = tr("незрозуміла відповідь GitHub");
         return std::nullopt;
     }
     ReleaseInfo r;
@@ -70,7 +71,7 @@ std::optional<ReleaseInfo> parse_latest_release(const std::string& text, std::st
         if (++lines == 8) break;
     }
     if (r.version.empty()) {
-        if (error) *error = "у відповіді GitHub немає номера версії";
+        if (error) *error = tr("у відповіді GitHub немає номера версії");
         return std::nullopt;
     }
     return r;
@@ -85,7 +86,7 @@ std::optional<ReleaseInfo> fetch_latest_release(const std::string& repo, std::st
     const std::wstring agent = utf8_to_wide(std::string("GModDemoRender/") + GMDR_VERSION);
     HINTERNET session = WinHttpOpen(agent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) return fail("не вдалося почати з'єднання");
+    if (!session) return fail(tr("не вдалося почати з'єднання"));
     WinHttpSetTimeouts(session, 10000, 10000, 10000, 15000);
     HINTERNET conn = WinHttpConnect(session, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
     const std::wstring path = utf8_to_wide("/repos/" + repo + "/releases/latest");
@@ -115,15 +116,15 @@ std::optional<ReleaseInfo> fetch_latest_release(const std::string& repo, std::st
     if (req) WinHttpCloseHandle(req);
     if (conn) WinHttpCloseHandle(conn);
     WinHttpCloseHandle(session);
-    if (!ok) return fail("немає зв'язку з GitHub (код " + std::to_string(net_err) + ")");
-    if (status == 404) return fail("на GitHub ще немає опублікованих версій (або репозиторій закритий)");
-    if (status == 403 || status == 429) return fail("GitHub тимчасово обмежив запити — спробуйте пізніше");
-    if (status != 200) return fail("GitHub відповів кодом " + std::to_string(status));
+    if (!ok) return fail(tr("немає зв'язку з GitHub (код ") + std::to_string(net_err) + ")");
+    if (status == 404) return fail(tr("на GitHub ще немає опублікованих версій (або репозиторій закритий)"));
+    if (status == 403 || status == 429) return fail(tr("GitHub тимчасово обмежив запити — спробуйте пізніше"));
+    if (status != 200) return fail(tr("GitHub відповів кодом ") + std::to_string(status));
     return parse_latest_release(body, error);
 }
 #else
 std::optional<ReleaseInfo> fetch_latest_release(const std::string&, std::string* error) {
-    if (error) *error = "перевірка оновлень поки що лише у Windows — дивіться сторінку релізів на GitHub";
+    if (error) *error = tr("перевірка оновлень поки що лише у Windows — дивіться сторінку релізів на GitHub");
     return std::nullopt;
 }
 #endif

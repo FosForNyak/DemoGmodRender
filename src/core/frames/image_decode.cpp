@@ -3,6 +3,7 @@
 #include "../media/ffmpeg_util.hpp"
 #include "../util/strings.hpp"
 #include "tga.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -82,14 +83,14 @@ struct FfImageDecoder {
         if (id != codec_id || !ctx) {
             const AVCodec* c = avcodec_find_decoder(codec_id);
             if (!c) {
-                if (error) *error = "немає декодера зображень у FFmpeg";
+                if (error) *error = tr("немає декодера зображень у FFmpeg");
                 return false;
             }
             ctx.reset(avcodec_alloc_context3(c));
             ctx->thread_count = 1;
             if (avcodec_open2(ctx.get(), c, nullptr) < 0) {
                 ctx.reset();
-                if (error) *error = "не вдалося відкрити декодер зображень";
+                if (error) *error = tr("не вдалося відкрити декодер зображень");
                 return false;
             }
             id = codec_id;
@@ -102,7 +103,7 @@ struct FfImageDecoder {
         if (r >= 0) r = avcodec_receive_frame(ctx.get(), frame.get());
         if (r < 0) {
             avcodec_flush_buffers(ctx.get());
-            if (error) *error = "помилка декодування зображення: " + media::av_error_string(r);
+            if (error) *error = tr("помилка декодування зображення: ") + media::av_error_string(r);
             return false;
         }
         const int w = frame->width, h = frame->height;
@@ -131,7 +132,7 @@ struct FfImageDecoder {
                 sws_fmt = frame->format;
                 if (!sws) {
                     av_frame_unref(frame.get());
-                    if (error) *error = "не вдалося перетворити формат зображення";
+                    if (error) *error = tr("не вдалося перетворити формат зображення");
                     return false;
                 }
             }
@@ -159,7 +160,7 @@ AVCodecID codec_for(ImageFileType t) {
 bool decode_image_buffer(PixelBytes&& bytes, size_t size, const std::string& ext, Image& out, std::string* error,
                          bool keep_yuv) {
     if (size > bytes.size()) {
-        if (error) *error = "внутрішня помилка: розмір файлу більший за буфер";
+        if (error) *error = tr("внутрішня помилка: розмір файлу більший за буфер");
         return false;
     }
     const ImageFileType type = detect_image_type(bytes.data(), size, ext);
@@ -172,7 +173,7 @@ bool decode_image_buffer(PixelBytes&& bytes, size_t size, const std::string& ext
     }
     const AVCodecID codec = codec_for(type);
     if (codec == AV_CODEC_ID_NONE) {
-        if (error) *error = "невідомий формат файлу кадру";
+        if (error) *error = tr("невідомий формат файлу кадру");
         return false;
     }
     if (bytes.size() < size + kDecodePadding) {
@@ -219,7 +220,7 @@ ReadStatus read_frame_file(const std::filesystem::path& path, const std::string&
     if (h == INVALID_HANDLE_VALUE) {
         const DWORD e = GetLastError();
         if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return ReadStatus::Missing;
-        out.error = std::format("файл зайнятий або недоступний (код {})", e);
+        out.error = trf("файл зайнятий або недоступний (код {})", e);
         if (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_ACCESS_DENIED)
             return ReadStatus::Locked;
         return ReadStatus::Error;
@@ -227,7 +228,7 @@ ReadStatus read_frame_file(const std::filesystem::path& path, const std::string&
     LARGE_INTEGER sz{};
     if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0 || sz.QuadPart > (1ll << 31)) {
         CloseHandle(h);
-        out.error = "не вдалося визначити розмір файлу";
+        out.error = tr("не вдалося визначити розмір файлу");
         return ReadStatus::Error;
     }
     const size_t size = static_cast<size_t>(sz.QuadPart);
@@ -238,7 +239,7 @@ ReadStatus read_frame_file(const std::filesystem::path& path, const std::string&
         const DWORD want = static_cast<DWORD>(std::min<size_t>(size - done, 64u << 20));
         if (!ReadFile(h, out.bytes.data() + done, want, &got, nullptr)) {
             CloseHandle(h);
-            out.error = std::format("помилка читання файлу (код {})", GetLastError());
+            out.error = trf("помилка читання файлу (код {})", GetLastError());
             return ReadStatus::Error;
         }
         if (got == 0) break;   // файл коротший, ніж був на момент запиту розміру
@@ -259,13 +260,13 @@ ReadStatus read_frame_file(const std::filesystem::path& path, const std::string&
     if (!f) {
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) return ReadStatus::Missing;
-        out.error = "не вдалося відкрити файл";
+        out.error = tr("не вдалося відкрити файл");
         return ReadStatus::Locked;
     }
     f.seekg(0, std::ios::end);
     const std::streamoff s = f.tellg();
     if (s < 0) {
-        out.error = "не вдалося визначити розмір файлу";
+        out.error = tr("не вдалося визначити розмір файлу");
         return ReadStatus::Error;
     }
     f.seekg(0, std::ios::beg);

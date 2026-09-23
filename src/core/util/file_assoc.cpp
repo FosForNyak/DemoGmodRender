@@ -1,6 +1,7 @@
 #include "file_assoc.hpp"
 
 #include "strings.hpp"
+#include "i18n.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -20,7 +21,7 @@ std::vector<RegValue> dem_association_values(const fs::path& exe) {
     const std::string prog = kDemProgId;
     const std::string app = "Applications\\" + path_to_utf8(exe.filename());
     return {
-        {prog, "", "Демо Garry's Mod"},
+        {prog, "", tr("Демо Garry's Mod")},
         {prog + "\\DefaultIcon", "", "\"" + e + "\",0"},
         {prog + "\\shell\\open", "FriendlyAppName", "GMod Demo Render"},
         {prog + "\\shell\\open\\command", "", open},
@@ -44,7 +45,7 @@ bool set_value(const std::string& key, const std::string& name, const std::strin
                            static_cast<DWORD>((v.size() + 1) * sizeof(wchar_t)));
         RegCloseKey(h);
     }
-    if (r != ERROR_SUCCESS && error) *error = "не вдалося записати HKCU\\" + key + " (код " + std::to_string(r) + ")";
+    if (r != ERROR_SUCCESS && error) *error = tr("не вдалося записати HKCU\\") + key + tr(" (код ") + std::to_string(r) + ")";
     return r == ERROR_SUCCESS;
 }
 
@@ -83,7 +84,7 @@ bool unregister_dem_association(std::string* error, const std::string& root) {
     const bool was_default = get_value(prog, "GmdrSetDefault") == "1" || get_value(root + "\\.dem", "") == kDemProgId;
     LONG r = RegDeleteTreeW(HKEY_CURRENT_USER, w(prog).c_str());
     if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
-        if (error) *error = "не вдалося видалити HKCU\\" + prog + " (код " + std::to_string(r) + ")";
+        if (error) *error = tr("не вдалося видалити HKCU\\") + prog + tr(" (код ") + std::to_string(r) + ")";
         return false;
     }
     RegDeleteKeyValueW(HKEY_CURRENT_USER, w(root + "\\.dem\\OpenWithProgids").c_str(), w(kDemProgId).c_str());
@@ -102,7 +103,7 @@ bool dem_association_registered(const fs::path& exe, const std::string& root) {
 }
 #else
 bool register_dem_association(const fs::path&, std::string* error, const std::string&) {
-    if (error) *error = "асоціація файлів — лише у Windows";
+    if (error) *error = tr("асоціація файлів — лише у Windows");
     return false;
 }
 bool unregister_dem_association(std::string*, const std::string&) { return true; }

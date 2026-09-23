@@ -1,6 +1,7 @@
 #include "netmessages.hpp"
 
 #include "bitreader.hpp"
+#include "../util/i18n.hpp"
 
 #include <format>
 
@@ -40,7 +41,7 @@ const char* net_message_name(int type) {
     case svc_GetCvarValue: return "svc_GetCvarValue";
     case svc_CmdKeyValues: return "svc_CmdKeyValues";
     case svc_GMod_ServerToClient: return "svc_GMod_ServerToClient";
-    default: return "невідоме";
+    default: return tr("невідоме");
     }
 }
 
@@ -184,9 +185,9 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
                 si.gamemode = br.read_string(260);
             }
             if (v.gmod_2026) br.read_ubits(16);   // нове поле (у відомих демо завжди 0xFFFF)
-            if (br.overflowed()) return fail(type, "svc_ServerInfo обрізано");
+            if (br.overflowed()) return fail(type, tr("svc_ServerInfo обрізано"));
             if (!(si.tick_interval > 0.0001f && si.tick_interval < 1.0f))
-                return fail(type, "svc_ServerInfo: неправдоподібний tick interval");
+                return fail(type, tr("svc_ServerInfo: неправдоподібний tick interval"));
             if (h) h->on_server_info(si);
             break;
         }
@@ -217,7 +218,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             m.name = br.read_string(256);
             if (v.gmod_2026) {
                 const uint32_t log2_max = br.read_ubits(5);
-                if (log2_max > 16) return fail(type, "svc_CreateStringTable: неправдоподібний розмір таблиці");
+                if (log2_max > 16) return fail(type, tr("svc_CreateStringTable: неправдоподібний розмір таблиці"));
                 m.max_entries = 1 << log2_max;
             } else {
                 m.max_entries = br.read_word();
@@ -231,7 +232,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
                 m.user_data_size_bits = static_cast<int>(br.read_ubits(4));
             }
             m.compressed = br.read_bit();
-            if (br.overflowed() || bits > br.bits_left()) return fail(type, "svc_CreateStringTable обрізано");
+            if (br.overflowed() || bits > br.bits_left()) return fail(type, tr("svc_CreateStringTable обрізано"));
             if (want_tables) {
                 m.data_bits = bits;
                 m.data = br.read_bits_to_bytes(bits);
@@ -246,7 +247,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             m.table_id = static_cast<int>(br.read_ubits(kMaxTablesBits));
             m.changed_entries = br.read_bit() ? br.read_word() : 1;
             const uint32_t bits = br.read_ubits(20);
-            if (br.overflowed() || bits > br.bits_left()) return fail(type, "svc_UpdateStringTable обрізано");
+            if (br.overflowed() || bits > br.bits_left()) return fail(type, tr("svc_UpdateStringTable обрізано"));
             if (want_tables) {
                 m.data_bits = bits;
                 m.data = br.read_bits_to_bytes(bits);
@@ -269,7 +270,7 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             m.client = br.read_byte();
             m.proximity = br.read_byte() != 0;
             const uint32_t bits = br.read_word();
-            if (br.overflowed() || bits > br.bits_left()) return fail(type, "svc_VoiceData обрізано");
+            if (br.overflowed() || bits > br.bits_left()) return fail(type, tr("svc_VoiceData обрізано"));
             if (want_voice) {
                 m.data_bits = bits;
                 m.data = br.read_bits_to_bytes(bits);
@@ -341,14 +342,14 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             br.read_ubits(v.edict_bits);          // updated entries
             const uint32_t bits = br.read_ubits(v.packet_entities_len_bits);
             br.read_bit();                        // update baseline
-            if (br.overflowed() || bits > br.bits_left()) return fail(type, "svc_PacketEntities: довжина за межами пакета");
+            if (br.overflowed() || bits > br.bits_left()) return fail(type, tr("svc_PacketEntities: довжина за межами пакета"));
             skip_block(br, bits);
             break;
         }
         case svc_TempEntities: {
             br.read_ubits(8);   // кількість
             const uint32_t bits = br.read_varint32();
-            if (br.overflowed() || bits > br.bits_left()) return fail(type, "svc_TempEntities: довжина за межами пакета");
+            if (br.overflowed() || bits > br.bits_left()) return fail(type, tr("svc_TempEntities: довжина за межами пакета"));
             skip_block(br, bits);
             break;
         }
@@ -373,20 +374,20 @@ PacketParseResult parse_packet(const uint8_t* data, size_t size, const ProtocolV
             break;
         case svc_CmdKeyValues: {
             const uint32_t bytes = br.read_ubits(32);
-            if (bytes > br.bits_left() / 8) return fail(type, "svc_CmdKeyValues: довжина за межами пакета");
+            if (bytes > br.bits_left() / 8) return fail(type, tr("svc_CmdKeyValues: довжина за межами пакета"));
             skip_block(br, static_cast<size_t>(bytes) * 8);
             break;
         }
         case svc_GMod_ServerToClient: {
             const uint32_t bits = br.read_ubits(20);
-            if (bits > br.bits_left()) return fail(type, "svc_GMod_ServerToClient: довжина за межами пакета");
+            if (bits > br.bits_left()) return fail(type, tr("svc_GMod_ServerToClient: довжина за межами пакета"));
             raw(0, bits, &NetHandler::on_gmod_net);
             break;
         }
         default:
-            return fail(type, std::format("невідомий тип повідомлення {} (біт {})", type, msg_start));
+            return fail(type, trf("невідомий тип повідомлення {} (біт {})", type, msg_start));
         }
-        if (br.overflowed()) return fail(type, std::format("{} виходить за межі пакета", net_message_name(type)));
+        if (br.overflowed()) return fail(type, trf("{} виходить за межі пакета", net_message_name(type)));
         ++res.messages;
     }
     return res;

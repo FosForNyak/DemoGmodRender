@@ -1,4 +1,5 @@
 #include "log.hpp"
+#include "i18n.hpp"
 
 #include <atomic>
 #include <map>
@@ -32,8 +33,8 @@ const char* log_level_name(LogLevel level) {
     switch (level) {
     case LogLevel::Debug: return "DEBUG";
     case LogLevel::Info:  return "INFO";
-    case LogLevel::Warn:  return "УВАГА";
-    case LogLevel::Error: return "ПОМИЛКА";
+    case LogLevel::Warn:  return tr("УВАГА");
+    case LogLevel::Error: return tr("ПОМИЛКА");
     }
     return "?";
 }

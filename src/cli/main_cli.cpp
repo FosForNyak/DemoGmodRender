@@ -27,6 +27,7 @@
 #include "core/util/update_check.hpp"
 #include "core/util/strings.hpp"
 #include "core/voice/voice_decoder.hpp"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -64,7 +65,7 @@ static void on_sigint(int) { ++g_interrupts; }
 static PowerAction g_then = PowerAction::None;   // --then: що зробити після рендеру чи черги
 
 static void print_usage() {
-    std::puts(R"(GMod Demo Render — рендер демо Garry's Mod у відео (консольна версія)
+    std::puts(tr(R"(GMod Demo Render — рендер демо Garry's Mod у відео (консольна версія)
 
 Використання:
   gmdr-cli info <demo.dem> [--json] [--chat]   інформація про демо і голоси (--chat — увесь чат)
@@ -137,10 +138,11 @@ static void print_usage() {
   --rtx                  копія GMod RTX від RTXLauncher (її параметри запуску)
 Інше:
   --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
+  --lang en|uk           мова повідомлень (English / українська; або змінна GMDR_LANG)
   --no-crash-safe        звичайний MP4 під час запису (типово — фрагментами, вціліє при збої)
   --then shutdown|sleep  після рендеру чи черги вимкнути ПК або сон (60 с на скасування: Ctrl+C)
   encode: --prefix ПРЕФІКС  --wav ФАЙЛ  --demo ДЕМО.dem (для голосу)
-)");
+)"));
 }
 
 static std::vector<std::string> utf8_args(int argc, char** argv) {
@@ -209,7 +211,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     auto num = [&](const char* k, auto& field) {
         if (!c.has(k)) return true;
         auto v = parse_double(c.get(k));
-        if (!v) { err = std::format("неправильне значення {} '{}'", k, c.get(k)); return false; }
+        if (!v) { err = trf("неправильне значення {} '{}'", k, c.get(k)); return false; }
         field = static_cast<std::remove_reference_t<decltype(field)>>(*v);
         return true;
     };
@@ -218,13 +220,13 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--game-exe")) s.game_exe = c.get("--game-exe");
     if (c.has("--size")) {
         auto sz = parse_size(c.get("--size"));
-        if (!sz) { err = "неправильний --size"; return false; }
+        if (!sz) { err = tr("неправильний --size"); return false; }
         s.width = sz->first;
         s.height = sz->second;
     }
     if (c.has("--render-size")) {
         auto sz = parse_size(c.get("--render-size"));
-        if (!sz) { err = "неправильний --render-size"; return false; }
+        if (!sz) { err = tr("неправильний --render-size"); return false; }
         s.render_width = sz->first;
         s.render_height = sz->second;
     }
@@ -273,7 +275,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--keep-temp")) s.keep_temp_files = true;
     if (c.has("--window")) {
         const std::string w = c.get("--window");
-        if (w != "offscreen" && w != "behind" && w != "normal") { err = "--window: offscreen, behind або normal"; return false; }
+        if (w != "offscreen" && w != "behind" && w != "normal") { err = tr("--window: offscreen, behind або normal"); return false; }
         s.game_window = w;
     }
     if (c.has("--no-mute")) s.mute_game_sound = false;
@@ -287,12 +289,12 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--whisper-model")) s.whisper_model = c.get("--whisper-model");
     if (c.has("--speed")) {
         const auto v = parse_double(c.get("--speed"));
-        if (!v || *v < 0.1 || *v > 16) { err = "--speed: від 0.1 до 16 (0.5 — удвічі повільніше, 4 — учетверо швидше)"; return false; }
+        if (!v || *v < 0.1 || *v > 16) { err = tr("--speed: від 0.1 до 16 (0.5 — удвічі повільніше, 4 — учетверо швидше)"); return false; }
         s.speed = *v;
     }
     if (c.has("--speed-audio")) {
         const std::string v = c.get("--speed-audio");
-        if (v != "stretch" && v != "mute") { err = "--speed-audio: stretch (розтягнути) або mute (без звуку)"; return false; }
+        if (v != "stretch" && v != "mute") { err = tr("--speed-audio: stretch (розтягнути) або mute (без звуку)"); return false; }
         s.speed_audio = v;
     }
     if (c.has("--accurate-color")) s.accurate_color = true;
@@ -303,7 +305,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--also")) {
         std::string bad;
         if (!render::valid_version_ids(c.get("--also"), &bad)) {
-            err = "--also: невідома версія '" + bad + "' (є discord, 480p, vertical, master, thumb, gif, webp)";
+            err = tr("--also: невідома версія '") + bad + tr("' (є discord, 480p, vertical, master, thumb, gif, webp)");
             return false;
         }
         s.extra_versions = c.get("--also");
@@ -318,7 +320,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
             s.loudness_target = 0;
         } else {
             auto l = parse_double(v);
-            if (!l || *l > -5 || *l < -70) { err = "--loudness: число LUFS від -70 до -5 (напр. -14) або off"; return false; }
+            if (!l || *l > -5 || *l < -70) { err = tr("--loudness: число LUFS від -70 до -5 (напр. -14) або off"); return false; }
             s.loudness_target = *l;
         }
     }
@@ -328,7 +330,7 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
             for (const auto& item : split(c.get("--markers"), ';')) {
                 const size_t eq = item.find('=');
                 auto t = parse_timecode(trim(item.substr(0, eq)));
-                if (!t) { err = std::format("--markers: не розумію час у «{}»", trim(item)); return false; }
+                if (!t) { err = trf("--markers: не розумію час у «{}»", trim(item)); return false; }
                 render::add_marker(list, {static_cast<int32_t>(std::llround(*t / a->tick_interval)),
                                           eq == std::string::npos ? std::string() : trim(item.substr(eq + 1))});
             }
@@ -337,16 +339,16 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
         // Час: секунди або "год:хв:сек" / "хв:сек"
         if (c.has("--start")) {
             auto t = parse_timecode(c.get("--start"));
-            if (!t) { err = "неправильне значення --start (приклади: 95.5, 1:35, 1:02:03)"; return false; }
+            if (!t) { err = tr("неправильне значення --start (приклади: 95.5, 1:35, 1:02:03)"); return false; }
             s.start_tick = static_cast<int32_t>(std::llround(*t / a->tick_interval));
         }
         if (c.has("--end")) {
             auto t = parse_timecode(c.get("--end"));
-            if (!t) { err = "неправильне значення --end (приклади: 95.5, 1:35, 1:02:03)"; return false; }
+            if (!t) { err = tr("неправильне значення --end (приклади: 95.5, 1:35, 1:02:03)"); return false; }
             s.end_tick = static_cast<int32_t>(std::llround(*t / a->tick_interval));
         }
     }
-    if (!parse_rational(s.fps)) { err = "неправильне значення --fps"; return false; }
+    if (!parse_rational(s.fps)) { err = tr("неправильне значення --fps"); return false; }
     return true;
 }
 
@@ -361,20 +363,20 @@ static int run_job(render::Job& job) {
         if (g_interrupts > handled_interrupts) {
             handled_interrupts = g_interrupts;
             if (handled_interrupts == 1) {
-                std::fprintf(stderr, "\nЗупиняю (ще раз Ctrl+C — перервати негайно)...\n");
+                std::fprintf(stderr, tr("\nЗупиняю (ще раз Ctrl+C — перервати негайно)...\n"));
                 job.cancel();
             } else {
                 job.kill();
             }
         }
         const auto p = job.progress();
-        std::string line = std::format("[{}] {:5.1f}%  кадрів {}  відео {}", p.stage, std::max(0.0, p.fraction) * 100,
+        std::string line = trf("[{}] {:5.1f}%  кадрів {}  відео {}", p.stage, std::max(0.0, p.fraction) * 100,
                                        p.frames, format_duration(p.video_seconds));
-        if (p.demo_total > 0) line += std::format("  тік {}/{}", p.demo_tick, p.demo_total);
-        if (p.speed_fps > 0) line += std::format("  {:.1f} к/с", p.speed_fps);
-        if (p.eta >= 0) line += "  залишилось " + format_duration(p.eta);
-        if (p.pending_files > 0) line += std::format("  у черзі {}", p.pending_files);
-        if (p.game_paused) line += "  [гра на паузі]";
+        if (p.demo_total > 0) line += trf("  тік {}/{}", p.demo_tick, p.demo_total);
+        if (p.speed_fps > 0) line += trf("  {:.1f} к/с", p.speed_fps);
+        if (p.eta >= 0) line += tr("  залишилось ") + format_duration(p.eta);
+        if (p.pending_files > 0) line += trf("  у черзі {}", p.pending_files);
+        if (p.game_paused) line += tr("  [гра на паузі]");
         if (line != last_line) {
             std::fprintf(stderr, "\r%-150s", line.c_str());
             std::fflush(stderr);
@@ -393,31 +395,31 @@ static int run_job(render::Job& job) {
     int rc = 1;
     switch (job.state()) {
     case render::JobState::Succeeded:
-        std::printf("Готово: %s\n", job.result().c_str());
+        std::printf(tr("Готово: %s\n"), job.result().c_str());
         rc = 0;
         break;
     case render::JobState::Cancelled:
-        std::printf("Скасовано\n");
+        std::printf(tr("Скасовано\n"));
         return 2;   // зупинили вручну — вимикати ПК не треба
     default:
-        std::printf("Помилка: %s\n", job.error().c_str());
+        std::printf(tr("Помилка: %s\n"), job.error().c_str());
         break;
     }
     if (g_then != PowerAction::None) {
         // Хвилина, щоб передумати
         const int before = g_interrupts;
         for (int left = power_countdown_seconds(); left > 0; --left) {
-            std::fprintf(stderr, "\rПісля рендеру: %s через %2d с (Ctrl+C — скасувати)", power_action_name(g_then), left);
+            std::fprintf(stderr, tr("\rПісля рендеру: %s через %2d с (Ctrl+C — скасувати)"), power_action_name(g_then), left);
             std::fflush(stderr);
             for (int i = 0; i < 10 && g_interrupts == before; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (g_interrupts != before) {
-                std::fprintf(stderr, "\nСкасовано: %s не буде\n", power_action_name(g_then));
+                std::fprintf(stderr, tr("\nСкасовано: %s не буде\n"), power_action_name(g_then));
                 return rc;
             }
         }
         std::fprintf(stderr, "\n");
         std::string err;
-        if (!do_power_action(g_then, &err)) std::printf("Не вдалося %s: %s\n", power_action_name(g_then), err.c_str());
+        if (!do_power_action(g_then, &err)) std::printf(tr("Не вдалося %s: %s\n"), power_action_name(g_then), err.c_str());
     }
     return rc;
 }
@@ -428,7 +430,7 @@ static int cmd_info(const Cli& c) {
     try {
         a = demo::analyze_demo(path_from_utf8(c.positional[0]));
     } catch (const std::exception& e) {
-        std::printf("Помилка: %s\n", e.what());
+        std::printf(tr("Помилка: %s\n"), e.what());
         return 1;
     }
     auto v = voice::decode_voice(a);
@@ -473,25 +475,25 @@ static int cmd_info(const Cli& c) {
         std::printf("%s\n", j.dump().c_str());
         return 0;
     }
-    std::printf("Файл:        %s\n", c.positional[0].c_str());
-    std::printf("Карта:       %s\n", a.header.map_name.c_str());
-    std::printf("Сервер:      %s\n", a.header.server_name.c_str());
-    std::printf("Записав:     %s (слот %d)\n", a.header.client_name.c_str(), a.local_slot);
-    std::printf("Режим гри:   %s\n", a.server_info.gamemode.c_str());
-    std::printf("Тривалість:  %s (%d тіків, %.2f тік/с)\n", format_duration(a.duration_seconds).c_str(), a.last_tick,
+    std::printf(tr("Файл:        %s\n"), c.positional[0].c_str());
+    std::printf(tr("Карта:       %s\n"), a.header.map_name.c_str());
+    std::printf(tr("Сервер:      %s\n"), a.header.server_name.c_str());
+    std::printf(tr("Записав:     %s (слот %d)\n"), a.header.client_name.c_str(), a.local_slot);
+    std::printf(tr("Режим гри:   %s\n"), a.server_info.gamemode.c_str());
+    std::printf(tr("Тривалість:  %s (%d тіків, %.2f тік/с)\n"), format_duration(a.duration_seconds).c_str(), a.last_tick,
                 1.0 / a.tick_interval);
-    std::printf("Протокол:    демо %d, мережа %d, варіант [%s]\n", a.header.demo_protocol, a.header.network_protocol,
+    std::printf(tr("Протокол:    демо %d, мережа %d, варіант [%s]\n"), a.header.demo_protocol, a.header.network_protocol,
                 a.variant.describe().c_str());
-    std::printf("Пакетів:     %d (не розібрано повністю: %d)\n", a.packets_total, a.packets_failed);
-    std::printf("Гравців:     %zu, голосовий кодек: %s\n", a.players.size(), a.voice_codec.c_str());
+    std::printf(tr("Пакетів:     %d (не розібрано повністю: %d)\n"), a.packets_total, a.packets_failed);
+    std::printf(tr("Гравців:     %zu, голосовий кодек: %s\n"), a.players.size(), a.voice_codec.c_str());
     for (const auto& w : a.warnings) std::printf("  ! %s\n", w.c_str());
-    std::printf("\nГолоси (%zu):\n", v.speakers.size());
+    std::printf(tr("\nГолоси (%zu):\n"), v.speakers.size());
     for (const auto& s : v.speakers)
-        std::printf("  %-20s %-40s %6.1f с  %s\n", s.key.c_str(), s.display_name().c_str(), s.seconds,
-                    s.is_local ? "<- це ви" : "");
-    if (v.speakers.empty()) std::printf("  (немає)\n");
+        std::printf(tr("  %-20s %-40s %6.1f с  %s\n"), s.key.c_str(), s.display_name().c_str(), s.seconds,
+                    s.is_local ? tr("<- це ви") : "");
+    if (v.speakers.empty()) std::printf(tr("  (немає)\n"));
     for (const auto& w : v.warnings) std::printf("  ! %s\n", w.c_str());
-    std::printf("\nЧат і події: %zu повідомлень чату, %zu від сервера, %zu входів, %zu виходів\n",
+    std::printf(tr("\nЧат і події: %zu повідомлень чату, %zu від сервера, %zu входів, %zu виходів\n"),
                 a.count_events(demo::DemoEventKind::Chat), a.count_events(demo::DemoEventKind::Server),
                 a.count_events(demo::DemoEventKind::Join), a.count_events(demo::DemoEventKind::Leave));
     if (c.has("--chat")) std::printf("%s", demo::format_chat_log(a.events, a.tick_interval).c_str());
@@ -500,7 +502,7 @@ static int cmd_info(const Cli& c) {
 
 static int cmd_watch(const Cli& c) {
     if (c.positional.empty()) {
-        std::puts("Використання: gmdr-cli watch <demo.dem> [--from ЧАС] [--game-dir ПАПКА] [--game-exe ФАЙЛ] [--rtx]");
+        std::puts(tr("Використання: gmdr-cli watch <demo.dem> [--from ЧАС] [--game-dir ПАПКА] [--game-exe ФАЙЛ] [--rtx]"));
         return 1;
     }
     render::RenderSettings s;
@@ -512,20 +514,20 @@ static int cmd_watch(const Cli& c) {
         o.collect_voice = false;
         a = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(c.positional[0]), o));
     } catch (const std::exception& e) {
-        std::printf("Помилка: %s\n", e.what());
+        std::printf(tr("Помилка: %s\n"), e.what());
         return 1;
     }
     s.demo_path = c.positional[0];
     std::string err;
     if (!apply_options(c, s, a.get(), err)) {
-        std::printf("Помилка: %s\n", err.c_str());
+        std::printf(tr("Помилка: %s\n"), err.c_str());
         return 1;
     }
     int32_t from = std::max(0, s.start_tick);
     if (c.has("--from")) {
         auto t = parse_timecode(c.get("--from"));
         if (!t) {
-            std::puts("Неправильне значення --from (приклади: 95.5, 1:35, 1:02:03)");
+            std::puts(tr("Неправильне значення --from (приклади: 95.5, 1:35, 1:02:03)"));
             return 1;
         }
         from = static_cast<int32_t>(std::llround(*t / a->tick_interval));
@@ -539,14 +541,14 @@ static int cmd_watch(const Cli& c) {
     int32_t mstart = -1, mend = -1;
     for (const auto& m : marks) {
         const double t = m.tick * static_cast<double>(a->tick_interval);
-        std::printf("  %-8s %s (тік %d)\n", m.kind.c_str(), format_timecode(t).c_str(), m.tick);
+        std::printf(tr("  %-8s %s (тік %d)\n"), m.kind.c_str(), format_timecode(t).c_str(), m.tick);
         if (m.kind == "start") mstart = m.tick;
         else if (m.kind == "end") mend = m.tick;
-        else render::add_marker(saved, {m.tick, "Позначка з гри"});
+        else render::add_marker(saved, {m.tick, tr("Позначка з гри")});
     }
     if (!marks.empty()) render::save_demo_markers(store, s.demo_path, saved, nullptr);
     if (mstart >= 0 || mend >= 0)
-        std::printf("Рендер цього фрагмента: gmdr-cli render \"%s\"%s%s\n", s.demo_path.c_str(),
+        std::printf(tr("Рендер цього фрагмента: gmdr-cli render \"%s\"%s%s\n"), s.demo_path.c_str(),
                     mstart >= 0 ? std::format(" --start-tick {}", mstart).c_str() : "",
                     mend >= 0 ? std::format(" --end-tick {}", mend).c_str() : "");
     return rc;
@@ -554,15 +556,15 @@ static int cmd_watch(const Cli& c) {
 
 static int cmd_voice(const Cli& c) {
     if (c.positional.empty() || !c.has("--output")) {
-        std::puts("Використання: gmdr-cli voice <demo.dem> -o <папка> [--voice all|local|others] [--voice-keys ...]\n"
-                  "                      [--start СЕКУНД] [--end СЕКУНД] [--level-voices] [--denoise]");
+        std::puts(tr("Використання: gmdr-cli voice <demo.dem> -o <папка> [--voice all|local|others] [--voice-keys ...]\n"
+                  "                      [--start СЕКУНД] [--end СЕКУНД] [--level-voices] [--denoise]"));
         return 1;
     }
     auto a = std::make_shared<demo::DemoAnalysis>();
     try {
         *a = demo::analyze_demo(path_from_utf8(c.positional[0]));
     } catch (const std::exception& e) {
-        std::printf("Помилка: %s\n", e.what());
+        std::printf(tr("Помилка: %s\n"), e.what());
         return 1;
     }
     auto v = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*a));
@@ -571,12 +573,12 @@ static int cmd_voice(const Cli& c) {
     s.voice_mode = "all";
     std::string err;
     if (!apply_options(c, s, a.get(), err)) {
-        std::printf("Помилка: %s\n", err.c_str());
+        std::printf(tr("Помилка: %s\n"), err.c_str());
         return 1;
     }
     render::ExportVoicesJob job(s, a, v, path_from_utf8(c.get("--output")));
     const int r = run_job(job);
-    if (r == 0) std::printf("Кожен файл починається з того самого моменту демо — у програмі монтажу кладіть їх на початок.\n");
+    if (r == 0) std::printf(tr("Кожен файл починається з того самого моменту демо — у програмі монтажу кладіть їх на початок.\n"));
     return r;
 }
 
@@ -594,17 +596,17 @@ static bool load_base_settings(const Cli& c, render::RenderSettings& s, std::str
 // Розпізнати мовлення гравців і показати/зберегти репліки
 static int cmd_transcribe(const Cli& c) {
     if (c.positional.empty()) {
-        std::puts("Використання: gmdr-cli transcribe <demo.dem> [-o файл.txt|.srt|.json] [--language uk]\n"
+        std::puts(tr("Використання: gmdr-cli transcribe <demo.dem> [-o файл.txt|.srt|.json] [--language uk]\n"
                   "                      [--start ЧАС] [--end ЧАС] [--voice-keys ...] [--force]\n"
                   "                      [--whisper-cli ФАЙЛ] [--whisper-model ФАЙЛ]\n"
-                  "Потрібні whisper-cli і модель (тека whisper поруч із програмою). --force — розпізнати заново.");
+                  "Потрібні whisper-cli і модель (тека whisper поруч із програмою). --force — розпізнати заново."));
         return 1;
     }
     auto a = std::make_shared<demo::DemoAnalysis>();
     try {
         *a = demo::analyze_demo(path_from_utf8(c.positional[0]));
     } catch (const std::exception& e) {
-        std::printf("Помилка: %s\n", e.what());
+        std::printf(tr("Помилка: %s\n"), e.what());
         return 1;
     }
     auto v = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*a));
@@ -616,7 +618,7 @@ static int cmd_transcribe(const Cli& c) {
     s.start_tick = 0;
     s.end_tick = -1;
     if (!apply_options(c, s, a.get(), err)) {
-        std::printf("Помилка: %s\n", err.c_str());
+        std::printf(tr("Помилка: %s\n"), err.c_str());
         return 1;
     }
     if (c.has("--force")) {
@@ -626,13 +628,13 @@ static int cmd_transcribe(const Cli& c) {
     const bool range = c.has("--start") || c.has("--end");
     render::TranscribeJob job(s, a, v, range);
     const int rc = run_job(job);
-    const auto tr = job.transcript();
-    if (rc != 0 || !tr) return rc;
+    const auto ts = job.transcript();
+    if (rc != 0 || !ts) return rc;
     const double ti = a->tick_interval;
     const double from = range && s.start_tick > 0 ? s.start_tick * ti : 0.0;
     const double to = range && s.end_tick > 0 ? s.end_tick * ti : 1e18;
     std::vector<speech::Line> lines;
-    for (const auto& l : tr->lines)
+    for (const auto& l : ts->lines)
         if (l.start >= from && l.start < to) lines.push_back(l);
     std::string text;
     for (const auto& l : lines) text += std::format("[{}] {}: {}\n", format_duration(l.start), l.speaker, l.text);
@@ -647,15 +649,15 @@ static int cmd_transcribe(const Cli& c) {
         const double end = to < 1e17 ? to : a->last_tick * ti;
         body = render::make_transcript_srt(lines, {}, from, end - from);
     } else if (ext == ".json") {
-        speech::Transcript part = *tr;
+        speech::Transcript part = *ts;
         part.lines = lines;
         body = speech::transcript_to_json(part);
     }
     if (!write_file_text(out, body, &err)) {
-        std::printf("Не вдалося записати %s: %s\n", path_to_utf8(out).c_str(), err.c_str());
+        std::printf(tr("Не вдалося записати %s: %s\n"), path_to_utf8(out).c_str(), err.c_str());
         return 1;
     }
-    std::printf("Реплік: %zu — %s\n", lines.size(), path_to_utf8(out).c_str());
+    std::printf(tr("Реплік: %zu — %s\n"), lines.size(), path_to_utf8(out).c_str());
     return 0;
 }
 
@@ -668,24 +670,24 @@ static int cmd_whisper(const Cli& c) {
         for (size_t i = 0; i < models.size(); ++i)
             if (want == std::to_string(i + 1) || iequals(want, models[i].file)) m = &models[i];
         if (!m) {
-            std::printf("Невідома модель «%s» — див. список: gmdr-cli whisper\n", want.c_str());
+            std::printf(tr("Невідома модель «%s» — див. список: gmdr-cli whisper\n"), want.c_str());
             return 1;
         }
         render::DownloadJob job(speech::model_url(m->file), speech::models_download_dir() / m->file,
-                                std::string("модель ") + m->file);
+                                std::string(tr("модель ")) + m->file);
         return run_job(job);
     }
     std::string why;
     const auto tools = speech::find_whisper("", "", &why);
-    if (tools) std::printf("whisper-cli: %s\nМодель:      %s\n", path_to_utf8(tools->cli).c_str(), path_to_utf8(tools->model).c_str());
-    else std::printf("Розпізнавання недоступне: %s\n", why.c_str());
-    std::printf("\nМоделі (завантажити: gmdr-cli whisper --download N; тека %s):\n",
+    if (tools) std::printf(tr("whisper-cli: %s\nМодель:      %s\n"), path_to_utf8(tools->cli).c_str(), path_to_utf8(tools->model).c_str());
+    else std::printf(tr("Розпізнавання недоступне: %s\n"), why.c_str());
+    std::printf(tr("\nМоделі (завантажити: gmdr-cli whisper --download N; тека %s):\n"),
                 path_to_utf8(speech::models_download_dir()).c_str());
     for (size_t i = 0; i < models.size(); ++i) {
         std::error_code ec;
         const bool have = fs::exists(speech::models_download_dir() / models[i].file, ec);
-        std::printf("  %zu. %-30s %5d МБ  %s%s\n", i + 1, models[i].file, models[i].size_mb, models[i].label,
-                    have ? "  [є]" : "");
+        std::printf(tr("  %zu. %-30s %5d МБ  %s%s\n"), i + 1, models[i].file, models[i].size_mb, models[i].label,
+                    have ? tr("  [є]") : "");
     }
     return tools ? 0 : 1;
 }
@@ -723,12 +725,12 @@ static int cmd_report(const Cli& c) {
     std::vector<std::string> contents;
     std::string err;
     if (!render::make_problem_report(out, in, &contents, &err)) {
-        std::printf("Не вдалося створити звіт: %s\n", err.c_str());
+        std::printf(tr("Не вдалося створити звіт: %s\n"), err.c_str());
         return 1;
     }
-    std::printf("Звіт: %s\n", path_to_utf8(out).c_str());
+    std::printf(tr("Звіт: %s\n"), path_to_utf8(out).c_str());
     for (const auto& n : contents) std::printf("  %s\n", n.c_str());
-    std::puts("Шлях до профілю Windows у текстах замінено на %USERPROFILE%. Перегляньте архів перед тим, як надіслати.");
+    std::puts(tr("Шлях до профілю Windows у текстах замінено на %USERPROFILE%. Перегляньте архів перед тим, як надіслати."));
     return 0;
 }
 
@@ -745,15 +747,15 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
         }
     } else {
         if (common.positional.empty()) {
-            std::puts("Використання: gmdr-cli queue <список.txt> [спільні параметри]\n"
+            std::puts(tr("Використання: gmdr-cli queue <список.txt> [спільні параметри]\n"
                       "  Рядок списку: демо і його параметри, напр.\n"
                       "    \"C:\\demos\\match.dem\" --start 5:00 --end 7:30 -o \"D:\\video\\бій.mp4\"\n"
-                      "  Порожні рядки і рядки з # пропускаються.");
+                      "  Порожні рядки і рядки з # пропускаються."));
             return 1;
         }
         auto text = read_file_text(path_from_utf8(common.positional[0]));
         if (!text) {
-            std::printf("Не вдалося прочитати %s\n", common.positional[0].c_str());
+            std::printf(tr("Не вдалося прочитати %s\n"), common.positional[0].c_str());
             return 1;
         }
         if (text->rfind("\xEF\xBB\xBF", 0) == 0) text->erase(0, 3);   // BOM
@@ -773,7 +775,7 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
         if (fs::is_directory(path_from_utf8(o), ec) || o.ends_with('\\') || o.ends_with('/')) {
             out_dir = path_from_utf8(o);
         } else {
-            std::puts("Для черги -o має бути папкою (куди класти відео); файл для окремого пункту — -o у його рядку.");
+            std::puts(tr("Для черги -o має бути папкою (куди класти відео); файл для окремого пункту — -o у його рядку."));
             return 1;
         }
     }
@@ -788,27 +790,27 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
             else merged.opts[k] = v;
         }
         if (lines[i].positional.empty()) {
-            std::printf("Пункт %zu: не вказано демо\n", i + 1);
+            std::printf(tr("Пункт %zu: не вказано демо\n"), i + 1);
             return 1;
         }
         const std::string demo_path = lines[i].positional[0];
         render::RenderSettings s;
         std::string err;
         if (!load_base_settings(merged, s, err)) {
-            std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
+            std::printf(tr("Не вдалося прочитати конфіг: %s\n"), err.c_str());
             return 1;
         }
         std::shared_ptr<demo::DemoAnalysis> analysis;
         try {
             analysis = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(demo_path)));
         } catch (const std::exception& e) {
-            std::printf("Пункт %zu (%s): %s\n", i + 1, demo_path.c_str(), e.what());
+            std::printf(tr("Пункт %zu (%s): %s\n"), i + 1, demo_path.c_str(), e.what());
             return 1;
         }
         s.demo_path = demo_path;
         s.markers = render::format_markers(render::load_demo_markers(app_data_dir() / "gmdr_markers.json", demo_path));
         if (!apply_options(merged, s, analysis.get(), err)) {
-            std::printf("Пункт %zu: %s\n", i + 1, err.c_str());
+            std::printf(tr("Пункт %zu: %s\n"), i + 1, err.c_str());
             return 1;
         }
         if (s.output_path.empty()) {
@@ -827,13 +829,13 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
         std::printf("%zu. %s  %s → %s\n", i + 1, path_to_utf8(path_from_utf8(demo_path).filename()).c_str(),
                     s.start_tick > 0 || s.end_tick > 0
                         ? std::format("{}–{}", format_duration(std::max(0, s.start_tick) * analysis->tick_interval),
-                                      s.end_tick > 0 ? format_duration(s.end_tick * analysis->tick_interval) : "кінець").c_str()
-                        : "усе демо",
+                                      s.end_tick > 0 ? format_duration(s.end_tick * analysis->tick_interval) : tr("кінець")).c_str()
+                        : tr("усе демо"),
                     s.output_path.c_str());
         items.push_back(std::move(s));
     }
     if (items.empty()) {
-        std::puts("Черга порожня");
+        std::puts(tr("Черга порожня"));
         return 1;
     }
     render::QueueJob job(std::move(items));
@@ -842,7 +844,7 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
 
 static int cmd_encoders(const Cli& c) {
     const bool test = c.has("--test");
-    std::printf("%-22s %-10s %-9s %s\n", "Кодек", "Формат", "Тип", test ? "Перевірка" : "Опис");
+    std::printf("%-22s %-10s %-9s %s\n", tr("Кодек"), tr("Формат"), tr("Тип"), test ? tr("Перевірка") : tr("Опис"));
     for (const auto& e : media::list_encoders(true)) {
         std::string status;
         if (test && e.hardware) {
@@ -852,7 +854,7 @@ static int cmd_encoders(const Cli& c) {
             vs.height = 720;
             media::VideoEncoder enc;
             std::string err;
-            status = enc.open(vs, 1280, 720, false, &err) ? "ПРАЦЮЄ" : "недоступний";
+            status = enc.open(vs, 1280, 720, false, &err) ? tr("ПРАЦЮЄ") : tr("недоступний");
         }
         std::printf("%-22s %-10s %-9s %s\n", e.name.c_str(), e.codec_name.c_str(),
                     e.hardware ? ("GPU/" + e.vendor).c_str() : "CPU", test ? status.c_str() : e.long_name.c_str());
@@ -865,22 +867,22 @@ static int cmd_driver(const Cli& c) {
     std::optional<game::GModInstall> g = c.has("--game-dir") ? game::gmod_from_dir(path_from_utf8(c.get("--game-dir")))
                                                               : game::detect_gmod();
     if (!g) {
-        std::puts("Garry's Mod не знайдено — вкажіть --game-dir");
+        std::puts(tr("Garry's Mod не знайдено — вкажіть --game-dir"));
         return 1;
     }
     std::printf("Garry's Mod: %s\n", path_to_utf8(g->root).c_str());
     for (const auto& e : g->executables) std::printf("  %s\n", path_to_utf8(e).c_str());
     std::string err;
     if (action == "install") {
-        if (!game::install_driver(*g, &err)) { std::printf("Помилка: %s\n", err.c_str()); return 1; }
-        std::puts("Драйвер встановлено");
+        if (!game::install_driver(*g, &err)) { std::printf(tr("Помилка: %s\n"), err.c_str()); return 1; }
+        std::puts(tr("Драйвер встановлено"));
     } else if (action == "uninstall") {
-        if (!game::uninstall_driver(*g, &err)) { std::printf("Помилка: %s\n", err.c_str()); return 1; }
-        std::puts("Драйвер видалено");
+        if (!game::uninstall_driver(*g, &err)) { std::printf(tr("Помилка: %s\n"), err.c_str()); return 1; }
+        std::puts(tr("Драйвер видалено"));
     } else {
         const auto st = game::driver_state(*g);
-        std::printf("Драйвер: %s\n", st == game::DriverState::Installed ? "встановлено"
-                                     : st == game::DriverState::Outdated ? "застарів (переустановіть)" : "не встановлено");
+        std::printf(tr("Драйвер: %s\n"), st == game::DriverState::Installed ? tr("встановлено")
+                                     : st == game::DriverState::Outdated ? tr("застарів (переустановіть)") : tr("не встановлено"));
     }
     return 0;
 }
@@ -893,6 +895,13 @@ int main(int argc, char** argv) {
     install_crash_handler(app_data_dir());
     const auto args = utf8_args(argc, argv);
     Cli c = parse_cli(args);
+    // Мова повідомлень: --lang en|uk, змінна GMDR_LANG; типово — українська (як і в скриптах)
+    {
+        std::string lang = c.get("--lang");
+        if (lang.empty())
+            if (const char* e = std::getenv("GMDR_LANG")) lang = e;
+        set_ui_language(lang == "en" ? "en" : "uk");
+    }
     if (c.command == "--version" || c.command == "version" || c.has("--version")) {
         std::puts("GMod Demo Render " GMDR_VERSION);
         return 0;
@@ -904,7 +913,7 @@ int main(int argc, char** argv) {
     if (c.has("--then")) {
         const auto a = parse_power_action(to_lower(c.get("--then")));
         if (!a) {
-            std::puts("--then: shutdown (вимкнути ПК), sleep (сон) або none");
+            std::puts(tr("--then: shutdown (вимкнути ПК), sleep (сон) або none"));
             return 1;
         }
         g_then = *a;
@@ -912,7 +921,7 @@ int main(int argc, char** argv) {
     const bool verbose = c.has("-v") || c.has("--verbose");
     set_min_log_level(verbose ? LogLevel::Debug : LogLevel::Info);
     add_log_sink([](LogLevel l, const std::string& msg) {
-        const char* prefix = l == LogLevel::Error ? "ПОМИЛКА: " : l == LogLevel::Warn ? "УВАГА: " : "";
+        const char* prefix = l == LogLevel::Error ? tr("ПОМИЛКА: ") : l == LogLevel::Warn ? tr("УВАГА: ") : "";
         std::fprintf(stderr, "\r%s%-100s\n", prefix, msg.c_str());
     });
     media::install_ffmpeg_log_bridge(verbose ? AV_LOG_INFO : AV_LOG_ERROR);
@@ -929,13 +938,13 @@ int main(int argc, char** argv) {
         std::string err;
         auto r = fetch_latest_release(kUpdateRepo, &err);
         if (!r) {
-            std::printf("Не вдалося перевірити оновлення: %s\n", err.c_str());
+            std::printf(tr("Не вдалося перевірити оновлення: %s\n"), err.c_str());
             return 1;
         }
         if (compare_versions(r->version, GMDR_VERSION) > 0)
-            std::printf("Є нова версія %s (у вас %s): %s\n", r->version.c_str(), GMDR_VERSION, r->url.c_str());
+            std::printf(tr("Є нова версія %s (у вас %s): %s\n"), r->version.c_str(), GMDR_VERSION, r->url.c_str());
         else
-            std::printf("У вас остання версія (%s)\n", GMDR_VERSION);
+            std::printf(tr("У вас остання версія (%s)\n"), GMDR_VERSION);
         return 0;
     }
     if (c.command == "voice") return cmd_voice(c);
@@ -956,7 +965,7 @@ int main(int argc, char** argv) {
         render::RenderSettings s;
         std::string err;
         if (!load_base_settings(c, s, err)) {
-            std::printf("Не вдалося прочитати конфіг: %s\n", err.c_str());
+            std::printf(tr("Не вдалося прочитати конфіг: %s\n"), err.c_str());
             return 1;
         }
         std::shared_ptr<demo::DemoAnalysis> analysis;
@@ -966,17 +975,17 @@ int main(int argc, char** argv) {
             try {
                 analysis = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(demo_path)));
             } catch (const std::exception& e) {
-                std::printf("Помилка: %s\n", e.what());
+                std::printf(tr("Помилка: %s\n"), e.what());
                 return 1;
             }
             voices = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*analysis));
             s.demo_path = demo_path;
             s.markers = render::format_markers(render::load_demo_markers(app_data_dir() / "gmdr_markers.json", demo_path));
-            std::printf("Демо: %s, %s, голосів: %zu\n", analysis->header.map_name.c_str(),
+            std::printf(tr("Демо: %s, %s, голосів: %zu\n"), analysis->header.map_name.c_str(),
                         format_duration(analysis->duration_seconds).c_str(), voices->speakers.size());
         }
         if (!apply_options(c, s, analysis.get(), err)) {
-            std::printf("Помилка: %s\n", err.c_str());
+            std::printf(tr("Помилка: %s\n"), err.c_str());
             return 1;
         }
         if (c.has("--save-config")) render::save_settings(s, c.get("--save-config"), nullptr);
@@ -988,7 +997,7 @@ int main(int argc, char** argv) {
                                     c.has("--wav") ? path_from_utf8(c.get("--wav")) : fs::path(), analysis, voices);
         return run_job(job);
     }
-    std::printf("Невідома команда '%s'\n\n", c.command.c_str());
+    std::printf(tr("Невідома команда '%s'\n\n"), c.command.c_str());
     print_usage();
     return 1;
 }

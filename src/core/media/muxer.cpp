@@ -2,6 +2,7 @@
 
 #include "../util/log.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -16,7 +17,7 @@ bool Muxer::open(const std::string& path, const std::string& format_name, std::s
     const char* fmt_name = format_name.empty() ? nullptr : format_name.c_str();
     int r = avformat_alloc_output_context2(&fmt_ctx_, nullptr, fmt_name, path.c_str());
     if (r < 0 || !fmt_ctx_) {
-        if (error) *error = std::format("невідомий формат вихідного файлу '{}' (перевірте розширення)", path);
+        if (error) *error = trf("невідомий формат вихідного файлу '{}' (перевірте розширення)", path);
         return false;
     }
     return true;
@@ -67,7 +68,7 @@ bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
     if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
         int r = avio_open(&fmt_ctx_->pb, path_.c_str(), AVIO_FLAG_WRITE);
         if (r < 0) {
-            if (error) *error = std::format("не вдалося створити файл '{}': {}", path_, av_error_string(r));
+            if (error) *error = trf("не вдалося створити файл '{}': {}", path_, av_error_string(r));
             return false;
         }
     }
@@ -86,7 +87,7 @@ bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
     int r = avformat_write_header(fmt_ctx_, &opts);
     av_dict_free(&opts);
     if (r < 0) {
-        if (error) *error = "не вдалося записати заголовок файлу: " + av_error_string(r);
+        if (error) *error = tr("не вдалося записати заголовок файлу: ") + av_error_string(r);
         return false;
     }
     header_written_ = true;
@@ -101,7 +102,7 @@ bool Muxer::write_packet(int stream_index, AVPacket* pkt, AVRational enc_tb) {
     pkt->stream_index = stream_index;
     const int r = av_interleaved_write_frame(fmt_ctx_, pkt);
     if (r < 0) {
-        error_ = "помилка запису у файл: " + av_error_string(r);
+        error_ = tr("помилка запису у файл: ") + av_error_string(r);
         return false;
     }
     return true;
@@ -117,7 +118,7 @@ bool Muxer::finish(std::string* error) {
     avformat_free_context(fmt_ctx_);
     fmt_ctx_ = nullptr;
     if (r < 0) {
-        if (error) *error = "помилка завершення файлу: " + av_error_string(r);
+        if (error) *error = tr("помилка завершення файлу: ") + av_error_string(r);
         return false;
     }
     return true;
@@ -150,18 +151,18 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
     AVFormatContext* in = nullptr;
     int r = avformat_open_input(&in, path.c_str(), nullptr, nullptr);
     if (r < 0) {
-        if (error) *error = "не вдалося відкрити файл для переупаковки: " + av_error_string(r);
+        if (error) *error = tr("не вдалося відкрити файл для переупаковки: ") + av_error_string(r);
         return false;
     }
     InputCtxPtr in_guard(in);
     if ((r = avformat_find_stream_info(in, nullptr)) < 0) {
-        if (error) *error = "не вдалося прочитати файл: " + av_error_string(r);
+        if (error) *error = tr("не вдалося прочитати файл: ") + av_error_string(r);
         return false;
     }
     AVFormatContext* out = nullptr;
     avformat_alloc_output_context2(&out, nullptr, nullptr, tmp.c_str());
     if (!out) {
-        if (error) *error = "невідомий формат файлу";
+        if (error) *error = tr("невідомий формат файлу");
         return false;
     }
     struct OutGuard {
@@ -179,7 +180,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
         if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO && type != AVMEDIA_TYPE_SUBTITLE) continue;
         AVStream* os = avformat_new_stream(out, nullptr);
         if (!os || avcodec_parameters_copy(os->codecpar, is->codecpar) < 0) {
-            if (error) *error = "не вдалося скопіювати параметри потоку";
+            if (error) *error = tr("не вдалося скопіювати параметри потоку");
             return false;
         }
         os->codecpar->codec_tag = is->codecpar->codec_tag;
@@ -204,7 +205,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
     if (!chapters->empty()) {
         out->chapters = static_cast<AVChapter**>(av_calloc(chapters->size(), sizeof(AVChapter*)));
         if (!out->chapters) {
-            if (error) *error = "недостатньо пам'яті";
+            if (error) *error = tr("недостатньо пам'яті");
             return false;
         }
         for (const auto& c : *chapters) {
@@ -219,7 +220,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
         }
     }
     if ((r = avio_open(&out->pb, tmp.c_str(), AVIO_FLAG_WRITE)) < 0) {
-        if (error) *error = "не вдалося створити тимчасовий файл: " + av_error_string(r);
+        if (error) *error = tr("не вдалося створити тимчасовий файл: ") + av_error_string(r);
         return false;
     }
     AVDictionary* opts = nullptr;
@@ -227,7 +228,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
     r = avformat_write_header(out, &opts);
     av_dict_free(&opts);
     if (r < 0) {
-        if (error) *error = "не вдалося записати заголовок: " + av_error_string(r);
+        if (error) *error = tr("не вдалося записати заголовок: ") + av_error_string(r);
         return false;
     }
     PacketPtr pkt = make_packet();
@@ -243,12 +244,12 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
         const int w = av_interleaved_write_frame(out, pkt.get());
         av_packet_unref(pkt.get());
         if (w < 0) {
-            if (error) *error = "помилка запису: " + av_error_string(w);
+            if (error) *error = tr("помилка запису: ") + av_error_string(w);
             return false;
         }
     }
     if ((r = av_write_trailer(out)) < 0) {
-        if (error) *error = "помилка завершення файлу: " + av_error_string(r);
+        if (error) *error = tr("помилка завершення файлу: ") + av_error_string(r);
         return false;
     }
     avio_closep(&out->pb);
@@ -260,7 +261,7 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
         std::filesystem::rename(path_from_utf8(tmp), path_from_utf8(path), ec);
     }
     if (ec) {
-        if (error) *error = "не вдалося замінити файл: " + ec.message();
+        if (error) *error = tr("не вдалося замінити файл: ") + ec.message();
         return false;
     }
     return true;

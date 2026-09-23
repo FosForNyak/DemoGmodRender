@@ -3,6 +3,7 @@
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
 #include "../util/vdf.hpp"
+#include "../util/i18n.hpp"
 
 #include <cstdlib>
 #include <format>
@@ -23,8 +24,8 @@ namespace gmdr::game {
 std::string GModInstall::exe_label(const fs::path& exe) {
     const std::string name = path_to_utf8(exe.filename());
     const std::string parent = path_to_utf8(exe.parent_path().filename());
-    if (parent == "win64" || parent == "linux64") return std::format("64-біт ({})", name);
-    return std::format("32-біт ({})", name);
+    if (parent == "win64" || parent == "linux64") return trf("64-біт ({})", name);
+    return trf("32-біт ({})", name);
 }
 
 std::optional<GModInstall> gmod_from_dir(const fs::path& dir_in) {
@@ -97,7 +98,7 @@ std::vector<fs::path> steam_library_folders(std::vector<std::string>* log) {
         if (!text) continue;
         auto tree = vdf::parse(*text);
         if (!tree) {
-            if (log) log->push_back("Не вдалося розібрати " + path_to_utf8(vdf_path));
+            if (log) log->push_back(tr("Не вдалося розібрати ") + path_to_utf8(vdf_path));
             continue;
         }
         const vdf::Node* lf = tree->child("libraryfolders");
@@ -110,7 +111,7 @@ std::vector<fs::path> steam_library_folders(std::vector<std::string>* log) {
         }
     }
     if (log)
-        for (const auto& l : libs) log->push_back("Бібліотека Steam: " + path_to_utf8(l));
+        for (const auto& l : libs) log->push_back(tr("Бібліотека Steam: ") + path_to_utf8(l));
     return libs;
 }
 
@@ -127,11 +128,11 @@ std::optional<GModInstall> detect_gmod(std::vector<std::string>* log) {
             continue;
         }
         if (auto g = gmod_from_dir(lib / "steamapps" / "common" / path_from_utf8(installdir))) {
-            if (log) log->push_back("Знайдено Garry's Mod: " + path_to_utf8(g->root));
+            if (log) log->push_back(tr("Знайдено Garry's Mod: ") + path_to_utf8(g->root));
             return g;
         }
     }
-    if (log) log->push_back("Garry's Mod не знайдено автоматично — вкажіть папку вручну");
+    if (log) log->push_back(tr("Garry's Mod не знайдено автоматично — вкажіть папку вручну"));
     return std::nullopt;
 }
 

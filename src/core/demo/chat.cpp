@@ -3,6 +3,7 @@
 #include "../util/json.hpp"
 #include "bitreader.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 #include <cmath>
 #include <format>
@@ -189,9 +190,9 @@ std::string format_event(const DemoEvent& e) {
     case DemoEventKind::Chat:
         return (e.channel.empty() || e.channel == "global" ? "" : "(" + e.channel + ") ") + e.who + ": " + e.text;
     case DemoEventKind::Server: return "* " + e.text;
-    case DemoEventKind::Join: return "→ " + e.who + " зайшов на сервер";
-    case DemoEventKind::Leave: return "← " + e.who + " вийшов" + (e.text.empty() ? "" : " (" + e.text + ")");
-    case DemoEventKind::NameChange: return e.who + " тепер " + e.text;
+    case DemoEventKind::Join: return "→ " + e.who + tr(" зайшов на сервер");
+    case DemoEventKind::Leave: return "← " + e.who + tr(" вийшов") + (e.text.empty() ? "" : " (" + e.text + ")");
+    case DemoEventKind::NameChange: return e.who + tr(" тепер ") + e.text;
     case DemoEventKind::Kill: return "☠ " + e.text;
     }
     return e.text;

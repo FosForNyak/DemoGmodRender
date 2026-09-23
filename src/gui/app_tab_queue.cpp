@@ -12,6 +12,7 @@
 #include "core/util/strings.hpp"
 
 #include "imgui.h"
+#include "core/util/i18n.hpp"
 
 #include <algorithm>
 #include <format>
@@ -35,7 +36,7 @@ void App::load_queue() {
         q.tick_interval = e["tick_interval"].as_number(0);
         if (!q.s.demo_path.empty()) queue_.push_back(std::move(q));
     }
-    if (!queue_.empty()) log_info("Черга рендерів: {} пункт(ів) з минулого разу — вкладка «Черга»", queue_.size());
+    if (!queue_.empty()) log_info("{}", trf("Черга рендерів: {} пункт(ів) з минулого разу — вкладка «Черга»", queue_.size()));
 }
 
 void App::save_queue() {
@@ -87,7 +88,7 @@ void App::push_queue_entry(QueueEntry q) {
             }
         }
     }
-    log_info("До черги: {} → {}", path_to_utf8(path_from_utf8(q.s.demo_path).filename()), q.s.output_path);
+    log_info("{}", trf("До черги: {} → {}", path_to_utf8(path_from_utf8(q.s.demo_path).filename()), q.s.output_path));
     queue_.push_back(std::move(q));
     save_queue();
 }
@@ -95,8 +96,8 @@ void App::push_queue_entry(QueueEntry q) {
 void App::start_queue() {
     if (queue_.empty() || job_running()) return;
     if (!gmod_) {
-        popup_title_ = "Не знайдено Garry's Mod";
-        popup_text_ = "Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).";
+        popup_title_ = tr("Не знайдено Garry's Mod");
+        popup_text_ = tr("Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).");
         open_popup_ = true;
         return;
     }
@@ -128,13 +129,13 @@ void App::draw_tab_queue() {
     auto* running = dynamic_cast<render::QueueJob*>(job_.get());
     const bool active = running && running->running();
     const auto results = running ? running->results() : std::vector<render::QueueJob::ItemResult>{};
-    ImGui::TextWrapped("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
-                       "пункту вона не закривається, а одразу вмикає наступне демо.");
-    ImGui::TextColored(kColDim, "Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» внизу. "
-                                "Ціле демо — правим кліком на вкладці «Демо».");
+    ImGui::TextWrapped("%s", tr("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
+                             "пункту вона не закривається, а одразу вмикає наступне демо."));
+    ImGui::TextColored(kColDim, "%s", tr("Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» внизу. "
+                                      "Ціле демо — правим кліком на вкладці «Демо»."));
     ImGui::Spacing();
     if (queue_.empty()) {
-        ImGui::TextColored(kColDim, "Черга порожня.");
+        ImGui::TextColored(kColDim, "%s", tr("Черга порожня."));
         return;
     }
     int move_from = -1, move_to = -1, remove = -1;
@@ -142,9 +143,9 @@ void App::draw_tab_queue() {
                           ImVec2(0, std::max(ImGui::GetFrameHeightWithSpacing() * 4,
                                              ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.2f)))) {
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, fs_ * 1.6f);
-        ImGui::TableSetupColumn("Демо і фрагмент", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Файл", ImGuiTableColumnFlags_WidthStretch, 1.3f);
-        ImGui::TableSetupColumn("Стан", ImGuiTableColumnFlags_WidthFixed, fs_ * 6.5f);
+        ImGui::TableSetupColumn(tr("Демо і фрагмент"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn(tr("Файл"), ImGuiTableColumnFlags_WidthStretch, 1.3f);
+        ImGui::TableSetupColumn(tr("Стан"), ImGuiTableColumnFlags_WidthFixed, fs_ * 6.5f);
         ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, fs_ * 5.2f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
@@ -155,10 +156,10 @@ void App::draw_tab_queue() {
             ImGui::TableNextColumn();
             ImGui::Text("%zu", i + 1);
             ImGui::TableNextColumn();
-            std::string range = "усе демо";
+            std::string range = tr("усе демо");
             if ((q.s.start_tick > 0 || q.s.end_tick > 0) && q.tick_interval > 0)
                 range = format_duration(std::max(0, q.s.start_tick) * q.tick_interval) + " – " +
-                        (q.s.end_tick > 0 ? format_duration(q.s.end_tick * q.tick_interval) : std::string("кінець"));
+                        (q.s.end_tick > 0 ? format_duration(q.s.end_tick * q.tick_interval) : std::string(tr("кінець")));
             ImGui::TextUnformatted(path_to_utf8(path_from_utf8(q.s.demo_path).filename()).c_str());
             ImGui::SameLine();
             ImGui::TextColored(kColDim, "%s", range.c_str());
@@ -171,15 +172,15 @@ void App::draw_tab_queue() {
             ImGui::TableNextColumn();
             if (running && i < results.size()) {
                 const auto& r = results[i];
-                if (active && static_cast<int>(i) == running->current_index()) ImGui::TextColored(kColAccent, "рендер...");
-                else if (r.state == render::JobState::Succeeded) ImGui::TextColored(kColOk, "✓ готово");
+                if (active && static_cast<int>(i) == running->current_index()) ImGui::TextColored(kColAccent, "%s", tr("рендер..."));
+                else if (r.state == render::JobState::Succeeded) ImGui::TextColored(kColOk, "%s", tr("✓ готово"));
                 else if (r.state == render::JobState::Failed) {
-                    ImGui::TextColored(kColErr, "✗ помилка");
+                    ImGui::TextColored(kColErr, "%s", tr("✗ помилка"));
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.error.c_str());
-                } else if (r.state == render::JobState::Cancelled) ImGui::TextColored(kColDim, "скасовано");
-                else ImGui::TextColored(kColDim, "чекає");
+                } else if (r.state == render::JobState::Cancelled) ImGui::TextColored(kColDim, "%s", tr("скасовано"));
+                else ImGui::TextColored(kColDim, "%s", tr("чекає"));
             } else {
-                ImGui::TextColored(kColDim, "чекає");
+                ImGui::TextColored(kColDim, "%s", tr("чекає"));
             }
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(active);
@@ -192,7 +193,7 @@ void App::draw_tab_queue() {
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (ImGui::SmallButton("✕")) remove = static_cast<int>(i);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Прибрати з черги");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Прибрати з черги"));
             ImGui::EndDisabled();
             ImGui::PopID();
         }
@@ -209,22 +210,22 @@ void App::draw_tab_queue() {
     ImGui::BeginDisabled(job_running() || queue_.empty());
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.30f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.66f, 0.36f, 1.0f));
-    if (ImGui::Button(std::format("Почати чергу ({})", queue_.size()).c_str(), ImVec2(fs_ * 11, 0))) start_queue();
+    if (ImGui::Button(trf("Почати чергу ({})", queue_.size()).c_str(), ImVec2(fs_ * 11, 0))) start_queue();
     ImGui::PopStyleColor(2);
     ImGui::SameLine();
-    if (ImGui::Button("Очистити")) {
+    if (ImGui::Button(tr("Очистити"))) {
         queue_.clear();
         save_queue();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::TextColored(kColDim, "  Потім:");
+    ImGui::TextColored(kColDim, "%s", tr("  Потім:"));
     ImGui::SameLine();
     draw_after_done_combo();
     ImGui::SameLine();
-    help_marker("Якщо пункт не вдасться (чи гра впаде), черга піде далі — наступний пункт запустить гру заново. "
+    help_marker(tr("Якщо пункт не вдасться (чи гра впаде), черга піде далі — наступний пункт запустить гру заново. "
                 "Розмір вікна гри, RTX і параметри запуску беруться з пункту; якщо вони інші, ніж у попереднього, "
-                "гра перезапуститься. Готові пункти після черги зникають зі списку, невдалі лишаються.");
+                "гра перезапуститься. Готові пункти після черги зникають зі списку, невдалі лишаються."));
 }
 
 } // namespace gmdr::gui

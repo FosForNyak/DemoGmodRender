@@ -3,6 +3,7 @@
 #include "../media/ffmpeg_util.hpp"
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
+#include "../util/i18n.hpp"
 
 extern "C" {
 #include <libavfilter/avfilter.h>
@@ -39,7 +40,7 @@ bool AudioFilterChain::open(const std::string& chain, int inputs, int channels, 
     AVFilterInOut* ins = nullptr;    // вхід abuffersink = вихід ланцюжка
     auto fail = [&](const char* what, int r) {
         if (error)
-            *error = std::format("фільтр звуку «{}»: {}{}", chain, what, r < 0 ? " (" + media::av_error_string(r) + ")" : "");
+            *error = trf("фільтр звуку «{}»: {}{}", chain, what, r < 0 ? " (" + media::av_error_string(r) + ")" : "");
         avfilter_inout_free(&outs);
         avfilter_inout_free(&ins);
         avfilter_graph_free(&graph_);
@@ -49,7 +50,7 @@ bool AudioFilterChain::open(const std::string& chain, int inputs, int channels, 
     };
     if (!frame_) frame_ = av_frame_alloc();
     graph_ = avfilter_graph_alloc();
-    if (!graph_ || !frame_) return fail("немає пам'яті", 0);
+    if (!graph_ || !frame_) return fail(tr("немає пам'яті"), 0);
     graph_->nb_threads = 1;   // графів може бути багато (по одному на голос) — без власних потоків
     const char* layout = channels == 1 ? "mono" : "stereo";
     const std::string args =
@@ -63,7 +64,7 @@ bool AudioFilterChain::open(const std::string& chain, int inputs, int channels, 
         if (r < 0) return fail("abuffer", r);
         src_.push_back(src);
         AVFilterInOut* io = avfilter_inout_alloc();
-        if (!io) return fail("немає пам'яті", 0);
+        if (!io) return fail(tr("немає пам'яті"), 0);
         io->name = av_strdup(name.c_str());
         io->filter_ctx = src;
         io->pad_idx = 0;
@@ -74,7 +75,7 @@ bool AudioFilterChain::open(const std::string& chain, int inputs, int channels, 
     int r = avfilter_graph_create_filter(&sink_, avfilter_get_by_name("abuffersink"), "out", nullptr, nullptr, graph_);
     if (r < 0) return fail("abuffersink", r);
     ins = avfilter_inout_alloc();
-    if (!ins) return fail("немає пам'яті", 0);
+    if (!ins) return fail(tr("немає пам'яті"), 0);
     ins->name = av_strdup("out");
     ins->filter_ctx = sink_;
     ins->pad_idx = 0;
@@ -84,9 +85,9 @@ bool AudioFilterChain::open(const std::string& chain, int inputs, int channels, 
     const std::string desc = std::format("{}{},aformat=sample_fmts=flt:sample_rates={}:channel_layouts={}[out]",
                                          inputs == 1 ? "[in0]" : "", chain, kMixRate, layout);
     r = avfilter_graph_parse_ptr(graph_, desc.c_str(), &ins, &outs, nullptr);
-    if (r < 0) return fail("не розібрано", r);
+    if (r < 0) return fail(tr("не розібрано"), r);
     r = avfilter_graph_config(graph_, nullptr);
-    if (r < 0) return fail("не налаштовано", r);
+    if (r < 0) return fail(tr("не налаштовано"), r);
     avfilter_inout_free(&outs);
     avfilter_inout_free(&ins);
     return true;
@@ -109,7 +110,7 @@ bool AudioFilterChain::push(int input, const float* data, size_t frames, std::st
     }
     av_frame_free(&f);
     if (r < 0) {
-        if (error) *error = std::format("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
+        if (error) *error = trf("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
         return false;
     }
     pushed_[static_cast<size_t>(input)] += static_cast<int64_t>(frames);
@@ -121,7 +122,7 @@ bool AudioFilterChain::finish(std::string* error) {
     for (AVFilterContext* src : src_) {
         const int r = av_buffersrc_add_frame_flags(src, nullptr, 0);   // кінець потоку
         if (r < 0 && r != AVERROR_EOF) {
-            if (error) *error = std::format("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
+            if (error) *error = trf("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
             return false;
         }
     }
@@ -133,7 +134,7 @@ bool AudioFilterChain::drain(std::string* error) {
         const int r = av_buffersink_get_frame(sink_, frame_);
         if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
         if (r < 0) {
-            if (error) *error = std::format("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
+            if (error) *error = trf("фільтр звуку «{}»: {}", chain_, media::av_error_string(r));
             return false;
         }
         int64_t pos = out_end();

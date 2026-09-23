@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../media/ffmpeg_util.hpp"
+#include "../util/i18n.hpp"
 #include "../voice/voice_decoder.hpp"
 #include "audio_filter.hpp"
 #include "voice_clean.hpp"
@@ -48,7 +49,7 @@ class GameAudioInput final : public AudioInput {
 public:
     // offset_seconds > 0 — затримати звук гри, < 0 — зсунути раніше.
     GameAudioInput(std::filesystem::path wav_path, bool live, double offset_seconds);
-    std::string name() const override { return "Звук гри"; }
+    std::string name() const override { return tr("Звук гри"); }
     int64_t available() override;
     void mix(int64_t pos, float* out, size_t frames, float gain) override;
     void discard_before(int64_t pos) override;
@@ -83,7 +84,7 @@ class VoiceInput final : public AudioInput {
 public:
     // origin_sample — позиція (у семплах 48 кГц від тіку 0), що відповідає початку відео.
     VoiceInput(const voice::SpeakerTrack* track, int64_t origin_sample, double extra_delay_seconds);
-    std::string name() const override { return "Голос: " + track_->display_name(); }
+    std::string name() const override { return tr("Голос: ") + track_->display_name(); }
     int64_t available() override { return INT64_MAX; }
     void mix(int64_t pos, float* out, size_t frames, float gain) override;
 
@@ -104,7 +105,7 @@ public:
     ~FileAudioInput() override;
     bool ok() const { return ok_; }
     const std::string& error() const { return error_; }
-    std::string name() const override { return "Файл: " + name_; }
+    std::string name() const override { return tr("Файл: ") + name_; }
     int64_t available() override { return INT64_MAX; }
     void mix(int64_t pos, float* out, size_t frames, float gain) override;
     void discard_before(int64_t pos) override;

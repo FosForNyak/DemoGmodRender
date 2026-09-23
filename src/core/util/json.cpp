@@ -1,4 +1,5 @@
 #include "json.hpp"
+#include "i18n.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -40,18 +41,18 @@ public:
         auto v = parse_value();
         skip_ws();
         if (v && pos_ != t_.size()) {
-            fail("зайві символи після JSON");
+            fail(tr("зайві символи після JSON"));
             v.reset();
         }
-        if (!v && error) *error = std::format("JSON: {} (позиція {})", err_, pos_);
+        if (!v && error) *error = trf("JSON: {} (позиція {})", err_, pos_);
         return v;
     }
 
 private:
     std::optional<Value> parse_value() {
-        if (++depth_ > 64) { fail("надто глибока вкладеність"); return std::nullopt; }
+        if (++depth_ > 64) { fail(tr("надто глибока вкладеність")); return std::nullopt; }
         struct DepthGuard { int& d; ~DepthGuard() { --d; } } guard{depth_};
-        if (pos_ >= t_.size()) { fail("неочікуваний кінець"); return std::nullopt; }
+        if (pos_ >= t_.size()) { fail(tr("неочікуваний кінець")); return std::nullopt; }
         const char c = t_[pos_];
         if (c == '{') return parse_object();
         if (c == '[') return parse_array();
@@ -73,11 +74,11 @@ private:
         if (peek() == '}') { ++pos_; return obj; }
         for (;;) {
             skip_ws();
-            if (peek() != '"') { fail("очікувався ключ"); return std::nullopt; }
+            if (peek() != '"') { fail(tr("очікувався ключ")); return std::nullopt; }
             auto key = parse_string();
             if (!key) return std::nullopt;
             skip_ws();
-            if (peek() != ':') { fail("очікувалась ':'"); return std::nullopt; }
+            if (peek() != ':') { fail(tr("очікувалась ':'")); return std::nullopt; }
             ++pos_;
             skip_ws();
             auto v = parse_value();
@@ -86,7 +87,7 @@ private:
             skip_ws();
             if (peek() == ',') { ++pos_; continue; }
             if (peek() == '}') { ++pos_; return obj; }
-            fail("очікувалась ',' або '}'");
+            fail(tr("очікувалась ',' або '}'"));
             return std::nullopt;
         }
     }
@@ -104,7 +105,7 @@ private:
             skip_ws();
             if (peek() == ',') { ++pos_; continue; }
             if (peek() == ']') { ++pos_; return arr; }
-            fail("очікувалась ',' або ']'");
+            fail(tr("очікувалась ',' або ']'"));
             return std::nullopt;
         }
     }
@@ -129,11 +130,11 @@ private:
             case 't': out += '\t'; break;
             case 'u': {
                 uint32_t cp = 0;
-                if (!read_hex4(cp)) { fail("погана \\u послідовність"); return std::nullopt; }
+                if (!read_hex4(cp)) { fail(tr("погана \\u послідовність")); return std::nullopt; }
                 if (cp >= 0xD800 && cp <= 0xDBFF && t_.substr(pos_, 2) == "\\u") {
                     pos_ += 2;
                     uint32_t lo = 0;
-                    if (!read_hex4(lo)) { fail("погана сурогатна пара"); return std::nullopt; }
+                    if (!read_hex4(lo)) { fail(tr("погана сурогатна пара")); return std::nullopt; }
                     cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                 }
                 append_utf8(out, cp);
@@ -142,7 +143,7 @@ private:
             default: out += e; break;
             }
         }
-        fail("незакритий рядок");
+        fail(tr("незакритий рядок"));
         return std::nullopt;
     }
 
@@ -167,11 +168,11 @@ private:
             if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E') ++pos_;
             else break;
         }
-        if (start == pos_) { fail("неочікуваний символ"); return std::nullopt; }
+        if (start == pos_) { fail(tr("неочікуваний символ")); return std::nullopt; }
         const std::string num(t_.substr(start, pos_ - start));
         char* end = nullptr;
         const double d = std::strtod(num.c_str(), &end);
-        if (end != num.c_str() + num.size()) { fail("погане число"); return std::nullopt; }
+        if (end != num.c_str() + num.size()) { fail(tr("погане число")); return std::nullopt; }
         return Value::number(d);
     }
 
