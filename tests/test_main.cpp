@@ -56,6 +56,8 @@
 #include "core/voice/voice_decoder.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <complex>
 #include <cstring>
@@ -63,6 +65,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <string>
 #include <thread>
@@ -702,9 +705,24 @@ static void test_frame_pipe() {
         return;
     }
     const std::string movie = frames::pipe_movie_name(path_to_utf8(dir), prefix);   // як отримає гра
+    std::mutex fail_mutex;
+    std::string fail_log;
+    auto note_failure = [&](const std::string& what) {
+#ifdef _WIN32
+        const unsigned long code = GetLastError();
+#else
+        const unsigned long code = 0;
+#endif
+        const int e = errno;
+        std::lock_guard lock(fail_mutex);
+        fail_log += std::format("  не відкрилось: {} (errno {}, код {})\n", what, e, code);
+    };
     auto write = [&](int k, const std::vector<uint8_t>& bytes, size_t n) {
         std::FILE* f = audio::open_file_utf8(path_from_utf8(std::format("{}{:04d}.tga", movie, k)), "wb");
-        if (!f) return false;
+        if (!f) {
+            note_failure(std::format("кадр {} ({} байт)", k, n));
+            return false;
+        }
         if (n > 0) std::fwrite(bytes.data(), 1, n, f);
         std::fclose(f);
         return true;
@@ -718,6 +736,7 @@ static void test_frame_pipe() {
         auto wav_write = [&](const std::vector<uint8_t>& b, const char* mode) {
             std::FILE* f = audio::open_file_utf8(path_from_utf8(movie + ".wav"), mode);
             if (!f) {
+                note_failure(std::format("звук, {} байт, \"{}\"", b.size(), mode));
                 ++write_failures;
                 return;
             }
@@ -767,12 +786,14 @@ static void test_frame_pipe() {
         reader->set_producer_done();
     }
     CHECK(write_failures == 0);
+    if (!fail_log.empty()) std::printf("%s", fail_log.c_str());
     CHECK(got == total - 2);   // без пропущеного номера й обрізаного кадру
     CHECK(order_ok);
     CHECK(pixels_ok);
     CHECK(reader->skipped() == 2);
     CHECK(reader->saw_any_file());
     CHECK(reader->audio_connected());
+    CHECK(reader->audio_flowing());
     CHECK(reader->bytes_received() > 0);
     reader.reset();
     // На диску — жодного файлу кадру (FIFO прибрано разом із читачем)

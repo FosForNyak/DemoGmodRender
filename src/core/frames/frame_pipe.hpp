@@ -72,6 +72,8 @@ public:
     bool ok() const { return ok_; }
     // Гра вже писала звук у канал (Windows; на Linux WAV — звичайний файл, завжди true).
     bool audio_connected() const { return audio_connected_.load(); }
+    // Каналом іде сам звук, а не лише заголовок WAV (Windows; на Linux завжди true).
+    bool audio_flowing() const { return audio_bytes_.load() > 44 || !audio_via_pipe_; }
     // Скільки байтів кадрів прийшло каналом (для журналу).
     uint64_t bytes_received() const { return bytes_received_.load(); }
 
@@ -126,6 +128,8 @@ private:
     std::atomic<bool>           stop_{false};
     std::atomic<bool>           connected_{false};
     std::atomic<bool>           audio_connected_{false};
+    std::atomic<uint64_t>       audio_bytes_{0};
+    bool                        audio_via_pipe_ = false;
     std::atomic<int>            audio_clients_{0};
     std::atomic<int64_t>        audio_last_data_ms_{0};
     std::atomic<int64_t>        delivered_{0};

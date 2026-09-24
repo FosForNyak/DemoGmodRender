@@ -1964,12 +1964,13 @@ void RenderJob::run() {
             recording_seen = true;
             last_frame_t = Clock::now();
             if (auto* pr = pipe_of(); pr && !pipe_announced) {
-                // Звук рушій пише так само, як кадри (на Windows — теж у канал); його WAV створюється
-                // разом із початком запису, тож до першого кадру вже має бути
-                if (s_.audio && s_.game_audio && !pr->audio_connected()) {
-                    for (const auto t0 = Clock::now(); !pr->audio_connected() && Clock::now() - t0 < std::chrono::seconds(3);)
+                // Звук рушій пише так само, як кадри (на Windows — теж у канал): WAV створюється разом
+                // із початком запису, а далі дописується з кожним кадром. Поки кодування не почалось,
+                // гра встигає записати ще з десяток кадрів (їх приймає канал) — а з ними і звук.
+                if (s_.audio && s_.game_audio && !pr->audio_flowing()) {
+                    for (const auto t0 = Clock::now(); !pr->audio_flowing() && Clock::now() - t0 < std::chrono::seconds(3);)
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                    if (!pr->audio_connected() && !pipe_strict_ && !session.started()) {
+                    if (!pr->audio_flowing() && !pipe_strict_ && !session.started()) {
                         img.release();
                         if (fall_back_to_files(tr("Кадри йдуть каналом, а звук гри — ні."))) continue;
                         fatal(tr("Не вдалося перезапустити гру, щоб писати кадри файлами."));

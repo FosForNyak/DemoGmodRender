@@ -251,9 +251,10 @@ struct FramePipeReader::Io {
         }
         if (!ensure(0, opt.lookahead, error)) return false;
         if (opt.audio) {
-            // Два примірники: поки один закривається після шматка звуку, гра вже може відкрити другий
+            // Кілька примірників: рушій дописує звук шматками, щоразу відкриваючи "файл" заново, і поки
+            // програма заново чекає на щойно закритому, гра вже відкриває наступний
             const std::wstring name = server_name(opt.prefix + ".wav");
-            for (int i = 0; i < 2; ++i) {
+            for (int i = 0; i < 4; ++i) {
                 auto w = std::make_unique<WavPipe>();
                 w->pipe = create_pipe(name, i == 0, PIPE_UNLIMITED_INSTANCES, 64 * 1024);
                 if (w->pipe == INVALID_HANDLE_VALUE) {
@@ -503,6 +504,7 @@ FramePipeReader::FramePipeReader(PipeOptions opt) : opt_(std::move(opt)), io_(st
     ok_ = true;
 #ifdef _WIN32
     audio_connected_ = !opt_.audio;
+    audio_via_pipe_ = opt_.audio;
 #else
     audio_connected_ = true;   // WAV гра пише звичайним файлом поруч
 #endif
@@ -743,6 +745,7 @@ void FramePipeReader::audio_loop() {
         }
         std::fwrite(data, 1, n, tee);
         std::fflush(tee);
+        audio_bytes_ += n;
     };
     auto connected = [&] {
         audio_connected_ = true;
