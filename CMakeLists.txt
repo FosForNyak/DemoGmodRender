@@ -15,7 +15,7 @@ cmake_minimum_required(VERSION 3.20)
 if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)   # FFMPEG_ROOT як шлях пошуку FFmpeg
 endif()
-project(GModDemoRender VERSION 1.2.0 LANGUAGES C CXX)
+project(GModDemoRender VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 # Версія — лише тут: у програмі (GMDR_VERSION), у звіті і в ресурсі .exe (app.rc)
