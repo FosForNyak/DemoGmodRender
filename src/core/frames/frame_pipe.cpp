@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <vector>
 
@@ -45,6 +46,12 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 constexpr size_t kMinFrameBuffer = 1u << 20;   // перший кадр: далі буфер — під розмір попереднього
 constexpr size_t kReadSlack = 4096;            // запас, щоб останнє читання (кінець каналу) не збільшувало буфер
 constexpr int    kMaxEmptyOpens = 5;           // гра відкривала "файл" кадру, нічого не записавши
+// Примірників каналу звуку, що чекають. Рушій дописує звук шматками, щоразу відкриваючи "файл"
+// заново; якщо саме тоді всі примірники ще зайняті (програма не встигла знову чекати на щойно
+// закритих), відкриття не вдається (ERROR_PIPE_BUSY) — і шматок звуку губиться. Примірник без
+// даних майже нічого не коштує, тож їх із запасом: гра мала б відкрити звук стільки разів поспіль
+// (кадр за кадром), жодного разу не давши програмі процесорного часу.
+constexpr int    kWavInstances = 32;
 
 std::string frame_name(const std::string& prefix, int64_t index, const std::string& ext) {
     return std::format("{}{:04d}{}", prefix, index, ext);   // як "%s%04d.tga" у рушії
@@ -161,12 +168,12 @@ struct FrameSlot {
     }
 };
 
-// Канал звуку <prefix>.wav: рушій може відкривати його багато разів (дописує шматками)
+// Примірник каналу звуку <prefix>.wav: рушій відкриває його багато разів (дописує шматками)
 struct WavPipe {
-    enum class St { Idle, Connecting, Issue, Reading, Failed };
+    enum class St { Listening, Connected, Reading, Failed };
     HANDLE               pipe = INVALID_HANDLE_VALUE;
     Overlapped           ov;
-    St                   st = St::Idle;
+    St                   st = St::Failed;
     std::vector<uint8_t> buf = std::vector<uint8_t>(64 * 1024);
 
     WavPipe() = default;
@@ -174,12 +181,31 @@ struct WavPipe {
     WavPipe& operator=(const WavPipe&) = delete;
     ~WavPipe() {
         if (pipe == INVALID_HANDLE_VALUE) return;
-        if (st == St::Connecting || st == St::Reading) {
+        if (st == St::Listening || st == St::Reading) {
             DWORD n = 0;
             CancelIoEx(pipe, &ov.ov);
             GetOverlappedResult(pipe, &ov.ov, &n, TRUE);
         }
         CloseHandle(pipe);
+    }
+    // Чекати, поки гра відкриє звук. true — гра вже з'єдналася (тоді пакета завершення не буде)
+    bool arm() {
+        ov.reset();
+        if (ConnectNamedPipe(pipe, &ov.ov)) {
+            st = St::Listening;   // завершилось одразу — пакет завершення однаково прийде
+            return false;
+        }
+        const DWORD e = GetLastError();
+        if (e == ERROR_IO_PENDING) {
+            st = St::Listening;
+            return false;
+        }
+        if (e == ERROR_PIPE_CONNECTED || e == ERROR_NO_DATA) {
+            st = St::Connected;
+            return true;
+        }
+        st = St::Failed;
+        return false;
     }
 };
 #endif
@@ -218,13 +244,14 @@ struct FramePipeReader::Io {
     std::map<int64_t, std::unique_ptr<FrameSlot>> slots;
     std::vector<std::unique_ptr<WavPipe>>         wav;
     HANDLE                                        wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);   // set_producer_done
-    HANDLE                                        stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // Звук: порт завершення — пакети в ньому стоять у тому порядку, в якому гра відкривала канал
+    HANDLE                                        port = nullptr;
 
     ~Io() {
         slots.clear();
-        wav.clear();
+        wav.clear();   // скасувати й дочекатися операцій раніше, ніж закриється порт
         if (wake) CloseHandle(wake);
-        if (stop) CloseHandle(stop);
+        if (port) CloseHandle(port);
     }
 
     std::string path(int64_t index) const {
@@ -245,19 +272,22 @@ struct FramePipeReader::Io {
 
     bool open(const PipeOptions& o, std::string* error) {
         opt = o;
-        if (!wake || !stop) {
+        if (!wake) {
             if (error) *error = tr("не вдалося створити подію");
             return false;
         }
         if (!ensure(0, opt.lookahead, error)) return false;
         if (opt.audio) {
-            // Кілька примірників: рушій дописує звук шматками, щоразу відкриваючи "файл" заново, і поки
-            // програма заново чекає на щойно закритому, гра вже відкриває наступний
+            port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
+            if (!port) {
+                if (error) *error = tr("не вдалося створити подію");
+                return false;
+            }
             const std::wstring name = server_name(opt.prefix + ".wav");
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < kWavInstances; ++i) {
                 auto w = std::make_unique<WavPipe>();
                 w->pipe = create_pipe(name, i == 0, PIPE_UNLIMITED_INSTANCES, 64 * 1024);
-                if (w->pipe == INVALID_HANDLE_VALUE) {
+                if (w->pipe == INVALID_HANDLE_VALUE || !CreateIoCompletionPort(w->pipe, port, static_cast<ULONG_PTR>(i), 0)) {
                     if (error) *error = trf("не вдалося створити канал звуку (код {})", GetLastError());
                     return false;
                 }
@@ -522,7 +552,7 @@ FramePipeReader::~FramePipeReader() {
     if (io_) {
         io_->wake_up();
 #ifdef _WIN32
-        SetEvent(io_->stop);
+        if (io_->port) PostQueuedCompletionStatus(io_->port, 0, static_cast<ULONG_PTR>(-1), nullptr);
 #endif
     }
     cv_room_.notify_all();
@@ -725,12 +755,17 @@ void FramePipeReader::io_loop() {
 
 void FramePipeReader::audio_loop() {
 #ifdef _WIN32
-    // Звук гри: усе, що рушій пише в <prefix>.wav (скільки б разів він його не відкривав), —
-    // по порядку у звичайний WAV у тимчасовій папці. Його читає звук гри, як і з файлами.
+    // Звук гри: усе, що рушій пише в <prefix>.wav (скільки б разів він його не відкривав), — у
+    // звичайний WAV у тимчасовій папці, строго в порядку відкриттів: з'єднання — у черзі в порядку
+    // пакетів порту завершення, і кожне дочитується до кінця, перш ніж братися за наступне (гра
+    // закриває шматок раніше, ніж відкриває наступний). Цей WAV читає звук гри, як і з файлами.
     Io& io = *io_;
+    // Знову чекати на щойно закритому примірнику треба швидше, ніж гра відкриє звук наступного разу, —
+    // тож цей потік не стоїть у черзі за потоками кодування
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     const fs::path tee_path = opt_.dir / path_from_utf8(opt_.prefix + ".wav");
     std::FILE* tee = nullptr;
-    bool tee_failed = false;
+    bool tee_failed = false, warned = false;
     auto write_tee = [&](const uint8_t* data, size_t n) {
         audio_last_data_ms_ = now_ms();
         if (n == 0 || tee_failed) return;
@@ -747,89 +782,76 @@ void FramePipeReader::audio_loop() {
         std::fflush(tee);
         audio_bytes_ += n;
     };
-    auto connected = [&] {
+    std::deque<size_t> order;   // з'єднані примірники в порядку з'єднання
+    bool reading = false;       // читання голови черги в дорозі
+    auto connected = [&](size_t i) {
         audio_connected_ = true;
         ++audio_clients_;
         audio_last_data_ms_ = now_ms();
+        order.push_back(i);
     };
-    auto disconnect = [&](WavPipe& w) {
-        --audio_clients_;
-        DisconnectNamedPipe(w.pipe);
-        w.st = WavPipe::St::Idle;
-    };
-    // Крок стану одного примірника каналу: з'єднання → читання ... → гра закрила → знову чекати
-    auto advance = [&](WavPipe& w) {
-        for (int guard = 0; guard < 256; ++guard) {
-            switch (w.st) {
-            case WavPipe::St::Failed: return;
-            case WavPipe::St::Idle: {
-                w.ov.reset();
-                if (ConnectNamedPipe(w.pipe, &w.ov.ov)) {
-                    connected();
-                    w.st = WavPipe::St::Issue;
-                    break;
-                }
-                const DWORD e = GetLastError();
-                if (e == ERROR_IO_PENDING) {
-                    w.st = WavPipe::St::Connecting;
-                    return;
-                }
-                if (e == ERROR_PIPE_CONNECTED || e == ERROR_NO_DATA) {
-                    connected();
-                    w.st = WavPipe::St::Issue;
-                    break;
-                }
-                log_warn("{}", trf("Канал звуку гри: помилка очікування (код {})", e));
-                w.st = WavPipe::St::Failed;
-                return;
-            }
-            case WavPipe::St::Connecting: {
-                if (!w.ov.signaled()) return;
-                DWORD n = 0;
-                if (GetOverlappedResult(w.pipe, &w.ov.ov, &n, FALSE) || GetLastError() == ERROR_PIPE_CONNECTED ||
-                    GetLastError() == ERROR_NO_DATA) {
-                    connected();
-                    w.st = WavPipe::St::Issue;
-                } else {
-                    DisconnectNamedPipe(w.pipe);
-                    w.st = WavPipe::St::Idle;
-                    return;   // спробуємо знову на наступному проході
-                }
-                break;
-            }
-            case WavPipe::St::Issue: {
-                w.ov.reset();
-                if (ReadFile(w.pipe, w.buf.data(), static_cast<DWORD>(w.buf.size()), nullptr, &w.ov.ov) ||
-                    GetLastError() == ERROR_IO_PENDING) {
-                    w.st = WavPipe::St::Reading;   // і синхронне завершення подає подію
-                    break;
-                }
-                disconnect(w);   // гра вже закрила свій кінець
-                break;
-            }
-            case WavPipe::St::Reading: {
-                if (!w.ov.signaled()) return;
-                DWORD n = 0;
-                const BOOL r = GetOverlappedResult(w.pipe, &w.ov.ov, &n, FALSE);
-                const DWORD e = r ? ERROR_SUCCESS : GetLastError();
-                write_tee(w.buf.data(), n);
-                if (r || e == ERROR_MORE_DATA) w.st = WavPipe::St::Issue;
-                else disconnect(w);
-                break;
-            }
-            }
+    auto arm = [&](size_t i) {
+        if (io.wav[i]->arm()) connected(i);
+        else if (io.wav[i]->st == WavPipe::St::Failed && !warned) {
+            warned = true;
+            log_warn("{}", trf("Канал звуку гри: помилка очікування (код {})", GetLastError()));
         }
     };
-    while (!stop_) {
-        for (auto& w : io.wav) advance(*w);
-        std::vector<HANDLE> h;
-        for (auto& w : io.wav)
-            if (w->st == WavPipe::St::Connecting || w->st == WavPipe::St::Reading) h.push_back(w->ov.ov.hEvent);
-        h.push_back(io.stop);
-        WaitForMultipleObjects(static_cast<DWORD>(h.size()), h.data(), FALSE, 50);
-    }
+    // Гра закрила голову черги: цей примірник знову чекає
+    auto finish_head = [&] {
+        const size_t i = order.front();
+        order.pop_front();
+        reading = false;
+        --audio_clients_;
+        DisconnectNamedPipe(io.wav[i]->pipe);
+        arm(i);
+    };
+    // Читати голову черги (результат прийде пакетом у порт)
+    auto start_read = [&] {
+        while (!reading && !order.empty()) {
+            WavPipe& w = *io.wav[order.front()];
+            w.ov.reset();
+            w.st = WavPipe::St::Reading;
+            if (ReadFile(w.pipe, w.buf.data(), static_cast<DWORD>(w.buf.size()), nullptr, &w.ov.ov) ||
+                GetLastError() == ERROR_IO_PENDING) {
+                reading = true;
+                return;
+            }
+            w.st = WavPipe::St::Connected;   // гра вже закрила, даних більше нема — пакета не буде
+            finish_head();
+        }
+    };
+    // Один пакет порту: з'єднання або прочитаний шматок
+    auto handle = [&](int timeout_ms) {
+        start_read();
+        DWORD n = 0;
+        ULONG_PTR key = 0;
+        OVERLAPPED* ov = nullptr;
+        const BOOL ok = GetQueuedCompletionStatus(io.port, &n, &key, &ov, static_cast<DWORD>(timeout_ms));
+        const DWORD err = ok ? ERROR_SUCCESS : GetLastError();
+        if (!ov || key >= io.wav.size()) return false;   // час вийшов або зупинка
+        WavPipe& w = *io.wav[key];
+        if (w.st == WavPipe::St::Listening) {
+            if (ok || err == ERROR_PIPE_CONNECTED || err == ERROR_NO_DATA) {
+                w.st = WavPipe::St::Connected;
+                connected(key);
+            } else {
+                DisconnectNamedPipe(w.pipe);
+                arm(key);
+            }
+        } else if (w.st == WavPipe::St::Reading) {
+            write_tee(w.buf.data(), n);
+            reading = false;
+            w.st = WavPipe::St::Connected;
+            if (!ok && err != ERROR_MORE_DATA) finish_head();   // гра закрила свій кінець
+        }
+        return true;
+    };
+    for (size_t i = 0; i < io.wav.size(); ++i) arm(i);
+    while (!stop_) handle(50);
     // Те, що вже прийшло, дописуємо; незавершені операції скасовуються разом із каналами
-    for (auto& w : io.wav) advance(*w);
+    for (int guard = 0; guard < 10000 && handle(0); ++guard) {
+    }
     if (tee) std::fclose(tee);
 #endif
 }
