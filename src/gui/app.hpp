@@ -163,6 +163,7 @@ private:
     void poll();
     void mark_dirty() { dirty_ = true; }
     void save_settings_now();
+    void set_language_after_restart(const std::string& code);
     void set_container(const std::string& ext);
     std::string current_container() const;
     void refresh_codec_lists();

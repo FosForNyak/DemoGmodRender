@@ -1670,11 +1670,11 @@ static void test_game_audio_segments() {
 // фільтр "галюцинацій", покриття відрізків і субтитри з текстом
 static void test_i18n() {
     std::printf("[i18n]\n");
+    CHECK(ui_language() == "uk");
     CHECK(translation_count() > 1000);
-    CHECK(ui_language() == UiLang::Uk);
     CHECK(std::string(tr("Звук гри")) == "Звук гри");
     set_ui_language("en");
-    CHECK(ui_language() == UiLang::En);
+    CHECK(ui_language() == "en");
     CHECK(std::string(tr("Звук гри")) == "Game audio");
     CHECK(trf("Знайдено: {}", "C:/x") == "Found: C:/x");
     CHECK(std::string(tr("Огляд...##mic")) == "Browse...##mic");
@@ -1684,11 +1684,29 @@ static void test_i18n() {
     // Немає перекладу — лишається як є (імена гравців, шляхи тощо)
     CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
     CHECK(std::string(tr("")).empty());
+    // Інші мови: чого ще немає в мові — англійською; невідома мова — англійська
+    CHECK(ui_languages().size() == 21 && std::string(ui_languages()[0].code) == "uk" && std::string(ui_languages()[1].code) == "en");
+    set_ui_language("xx");
+    CHECK(ui_language() == "en");
+    set_ui_language("pt");
+    CHECK(ui_language() == "pt-BR");
+    for (const auto& l : ui_languages()) {
+        set_ui_language(l.code);
+        CHECK(ui_language() == l.code);
+        CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
+        CHECK(std::string(tr("")).empty());
+        if (std::string(l.code) != "uk") {
+            const std::string t = tr("Почати рендер");
+            CHECK(!t.empty() && t != "Почати рендер");
+            CHECK(trf("Знайдено: {}", "C:/x").find("C:/x") != std::string::npos);
+        }
+    }
+    CHECK(std::string(tr_lang("en", "Мова")) == "Language");
     set_ui_language("uk");
-    CHECK(ui_language() == UiLang::Uk);
+    CHECK(ui_language() == "uk");
     CHECK(std::string(tr("Огляд...##mic")) == "Огляд...##mic");
     const std::string sys = system_ui_language();
-    CHECK(sys == "uk" || sys == "en");
+    CHECK(std::any_of(ui_languages().begin(), ui_languages().end(), [&](const UiLanguage& l) { return sys == l.code; }));
 }
 
 // Переклад і озвучення: запити сервісів, розстановка фраз, мікс, мукс доріжок, ключі

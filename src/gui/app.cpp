@@ -448,6 +448,17 @@ void App::export_voices(const std::string& dir) {
     job_->start();
 }
 
+// Мова інтерфейсу змінюється з перезапуском: повідомлення — уже вибраною мовою
+void App::set_language_after_restart(const std::string& code) {
+    s_.ui_language = code;
+    mark_dirty();
+    popup_title_ = tr_lang(code, N_("Мова"));
+    popup_text_ = tr_lang(code, N_("Мова зміниться після перезапуску програми."));
+    popup_result_.clear();
+    popup_checks_.clear();
+    open_popup_ = true;
+}
+
 void App::save_settings_now() {
     std::string err;
     if (!render::save_settings(s_, settings_path_, &err)) log_debug("Не вдалося зберегти налаштування: {}", err);
@@ -744,17 +755,8 @@ void App::draw_menus() {
         // Мова інтерфейсу: назви мов — кожна своєю мовою, щоб знайти свою
         if (ImGui::BeginMenu("Мова / Language##menu")) {
             const std::string cur = s_.ui_language.empty() ? system_ui_language() : s_.ui_language;
-            for (const auto& [code, name] : {std::pair<const char*, const char*>{"uk", "Українська"}, {"en", "English"}})
-                if (ImGui::MenuItem(name, nullptr, cur == code) && cur != code) {
-                    s_.ui_language = code;
-                    mark_dirty();
-                    popup_title_ = code == std::string("en") ? "Language" : "Мова";
-                    popup_text_ = code == std::string("en") ? "The interface will switch to English after the program is restarted."
-                                                            : "Інтерфейс стане українським після перезапуску програми.";
-                    popup_result_.clear();
-                    popup_checks_.clear();
-                    open_popup_ = true;
-                }
+            for (const auto& l : ui_languages())
+                if (ImGui::MenuItem(l.native, nullptr, cur == l.code) && cur != l.code) set_language_after_restart(l.code);
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem(tr("Згортати в трей"), nullptr, s_.minimize_to_tray)) {

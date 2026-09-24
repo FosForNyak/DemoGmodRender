@@ -90,24 +90,17 @@ void App::draw_page_settings() {
     // ---- Мова ----
     if (card_begin(tr("Мова"), "Мова / Language", Icon::Globe, false)) {
         label(tr("Мова інтерфейсу"));
-        struct Lang { const char* code; const char* name; };
-        static const Lang kLangs[] = {{"", nullptr}, {"uk", "Українська"}, {"en", "English"}};
         std::string cur = tr("Як у Windows");
-        for (const auto& l : kLangs)
-            if (l.name && s_.ui_language == l.code) cur = l.name;
+        for (const auto& l : ui_languages())
+            if (s_.ui_language == l.code) cur = l.native;
         ImGui::SetNextItemWidth(field_width(16));
-        if (begin_combo("##uilang", cur.c_str())) {
-            for (const auto& l : kLangs) {
-                const char* name = l.name ? l.name : tr("Як у Windows");
-                if (ImGui::Selectable(name, s_.ui_language == l.code) && s_.ui_language != l.code) {
-                    s_.ui_language = l.code;
-                    mark_dirty();
-                    popup_title_ = "Мова / Language";
-                    popup_text_ = "Мова зміниться після перезапуску програми.\nThe language will change after the program is restarted.";
-                    popup_result_.clear();
-                    popup_checks_.clear();
-                    open_popup_ = true;
-                }
+        if (begin_combo("##uilang", cur.c_str(), ImGuiComboFlags_HeightLarge)) {
+            if (ImGui::Selectable(tr("Як у Windows"), s_.ui_language.empty()) && !s_.ui_language.empty())
+                set_language_after_restart("");
+            for (const auto& l : ui_languages()) {
+                if (ImGui::Selectable(l.native, s_.ui_language == l.code) && s_.ui_language != l.code)
+                    set_language_after_restart(l.code);
+                if (ImGui::IsItemHovered() && std::string(l.native) != l.english) ImGui::SetTooltip("%s", l.english);
             }
             ImGui::EndCombo();
         }

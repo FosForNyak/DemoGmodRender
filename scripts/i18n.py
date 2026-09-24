@@ -1,13 +1,19 @@
-"""Переклад інтерфейсу: звіряє src/core/util/i18n_en.inc з рядками, які код передає в tr()/trf().
+"""Переклад інтерфейсу: звіряє src/core/util/i18n/<мова>.inc з рядками, які код передає в tr()/trf().
 
-Ключ перекладу — сам український текст (як у gettext). Команди:
+Ключ перекладу — сам український текст (як у gettext). Мови — LANGS нижче; англійська обов'язкова
+повністю, решта може відставати (чого немає — показується англійською). Команди:
 
-  python scripts/i18n.py check          показати рядки без перекладу, зайві переклади і невідповідні
-                                        плейсхолдери ({} і %d); код виходу 1, якщо є пропуски чи помилки
-  python scripts/i18n.py todo [файл]    записати рядки без перекладу в JSON {"український": ""}
-                                        (типово i18n_todo.json) — заповнити англійські значення
-  python scripts/i18n.py merge <файл>   додати переклади з такого JSON і перегенерувати i18n_en.inc
-                                        (порядок — як у коді, переклади рядків, яких уже немає, прибираються)
+  python scripts/i18n.py check [--lang X|all]   рядки без перекладу, зайві переклади і невідповідні
+                                        плейсхолдери ({} і %d). Код виходу 1 — якщо в англійській є
+                                        пропуски або в будь-якій мові помилки; для інших мов пропуски
+                                        лише показуються (покриття)
+  python scripts/i18n.py todo [--lang X] [файл]   рядки без перекладу в JSON {"український": ""}
+                                        (типово i18n_todo.json)
+  python scripts/i18n.py merge [--lang X] <файл>   додати переклади з такого JSON і перегенерувати
+                                        <мова>.inc (порядок — як у коді, зайві переклади прибираються)
+
+Типова мова — en. Для інших мов рядки лише консольної версії (src/cli) не обов'язкові — там
+лишається англійська довідка.
 
 Що вважається ключем: перший аргумент-літерал tr(...)/trf(...)/N_(...) (сусідні літерали склеюються,
 суфікс ImGui "##id" відкидається), усі кириличні літерали в src/gui/app_ui.hpp (таблиці пресетів, кодеків)
@@ -20,7 +26,14 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(REPO, 'src')
-INC = os.path.join(SRC, 'core', 'util', 'i18n_en.inc')
+I18N_DIR = os.path.join(SRC, 'core', 'util', 'i18n')
+# Мови перекладу (українська — вихідна); порядок — як у ui_languages() в i18n.cpp
+LANGS = ['en', 'ru', 'be', 'pl', 'cs', 'de', 'fr', 'es', 'it', 'pt-BR', 'pt-PT', 'gl', 'lt', 'lv', 'et', 'fi', 'tr',
+         'eo', 'hi', 'zh']
+
+
+def inc_path(lang):
+    return os.path.join(I18N_DIR, lang + '.inc')
 
 CYR = re.compile('[Ѐ-ӿ]')
 IDENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*')
@@ -199,11 +212,11 @@ def used_keys():
     return keys
 
 
-def load_inc():
+def load_inc(lang='en'):
     pairs = {}
-    if not os.path.exists(INC):
+    if not os.path.exists(inc_path(lang)):
         return pairs
-    tokens = lex(open(INC, encoding='utf-8').read())
+    tokens = lex(open(inc_path(lang), encoding='utf-8').read())
     strings = []
     k = 0
     while k < len(tokens):
@@ -230,7 +243,7 @@ def problems_of(uk, en):
     return out
 
 
-# ---------- запис i18n_en.inc ----------
+# ---------- запис <мова>.inc ----------
 
 def c_literal(s):
     # MSVC обмежує один літерал ~16 КБ — довгі рядки ділимо на сусідні літерали (компілятор їх склеїть)
@@ -245,53 +258,112 @@ def c_literal(s):
     return '"' + ''.join(esc.get(ch, ch) for ch in s) + '"'
 
 
-def write_inc(keys, pairs):
-    body = ['// Переклади інтерфейсу: українська (ключ) -> English. Генерує scripts/i18n.py (merge) —',
+def write_inc(keys, pairs, lang='en'):
+    body = [f'// Переклади інтерфейсу: українська (ключ) -> {lang}. Генерує scripts/i18n.py (merge) —',
             '// див. docs/ARCHITECTURE.md, розділ «Мова інтерфейсу».']
     for k in keys:
         if k in pairs:
             body.append('{' + c_literal(k) + ',\n ' + c_literal(pairs[k]) + '},')
-    with open(INC, 'w', encoding='utf-8', newline='\n') as f:
+    os.makedirs(I18N_DIR, exist_ok=True)
+    with open(inc_path(lang), 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(body) + '\n')
 
 
-def main():
-    cmd = sys.argv[1] if len(sys.argv) > 1 else 'check'
-    keys = used_keys()
-    pairs = load_inc()
-    if cmd == 'check':
-        missing = [k for k in keys if k not in pairs]
-        stale = [k for k in pairs if k not in set(keys)]
-        bad = [(k, p) for k in keys if k in pairs for p in problems_of(k, pairs[k])]
-        print(f'рядків у коді: {len(keys)}, перекладено: {len(keys) - len(missing)}')
+def cli_only_keys():
+    """Рядки, що трапляються лише в src/cli (довідка консольної версії)."""
+    where = {}
+    for dirpath, dirs, files in os.walk(SRC):
+        area = os.path.relpath(dirpath, SRC).replace(os.sep, '/').split('/')[0]
+        for fn in files:
+            if not fn.endswith(('.cpp', '.hpp')) or fn == 'i18n.cpp':
+                continue
+            tokens = lex(open(os.path.join(dirpath, fn), encoding='utf-8').read())
+            k = 0
+            while k < len(tokens):
+                if tokens[k][0] == 'str':
+                    v, k = literal_group(tokens, k)
+                    if '##' in v:
+                        v = v[:v.index('##')]
+                    where.setdefault(v, set()).add(area)
+                k += 1
+    return {v for v, areas in where.items() if areas == {'cli'}}
+
+
+def required_keys(lang, keys):
+    if lang == 'en':
+        return keys
+    cli = cli_only_keys()
+    return [k for k in keys if k not in cli]
+
+
+def arg_lang(args):
+    if '--lang' in args:
+        i = args.index('--lang')
+        lang = args[i + 1] if i + 1 < len(args) else ''
+        del args[i:i + 2]
+        return lang
+    return 'en'
+
+
+def check_lang(lang, keys, verbose):
+    pairs = load_inc(lang)
+    need = required_keys(lang, keys)
+    missing = [k for k in need if k not in pairs]
+    stale = [k for k in pairs if k not in set(keys)]
+    bad = [(k, p) for k in keys if k in pairs for p in problems_of(k, pairs[k])]
+    done = len(need) - len(missing)
+    print(f'{lang}: рядків {len(need)}, перекладено {done} ({done * 100 // max(1, len(need))}%)'
+          + (f', помилок {len(bad)}' if bad else ''))
+    if verbose:
         for k in missing:
             print('  без перекладу:', json.dumps(k, ensure_ascii=False)[:150])
-        for k, p in bad:
-            print(f'  помилка ({p}):', json.dumps(k, ensure_ascii=False)[:120])
         for k in stale:
             print('  переклад більше не потрібен (прибере merge):', json.dumps(k, ensure_ascii=False)[:120])
-        return 1 if missing or bad else 0
+    for k, p in bad:
+        print(f'  помилка ({p}):', json.dumps(k, ensure_ascii=False)[:120])
+    return bool(bad) or (lang == 'en' and bool(missing))
+
+
+def main():
+    args = sys.argv[1:]
+    lang = arg_lang(args)
+    cmd = args[0] if args else 'check'
+    if lang != 'all' and lang not in LANGS:
+        print(f'невідома мова {lang!r}; є: {", ".join(LANGS)}')
+        return 2
+    keys = used_keys()
+    if cmd == 'check':
+        if lang == 'all':
+            failed = [l for l in LANGS if check_lang(l, keys, False)]
+            return 1 if failed else 0
+        return 1 if check_lang(lang, keys, True) else 0
+    if lang == 'all':
+        print('--lang all — лише для check')
+        return 2
+    pairs = load_inc(lang)
     if cmd == 'todo':
-        path = sys.argv[2] if len(sys.argv) > 2 else 'i18n_todo.json'
-        todo = {k: '' for k in keys if k not in pairs}
+        path = args[1] if len(args) > 1 else 'i18n_todo.json'
+        todo = {k: '' for k in required_keys(lang, keys) if k not in pairs}
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(todo, f, ensure_ascii=False, indent=1)
-        print(f'без перекладу: {len(todo)} -> {path}')
+        print(f'{lang}: без перекладу {len(todo)} -> {path}')
         return 0
     if cmd == 'merge':
-        if len(sys.argv) > 2:
-            with open(sys.argv[2], encoding='utf-8') as f:
-                for uk, en in json.load(f).items():
-                    if en:
-                        pairs[uk] = en.replace('«', '“').replace('»', '”')   # в англійській — свої лапки
+        if len(args) > 1:
+            with open(args[1], encoding='utf-8') as f:
+                for uk, t in json.load(f).items():
+                    if t:
+                        # В англійській — свої лапки; інші мови пишуть лапки як заведено в них
+                        pairs[uk] = t.replace('«', '“').replace('»', '”') if lang == 'en' else t
         bad = [(k, p) for k in keys if k in pairs for p in problems_of(k, pairs[k])]
         for k, p in bad:
             print(f'  помилка ({p}):', json.dumps(k, ensure_ascii=False)[:120])
         if bad:
-            print('i18n_en.inc не змінено — виправте переклади')
+            print(f'{lang}.inc не змінено — виправте переклади')
             return 1
-        write_inc(keys, pairs)
-        print(f'записано {sum(k in pairs for k in keys)} перекладів, без перекладу: {sum(k not in pairs for k in keys)}')
+        write_inc(keys, pairs, lang)
+        need = required_keys(lang, keys)
+        print(f'{lang}: записано {sum(k in pairs for k in keys)} перекладів, без перекладу: {sum(k not in pairs for k in need)}')
         return 0
     print(__doc__)
     return 2

@@ -168,7 +168,7 @@ static void print_usage() {
   --parallel N           рендерити фрагмент частинами в N копіях гри одночасно (2..4, -multirun)
 Інше:
   --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
-  --lang en|uk           мова повідомлень (English / українська; або змінна GMDR_LANG)
+  --lang en|uk|de|pl...  мова повідомлень (English, українська, Deutsch, Polski…; або змінна GMDR_LANG)
   --no-crash-safe        звичайний MP4 під час запису (типово — фрагментами, вціліє при збої)
   --then shutdown|sleep  після рендеру чи черги вимкнути ПК або сон (60 с на скасування: Ctrl+C)
   encode: --prefix ПРЕФІКС  --wav ФАЙЛ  --demo ДЕМО.dem (для голосу)
@@ -1122,12 +1122,12 @@ int main(int argc, char** argv) {
     install_crash_handler(app_data_dir());
     const auto args = utf8_args(argc, argv);
     Cli c = parse_cli(args);
-    // Мова повідомлень: --lang en|uk, змінна GMDR_LANG; типово — українська (як і в скриптах)
+    // Мова повідомлень: --lang en|de|…, змінна GMDR_LANG; типово — українська (як і в скриптах)
     {
         std::string lang = c.get("--lang");
         if (lang.empty())
             if (const char* e = std::getenv("GMDR_LANG")) lang = e;
-        set_ui_language(lang == "en" ? "en" : "uk");
+        set_ui_language(lang.empty() ? "uk" : lang);
     }
     if (c.command == "--version" || c.command == "version" || c.has("--version")) {
         std::puts("GMod Demo Render " GMDR_VERSION);
