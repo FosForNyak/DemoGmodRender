@@ -6,6 +6,7 @@
 - **Players' own voices.** With the players' consent confirmed, a dub can use a clone of each player's voice. A voice library collects clean samples of every player (by SteamID) from each transcribed demo and can be cleared at any time.
 - Service API keys are stored encrypted (Windows DPAPI) and are removed from problem reports.
 - Chinese, Japanese, Korean and Hindi text is displayed using the system fonts.
+- **19 more interface languages**: Russian, Belarusian, Polish, Czech, German, French, Spanish, Italian, Portuguese (Brazil and Portugal), Galician, Lithuanian, Latvian, Estonian, Finnish, Turkish, Esperanto, Hindi and Simplified Chinese. The translations are partial for now (about a third to 40% of the strings); anything missing is shown in English. The language list shows every language by its own name, and the system language is picked automatically.
 - Fixed: a normal render no longer logs "Test run: extra versions are not encoded".
 - **New interface.** Side navigation with pages instead of Adobe-style panels: Overview shows everything about the demo and the future render on one screen (duration, players, voice chat, server, protocol, warnings, output file, versions, subtitles). Settings are grouped into cards on the Video, Audio & voices and Game pages; the monitor and the timeline sit next to them and can be hidden.
 - **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every codec, game and audio option and the Fragment & markers, Chat & speech and Log pages.

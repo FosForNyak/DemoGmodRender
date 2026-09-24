@@ -23,7 +23,10 @@ run `gmdr.exe`. Nothing needs to be installed.
 - Garry's Mod installed through Steam (the regular or the x86-64 branch), and Steam running;
 - Microsoft Visual C++ 2015–2022 Redistributable (x64). Most Steam games already install it.
 
-The interface is in English or Ukrainian. By default it follows your Windows language, and you
+The interface is fully translated into English and Ukrainian. Russian, Belarusian, Polish, Czech,
+German, French, Spanish, Italian, Portuguese (Brazil and Portugal), Galician, Lithuanian, Latvian,
+Estonian, Finnish, Turkish, Esperanto, Hindi and Simplified Chinese are partly translated so far;
+anything not yet translated is shown in English. By default the language follows Windows, and you
 can switch it in **Settings → Language** or **Tools → Мова / Language**.
 
 ## Features
@@ -376,8 +379,9 @@ cmake --build --preset linux-release`.
 CI builds and tests every push on Windows (MSVC, with end-to-end renders through a fake game)
 and Linux (GCC, ASan/UBSan), and fuzzes the demo parser.
 
-UI strings are Ukrainian in the source, with English translations in
-`src/core/util/i18n_en.inc`. After adding strings, run `python scripts/i18n.py check`.
+UI strings are Ukrainian in the source, with translations in `src/core/util/i18n/<lang>.inc`.
+After adding strings, run `python scripts/i18n.py check` (English is required) and
+`python scripts/i18n.py check --lang all` to see the coverage of the other languages.
 
 ```
 src/core/demo/     .dem parser, GMod network messages, string tables, chat and events
