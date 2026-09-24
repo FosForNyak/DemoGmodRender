@@ -147,7 +147,6 @@ public:
     int64_t     subframes_in() const { return subframes_in_; }
     int64_t     frames_encoded() const { return frames_out_.load(); }
     double      video_seconds() const;
-    int64_t     audio_position() const;
     int64_t     bytes_written() const { return muxer_.bytes_written(); }
     std::string video_description() const { return video_desc_; }
     std::string audio_description() const;

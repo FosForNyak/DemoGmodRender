@@ -48,7 +48,6 @@ public:
 
 private:
     AVFormatContext*          fmt_ctx_ = nullptr;
-    std::vector<AVCodecContext*> encoders_;
     bool                      header_written_ = false;
     bool                      finished_ = false;
     bool                      fragmented_ = false;
@@ -86,9 +85,6 @@ bool probe_media_file(const std::string& path_utf8, MediaFileInfo& out, std::str
 // кадри до ключового — цілі групи (GOP), тож на ньому файл можна обрізати і дописати решту.
 // Порожньо — не вдалося прочитати.
 std::vector<int64_t> keyframe_frames(const std::string& path_utf8, AVRational fps, std::string* error);
-
-// Порада: яке розширення/контейнер для кодека (для GUI).
-std::vector<std::string> containers_for_codec(const std::string& encoder_name);
 
 // Чи підтримує контейнер (за розширенням файлу, напр. "mp4") цей кодек.
 // 1 — так, 0 — ні, -1 — невідомо (можна спробувати).

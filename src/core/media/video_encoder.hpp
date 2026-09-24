@@ -76,7 +76,6 @@ public:
     AVCodecContext* context() const { return ctx_.get(); }
     AVPixelFormat   output_pix_fmt() const { return sw_fmt_; }
     std::string     describe() const;
-    bool            is_hardware() const { return hardware_; }
 
     // Перетворити кадр у формат кодера (dst — кадр із розміром і форматом кодера).
     // Публічне для тестів точності кольору.
@@ -94,7 +93,6 @@ private:
     VideoEncoderSettings s_;
     CodecCtxPtr          ctx_;
     SwsContext*          sws_ = nullptr;
-    bool                 sws_legacy_ = false;         // старий FFmpeg: контекст ініціалізується явно
     int                  sws_in_w_ = 0, sws_in_h_ = 0;
     int                  sws_in_fmt_ = -1;
     int                  sws_in_range_ = -1, sws_in_matrix_ = -1;
@@ -106,7 +104,6 @@ private:
     FramePtr             frame_;
     FramePtr             hw_frame_;
     PacketPtr            pkt_;
-    int                  in_w_ = 0, in_h_ = 0;
     bool                 hardware_ = false;
     std::string          chosen_desc_;
 };

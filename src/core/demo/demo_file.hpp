@@ -53,8 +53,6 @@ enum class DemoCmd : uint8_t {
     StringTables = 8,
 };
 
-const char* demo_cmd_name(DemoCmd c);
-
 struct DemoCommand {
     DemoCmd        cmd = DemoCmd::Stop;
     int32_t        tick = 0;

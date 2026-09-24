@@ -7,9 +7,11 @@ bin/
 
 # Локальні файли програми і тестів
 gmdr_settings.json
+gmdr_markers.json
 gmdr_log*.txt
 gmdr_crash_*.dmp
 gmdr_test_run.*
+i18n_todo.json
 *.dmp
 # Моделі й програми для розпізнавання мовлення (завантажуються окремо)
 third_party/whisper/

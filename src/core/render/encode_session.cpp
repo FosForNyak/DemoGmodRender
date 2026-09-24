@@ -118,11 +118,6 @@ double EncodeSession::video_seconds() const {
     return static_cast<double>(frames_out_.load()) * s_.video.fps.den / static_cast<double>(s_.video.fps.num);
 }
 
-int64_t EncodeSession::audio_position() const {
-    std::lock_guard lock(audio_mutex_);
-    return mixer_ ? mixer_->position() : 0;
-}
-
 bool EncodeSession::game_audio_opened() const {
     std::lock_guard lock(audio_mutex_);
     return game_input_ && game_input_->has_file();

@@ -25,7 +25,6 @@ enum class WindowMode {
     Offscreen,   // за межами екрана (гра не видна); згортати не можна — згорнута гра не малює
 };
 WindowMode window_mode_from_string(const std::string& s);
-const char* window_mode_name(WindowMode m);
 
 class GameProcess {
 public:

@@ -36,7 +36,6 @@ public:
 
     AVCodecContext* context() const { return ctx_.get(); }
     std::string     describe() const;
-    int64_t         samples_encoded() const { return next_pts_; }
 
 private:
     bool encode_from_fifo(bool final_flush, const PacketSink& sink, std::string* error);
@@ -50,8 +49,6 @@ private:
     PacketPtr            pkt_;
     int                  frame_size_ = 1024;
     int64_t              next_pts_ = 0;
-    std::vector<uint8_t*> conv_planes_;
-    std::vector<uint8_t>  conv_buf_;
 };
 
 } // namespace gmdr::media

@@ -9,20 +9,6 @@
 
 namespace gmdr::demo {
 
-const char* demo_cmd_name(DemoCmd c) {
-    switch (c) {
-    case DemoCmd::Signon: return "dem_signon";
-    case DemoCmd::Packet: return "dem_packet";
-    case DemoCmd::SyncTick: return "dem_synctick";
-    case DemoCmd::ConsoleCmd: return "dem_consolecmd";
-    case DemoCmd::UserCmd: return "dem_usercmd";
-    case DemoCmd::DataTables: return "dem_datatables";
-    case DemoCmd::Stop: return "dem_stop";
-    case DemoCmd::StringTables: return "dem_stringtables";
-    }
-    return "dem_unknown";
-}
-
 namespace {
 int32_t rd_i32(const uint8_t* p) {
     int32_t v;

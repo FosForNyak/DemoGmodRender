@@ -39,14 +39,6 @@ WindowMode window_mode_from_string(const std::string& s) {
     return WindowMode::Normal;
 }
 
-const char* window_mode_name(WindowMode m) {
-    switch (m) {
-    case WindowMode::Behind: return "behind";
-    case WindowMode::Offscreen: return "offscreen";
-    default: return "normal";
-    }
-}
-
 std::string format_command_line(const std::filesystem::path& exe, const std::vector<std::string>& args) {
     std::string s = "\"" + path_to_utf8(exe) + "\"";
     for (const auto& a : args) {

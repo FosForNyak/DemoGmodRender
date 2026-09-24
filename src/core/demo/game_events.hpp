@@ -47,7 +47,6 @@ public:
     bool load_list(const RawBitsMsg& m);
     std::optional<GameEvent> decode(const RawBitsMsg& m) const;
     bool empty() const { return by_id_.empty(); }
-    const std::map<int, GameEventDescriptor>& descriptors() const { return by_id_; }
 
 private:
     std::map<int, GameEventDescriptor> by_id_;

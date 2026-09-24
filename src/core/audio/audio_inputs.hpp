@@ -55,7 +55,6 @@ public:
     void discard_before(int64_t pos) override;
     void set_finished() override;
     bool has_file() const { return opened_; }
-    int  source_rate() const { return reader_.sample_rate(); }
     // Гру перезапущено після збою: далі звук — з нового WAV, чий перший семпл припадає на
     // позицію source_pos (кадри 48 кГц у часі джерела, від першого кадру відео). Недописаний
     // хвіст старого файлу відкидається, пропуск між ними — тиша.
@@ -196,7 +195,6 @@ class AudioMixer {
 public:
     AudioMixer(std::vector<std::unique_ptr<AudioInput>> inputs, std::vector<AudioTrackPlan> tracks);
 
-    size_t track_count() const { return tracks_.size(); }
     const AudioTrackPlan& track(size_t i) const { return tracks_[i]; }
     int64_t position() const { return pos_; }
 

@@ -95,6 +95,7 @@ endif()
 function(gmdr_copy_ffmpeg_dlls target)
     if(WIN32 AND FFMPEG_DLL_DIR)
         file(GLOB _dlls "${FFMPEG_DLL_DIR}/*.dll")
+        list(FILTER _dlls EXCLUDE REGEX "avdevice")   # libavdevice не потрібна ні програмі, ні іншим DLL
         if(_dlls)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_dlls} "$<TARGET_FILE_DIR:${target}>"

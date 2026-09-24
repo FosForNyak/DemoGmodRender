@@ -30,11 +30,9 @@ public:
     int sample_rate() const { return rate_; }
     int channels() const { return channels_; }
     int bits_per_sample() const { return bits_; }
-    bool is_float() const { return float_; }
 
     // Скільки ЦІЛИХ кадрів (семпл × канали) доступно зараз від початку даних.
     int64_t frames_available();
-    int64_t frames_read() const { return frames_read_; }
 
     // Прочитати до max_frames кадрів у float (interleaved). Повертає прочитане.
     size_t read(float* out, size_t max_frames);
@@ -64,7 +62,6 @@ public:
     bool open(const std::filesystem::path& path, int rate, int channels, Format fmt, std::string* error = nullptr);
     bool write(const float* interleaved, size_t frames);
     bool close(std::string* error = nullptr);
-    int64_t frames_written() const { return frames_; }
 
 private:
     void write_header();

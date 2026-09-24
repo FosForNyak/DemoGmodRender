@@ -133,21 +133,6 @@ public:
         return out;
     }
 
-    // Під-читач на наступні nbits біт (поточна позиція зсувається далі).
-    BitReader sub_reader(size_t nbits) {
-        if (pos_ + nbits > end_bits_) {
-            overflow_ = true;
-            pos_ = end_bits_;
-            return BitReader();
-        }
-        BitReader r;
-        r.data_ = data_;
-        r.pos_ = pos_;
-        r.end_bits_ = pos_ + nbits;
-        pos_ += nbits;
-        return r;
-    }
-
     // Координата у форматі Source (COORD_INTEGER_BITS=14, FRACTIONAL=5).
     float read_bit_coord() {
         const bool has_int = read_bit();

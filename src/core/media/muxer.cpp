@@ -60,7 +60,6 @@ int Muxer::add_stream(AVCodecContext* enc, const std::string& title, const std::
     }
     if (!title.empty()) av_dict_set(&st->metadata, "title", title.c_str(), 0);
     if (!language.empty()) av_dict_set(&st->metadata, "language", language.c_str(), 0);
-    encoders_.push_back(enc);
     return st->index;
 }
 
@@ -347,16 +346,6 @@ int container_supports(const std::string& ext, const std::string& encoder_name) 
     if (!fmt || !c) return 0;
     const int q = avformat_query_codec(fmt, c->id, FF_COMPLIANCE_NORMAL);
     return q > 0 ? 1 : q == 0 ? 0 : -1;
-}
-
-std::vector<std::string> containers_for_codec(const std::string& enc) {
-    auto has = [&](const char* s) { return enc.find(s) != std::string::npos; };
-    if (has("prores") || enc == "dnxhd" || enc == "qtrle") return {"mov", "mkv"};
-    if (enc == "ffv1" || enc == "utvideo" || enc == "huffyuv" || enc == "ffvhuff" || enc == "magicyuv") return {"mkv", "avi", "nut"};
-    if (has("vp9") || has("libvpx") || has("av1")) return {"mkv", "webm", "mp4"};
-    if (enc == "png" || enc == "tiff" || enc == "exr" || enc == "bmp" || enc == "mjpeg" || enc == "targa")
-        return {"png-seq", "mkv", "mov"};
-    return {"mp4", "mkv", "mov"};
 }
 
 } // namespace gmdr::media

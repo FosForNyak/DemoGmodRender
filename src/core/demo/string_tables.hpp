@@ -57,9 +57,6 @@ public:
     // Список гравців з таблиці userinfo (слот -> інформація).
     std::map<int, PlayerInfo> players() const;
 
-    // Скільки біт займає довжина user data (19 — сучасний GMod, 14 — Source SDK 2013).
-    int user_data_length_bits() const { return ud_len_bits_; }
-
 private:
     bool apply_update(StringTable& t, const uint8_t* data, size_t bits, int num_entries);
     bool apply_update_bits(StringTable& t, const uint8_t* data, size_t bits, int num_entries, int ud_len_bits);

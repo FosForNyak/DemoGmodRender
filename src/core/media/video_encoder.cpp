@@ -215,8 +215,6 @@ bool VideoEncoder::open(const VideoEncoderSettings& s, int in_w, int in_h, bool 
         in_w = c.w;
         in_h = c.h;
     }
-    in_w_ = in_w;
-    in_h_ = in_h;
     const AVCodec* codec = avcodec_find_encoder_by_name(s.codec.c_str());
     if (!codec) {
         if (error) *error = trf("кодек '{}' відсутній у цій збірці FFmpeg", s.codec);
