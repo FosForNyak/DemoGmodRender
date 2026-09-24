@@ -1,519 +1,346 @@
 # GMod Demo Render
 
-Програма на C++ для рендеру демо-записів **Garry's Mod** (`.dem`) у відеофайл будь-якої
-роздільної здатності, частоти кадрів, бітності та формату — зі звуком гри, голосами
-гравців із демо і (за бажанням) окремим записом вашого мікрофона. Кодування виконується
-на всіх ядрах процесора або на відеокарті (NVIDIA NVENC, AMD AMF, Intel Quick Sync).
+[![build](https://github.com/FosForNyak/DemoGmodRender/actions/workflows/build.yml/badge.svg)](https://github.com/FosForNyak/DemoGmodRender/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/FosForNyak/DemoGmodRender)](https://github.com/FosForNyak/DemoGmodRender/releases/latest)
+[![license](https://img.shields.io/github/license/FosForNyak/DemoGmodRender)](LICENSE)
 
-![Головне вікно](docs/screenshot.png)
+Turn **Garry's Mod** demo recordings (`.dem`) into video files. Pick any resolution, frame rate,
+bit depth and codec. The video carries the game audio, the players' voice chat decoded straight
+from the demo and, if you want, your own microphone. Encoding runs on every CPU core or on the
+GPU (NVIDIA NVENC, AMD AMF, Intel Quick Sync).
 
-> **English:** renders Garry's Mod demos (`.dem`) to video of any resolution, frame rate and
-> codec, with game audio and players' voice chat decoded from the demo. The interface is available
-> in English: **Tools → Мова / Language → English** (it follows the Windows language by default).
-> Console version: `gmdr-cli --lang en ...`.
+![Main window](docs/screenshot.png)
 
-## Що нового у 1.2
+## Download
 
-- **Чат і події з демо** — вкладка «Чат»: усі повідомлення з часом і ніком, повідомлення
-  сервера, входи й виходи гравців (з причиною: вихід, кік, бан), пошук і фільтри. Подвійний клік —
-  фрагмент з цього моменту, правий клік — позначка, перегляд у грі, копіювати. Чат видно і на
-  шкалі (світлі риски, входи — зелені, виходи — червоні; наведіть курсор, щоб прочитати).
-  Чат можна зберегти в `.txt` або додати у відео як субтитри (`.srt`) — зручно, якщо HUD приховано.
-  Розуміє стандартний чат GMod і аддони чату, що передають текст через net-повідомлення
-  (наприклад `customchat`).
-- **Позначки → розділи у відео.** Ctrl+клік на шкалі (або правий клік → «Додати позначку»)
-  ставить позначку; ті, що потрапили у фрагмент, стають розділами MP4/MOV/MKV — плеєри
-  показують їх на шкалі, а поруч із відео з'являється `.chapters.txt` з таймкодами для опису на
-  YouTube. Позначки зберігаються для кожного демо окремо.
-- **Переглянути в грі.** Кнопка на вкладці «Фрагмент» (і в меню шкали, чату, позначок) запускає
-  гру і програє демо з потрібного місця в реальному часі, зі звуком. Прямо в грі: **F9** —
-  початок фрагмента, **F11** — кінець, **F6** — позначка; вони одразу з'являються в програмі.
-  Закрили гру — можна рендерити.
-- **Обробка звуку** (вкладка «Звук і голос» → «Обробка звуку»): вирівнювання гучності гравців
-  (кожного — до -18 LUFS за EBU R128), шумодав для всіх або окремих гравців (нейромережа
-  RNNoise прибирає фон навіть у відкритих мікрофонах, гейт глушить паузи між фразами),
-  приглушення звуку гри, коли хтось говорить, і фінальна гучність за EBU R128 (-14 LUFS для
-  YouTube, -16, -23). Фільтри беруться з FFmpeg (`arnndn`, `sidechaincompress`, `loudnorm`), що
-  вже йде з програмою.
-- **Прослухати голос** прямо в програмі: значок навушників у панелі «Голоси» чи на доріжці таймлайну
-  (або правий клік на гравці → «Прослухати») — 15 секунд його мовлення з початку фрагмента, з тією самою обробкою, що піде у відео.
-  «Зберегти голоси у файли» теж зберігає вже оброблені голоси.
-- **Черга рендерів.** Кнопка «До черги» біля «Почати рендер» додає поточне демо з усіма налаштуваннями
-  (фрагмент, кодек, звук) до вкладки «Черга»; там порядок змінюється стрілками, а «Почати чергу»
-  рендерить усе підряд. Гра запускається лише раз: після фрагмента вона чекає наступний і сама
-  відкриває нове демо (перезапуск — лише коли змінюються роздільність, RTX або параметри запуску).
-  Черга зберігається між запусками програми; готові пункти з неї прибираються, невдалі лишаються.
-  У консолі: `gmdr-cli render a.dem b.dem -o папка\` або `gmdr-cli queue список.txt`.
-- **Бібліотека демо** — вкладка «Бібліотека»: усі демо з теки гри (і з ваших тек, кнопка «Додати
-  теку...») з картою, тривалістю, датою і розміром; пошук за назвою, картою, сервером чи гравцем,
-  сортування за будь-яким стовпцем. Подвійний клік — відкрити, правий клік — додати ціле демо до
-  черги з поточними налаштуваннями.
-- **Кілька версій за один рендер** (вкладка «Відео» → «Ще версії»): гра рендерить демо один раз,
-  а з тих самих кадрів одночасно кодуються ще й версія для Discord (до 10 МБ, 720p), легка копія
-  480p, вертикальне відео 9:16 для Shorts/TikTok/Reels (центр кадру) і ProRes 422 HQ для монтажу.
-  Файли з'являються поруч з основним: `бій_discord.mp4`, `бій_vertical.mp4`... У консолі —
-  `--also discord,480p,vertical,master`.
-- **Підписи «хто говорить» прямо на відео** (вкладка «Звук і голос»): поки гравець говорить,
-  праворуч унизу кадру видно плашку з його ніком — як індикатор голосового чату в самій грі, з
-  плавною появою. Зручно, коли HUD приховано. `--speaker-overlay` у консолі.
-- **Пакет для монтажу** (вкладка «Звук і голос»): поруч із відео — тека `назва_монтаж` з
-  окремими WAV гри, кожного гравця і мікрофона (24 біт, рівно від першого кадру відео) і
-  проєктом XML: Premiere Pro і DaVinci Resolve відкривають його через File → Import — відео й усі
-  доріжки одразу на шкалі, позначки — маркерами. У консолі — `--edit-package`.
-- **Обкладинка, GIF і WebP**: там само можна замовити обкладинку `бій.jpg` (найвиразніший кадр
-  біля середини, до 1280×720), `бій.gif` (перші 15 с, палітра саме під це відео) і анімацію
-  `бій.webp` (менша й якісніша за GIF). Вони робляться з готового відео одразу після рендеру
-  (`--also thumb,gif,webp`).
-- **Уповільнення і прискорення** (вкладка «Відео» → «Швидкість відео»): ×0.25…×8 або своє значення.
-  Уповільнення чесне — гра рендерить демо з меншим кроком часу, тож кожен кадр справжній, а не
-  домальований (×0.5 — удвічі повільніше, і рендер удвічі довший). Прискорення — таймлапс, з
-  motion blur виглядає плавно. Звук гри, голоси й мікрофон розтягуються разом з відео без зміни
-  висоти тону (або «без звуку» — для монтажу під музику); субтитри, підписи на кадрі й розділи
-  теж у часі відео. У консолі — `--speed 0.5` і `--speed-audio mute`.
-- **Розпізнавання мовлення** (вкладка «Чат» → «Розпізнати мовлення»): голосовий чат стає текстом —
-  локально, без інтернету (whisper.cpp). Репліки гравців з'являються у списку чату поруч із
-  повідомленнями, з часом і ніком: їх можна шукати, подвійним кліком ставити фрагмент, зберегти
-  разом із чатом у `.txt`. На вкладці «Звук і голос» — «Субтитри … з текстом розмов»: у `.srt`
-  поруч із відео буде «Ім'я: що сказав» (розпізнається лише фрагмент, уже розпізнане береться
-  готовим). Мова — «визначити» або вказати (українська, російська, англійська...). Потрібна модель
-  розпізнавання: програма пропонує завантажити її один раз (Large v3 Turbo — 1,5 ГБ, найточніша;
-  стиснута — 0,5 ГБ). На процесорі розпізнавання триває приблизно стільки, скільки саме мовлення.
-  У консолі — `gmdr-cli transcribe демо.dem [-o розмови.txt|.srt|.json]` і `render --speech-srt`.
-- **Рендер переживає збій гри.** Якщо GMod падає посеред рендеру або зависає (30 с без нових
-  кадрів, з RTX — 90 с), програма сама перезапускає гру з того самого місця демо і дописує відео
-  далі в той самий файл — без шва, звук і голоси лишаються синхронними. До трьох спроб за рендер;
-  якщо гра падає й далі, зберігається вже відрендерене, а в журналі — тік, з якого можна
-  дорендерити решту.
-- **Англійський інтерфейс**: «Інструменти → Мова / Language». Типово мова береться з Windows
-  (українська, якщо українською є мова системи або регіональний формат; інакше англійська);
-  перемикається після перезапуску програми. Консольна версія лишається українською, англійська —
-  з `--lang en` або змінною `GMDR_LANG=en`.
-- **Паралельний рендер кількома копіями гри** (вкладка «Гра» → «Копій гри одночасно», 2–4;
-  у консолі `--parallel N`). Фрагмент ділиться на частини, і кожну одночасно рендерить своя копія
-  GMod (`-multirun`), кожна — у свій файл; потім частини склеюються без перекодування, а звук гри,
-  голоси й мікрофон міксуються заново на всю довжину — без швів. Межі частин програма ставить
-  так, що кадри збігаються з кадрами звичайного рендеру точно (у тестах — кадр у кадр і біп у біп),
-  збій гри в будь-якій частині відновлюється як звичайно. Допомагає, коли гальмує сама гра
-  (висока роздільна здатність, motion blur): на тестовому ПК (8 ядер) дві копії з motion blur
-  рендерили в 1,5 раза швидше; коли гальмує кодування, виграш малий. Копії стартують по черзі,
-  тож найбільше виграють довгі фрагменти. Не для RTX, ручного режиму, тестового прогону і черги.
-- **Дописування рендеру, урваного збоєм самої програми чи ПК.** Якщо посеред рендеру впала
-  програма, вимкнулось світло чи ПК перезавантажився, при наступному запуску програма спитає
-  «Дописати урваний рендер?» (або «Файл → Дописати урваний рендер...», у консолі
-  `gmdr-cli resume`). Уже записане лишається — до останнього цілого ключового кадру, тобто
-  втрачається щонайбільше кілька секунд, — гра рендерить лише решту (можна кількома копіями:
-  `resume --parallel 2`), і все склеюється без перекодування; звук гри береться з уже записаних
-  WAV, голоси й мікрофон міксуються заново на всю довжину. На стику кадри можуть зсунутись
-  щонайбільше на пів кадру (≈ 8 мс при 60 кадр/с) — на око й на слух не помітно. Працює для
-  MP4/MOV із «Захистом від збою» (типово ввімкнено), MKV і WebM; не для тестового прогону,
-  ручного режиму і RTX. Додаткові версії (Discord, вертикальна...) при дописуванні не робляться.
-- **Звіт про проблему** («Довідка → Зібрати звіт про проблему», або `gmdr-cli report`): один ZIP
-  з журналом, налаштуваннями, відомостями про систему (ОС, процесор, пам'ять, відеокарти, FFmpeg,
-  GMod і драйвер), кінцем консолі гри і дампом збою, якщо програма падала. Шлях до вашого профілю
-  Windows у текстах замінено на `%USERPROFILE%`; архів нікуди не надсилається сам.
-- **Відкривати .dem подвійним кліком** — пункт в «Інструментах» (вмикається і вимикається там
-  само, лише для вашого облікового запису). Якщо програма вже відкрита, демо відкриється в ній,
-  а не в другій копії.
-- **Сповіщення, трей і «потім вимкнути ПК».** Коли рендер чи черга закінчились, а вікно згорнуте,
-  приходить сповіщення Windows. «Інструменти → Згортати в трей» ховає згорнуте вікно в значок біля
-  годинника (прогрес — у підказці). Під смугою прогресу і на вкладці «Черга» є «Потім: вимкнути
-  ПК / сон» — для нічних рендерів; перед цим хвилина з кнопкою «Скасувати» (діє лише цього разу,
-  не зберігається). У консолі — `--then shutdown|sleep` (Ctrl+C скасовує).
-- **Перевірка оновлень** — «Довідка → Перевірити оновлення» (або `gmdr-cli update`): один запит до
-  GitHub Releases, лише коли ви самі натиснете; якщо є новіша версія — посилання на неї.
-- Виправлено: у згорнутому вікні програма не бачила, що рендер закінчився, доки її не розгорнути,
-  а за дуже довгий рендер у такому стані могла впасти (рекурсія в циклі кадрів).
-- Виправлено: у MP4/MOV із «Захистом від збою» (типово ввімкнено) відео після переупаковки
-  відставало від звуку приблизно на 45 мс (затримка B-кадрів і «розгін» AAC потрапляли в
-  таймкоди) — тепер синхрон такий самий, як у звичайному MP4.
-- Виправлено: якщо кодування не встигало і гру ставило на паузу, рендер міг назавжди зависнути
-  на спробі посунути вікно призупиненої гри.
+Get the latest `GModDemoRender-<version>-win64.zip` from
+[Releases](https://github.com/FosForNyak/DemoGmodRender/releases/latest), unpack it anywhere and
+run `gmdr.exe`. Nothing needs to be installed.
 
-## Що нового у 1.1
+**You need:**
 
-- **Гра працює у фоні**: вікно GMod створюється за межами екрана, без фокуса, і не заважає
-  працювати. Програма вимикає для гри енергозбереження Windows 11 (EcoQoS) і обмеження FPS
-  неактивного вікна (`fps_max_nofocus`), тож у фоні гра рендерить майже так само швидко, як на
-  екрані. Звук GMod у мікшері Windows на час рендеру вимикається (на відео не впливає). Під час
-  рендеру у вікні програми видно **живе прев'ю** кадрів, а кнопка «Показати гру» тимчасово
-  повертає гру на екран.
-- **Тестовий прогін** («Тест 3 с»): 3 секунди з початку фрагмента зі звітом по кроках (гра
-  запустилась → драйвер відповідає → демо грає → кадри надходять → звук є → кодек працює),
-  заміром швидкості і прогнозом часу й розміру всього рендеру. Якщо щось не так — видно, на
-  якому кроці, з порадою і рядками консолі гри.
-- **Демо із серверів GMod 2026 року** (білд 10000+) знову розбираються повністю: раніше в них
-  губилися імена гравців («Гравець #7» замість ніків) через зміну формату двох мережевих
-  повідомлень.
-- **Швидший конвеєр кадрів** (заміри на 4K, 16 потоків): перетворення кольору 19 → 2 мс на кадр
-  (у кілька потоків через `sws_scale_frame`), JPEG-кадри 89 → 3 мс (одразу в YUV, без
-  проміжного RGB), TGA читається без обнулення і копій, нові кадри шукаються без обходу папки,
-  кодування йде в окремому потоці. Кодування готових 4K-кадрів через NVENC — 33 → 75–110 кадр/с.
-  Аналіз демо займає вдвічі-втричі менше пам'яті (файл відображається в пам'ять).
-- **Надійність**: MP4/MOV пишеться фрагментами (файл відкриється навіть після збою гри чи ПК) і
-  наприкінці переупаковується у звичайний MP4; ПК не засинає посеред рендеру; при нестачі місця
-  на диску гра стає на паузу; сторож перезапускає вікно, якщо кадри перестали надходити; після
-  рендеру файл перевіряється (тривалість відео і звуку, кількість кадрів); при збої програми
-  пишеться `gmdr_crash_*.dmp`.
-- **Часова шкала голосів** (тепер — панель «Таймлайн»): хто і коли говорив, де говорять кілька
-  гравців одночасно; фрагмент вибирається мишею, коліщатко — масштаб.
-- **Гучність кожного гравця** (і «соло» правим кліком) у панелі «Голоси», **субтитри «хто
-  говорить»** (.srt), **пресети** в один клік (YouTube, монтаж ProRes, Discord 10/50/500 МБ з
-  розрахунком бітрейту під розмір, архів без втрат), **GMod RTX** (копія від RTXLauncher),
-  прогрес на кнопці в панелі задач.
-- Виправлено: `config.cfg` гри не відновлювався одразу після рендеру (допоміжні процеси
-  браузера GMod теж звуться `gmod.exe`, і програма вважала, що гра ще працює); `build.bat`
-  не знаходив CMake, якщо в Windows увімкнено `NoDefaultCurrentDirectoryInExePath`.
-- Для розробки: GitHub Actions (Visual Studio + Linux), тести під AddressSanitizer/UBSan, фазинг
-  парсера демо (libFuzzer), `docs/ARCHITECTURE.md`; `app.cpp` розбито на панелі.
+- Windows 10 or 11, 64-bit;
+- Garry's Mod installed through Steam (the regular or the x86-64 branch), and Steam running;
+- Microsoft Visual C++ 2015–2022 Redistributable (x64). Most Steam games already install it.
 
-## Як це працює
+The interface is in English or Ukrainian. By default it follows your Windows language, and you
+can switch it in **Tools → Мова / Language**.
 
-Файл `.dem` не містить жодної картинки. Це лише записані мережеві пакети гри: де стоять
-сутності, які звуки прозвучали, хто що сказав у голосовий чат. Правильно намалювати ці
-дані може тільки сам рушій GMod — з вашими картами, моделями, аддонами і Lua-скриптами.
-Тому програма не намагається "перемалювати" гру, а керує нею:
+## Features
 
-1. **Аналіз демо.** Програма сама розбирає формат `HL2DEMO` (протокол 24 + повідомлення,
-   специфічні для GMod), дізнається карту, тривалість, частоту тіків, імена гравців і
-   витягує голосовий чат (Steam Voice, кодек Opus). Голос декодується і розставляється на
-   часовій шкалі з точністю до тіку.
-2. **Запуск гри з фіксованим кроком часу.** GMod запускається з `host_framerate` = FPS × кількість
-   під-кадрів. Тоді кожен кадр гри — рівно 1/FPS секунди демо, незалежно від потужності ПК.
-   Саме тому можна рендерити 4K 240 fps на слабкому комп'ютері: це просто займе більше часу.
-3. **Драйвер у меню GMod.** Маленький Lua-скрипт (`lua/menu/gmdr_driver.lua`) запускає демо,
-   чекає, поки воно справді почне грати, вмикає `startmovie` точно на потрібному тіку і
-   вимикає наприкінці, а потім закриває гру. Сама гра при цьому працює у фоні — за межами
-   екрана і без фокуса.
-4. **Конвеєр кадрів.** Гра записує кожен кадр (TGA або JPEG) і звук (WAV) у тимчасову папку.
-   Програма одразу забирає кадри, декодує їх паралельно, змішує під-кадри для motion blur,
-   масштабує і перетворює колір (BT.709) у кілька потоків, кодує через FFmpeg в окремому
-   потоці і видаляє прочитані файли. Якщо кодер не встигає або закінчується місце на диску,
-   гра ставиться на паузу — диск не переповниться.
-5. **Звук.** Звук гри з WAV (він росте під час запису), декодовані голоси гравців і файл
-   мікрофона змішуються і кодуються синхронно з відео. Можна записати окремі доріжки для
-   монтажу.
+**Rendering**
 
-## Швидкий старт
+- Any resolution (480p up to 8K, vertical formats too) and any frame rate, even fractional
+  (`59.94`, `60000/1001`). The game advances by a fixed time step, so a slow PC renders 4K at
+  240 fps correctly. It just takes longer.
+- Real **motion blur**. The game renders N sub-frames per video frame and the program blends
+  them with a configurable shutter angle. The blending keeps 16 bits of precision.
+- 8/10/12-bit output, 4:2:0 / 4:2:2 / 4:4:4 chroma.
+- CPU codecs: H.264, H.265, AV1 (SVT-AV1, libaom), VP9, ProRes, DNxHR, FFV1, UT Video and PNG.
+  GPU codecs: H.264, HEVC and AV1 via NVENC, AMF, Quick Sync, Vulkan and Direct3D 12. At
+  startup the program tests which GPU encoders actually work on your card and shows only those.
+- Output formats: MP4, MKV, MOV, WebM, AVI and NUT, or PNG/TIFF/BMP/JPEG image sequences.
+- One-click presets: YouTube 1080p60 and 4K60 (10-bit), ProRes 422 HQ for editing, Discord
+  10/50/500 MB (the bitrate is fitted to the file size) and lossless archive.
+- **Slow motion and fast forward**, ×0.25 to ×8. Slow motion is honest: the game renders
+  every in-between frame, nothing is interpolated. Audio is stretched without changing pitch.
+- **Several versions from one render.** The same frames are also encoded as a Discord copy
+  (≤ 10 MB, 720p), a light 480p copy, a vertical 9:16 video for Shorts/TikTok/Reels and a
+  ProRes master. After the render you can also get a thumbnail, a GIF and an animated WebP.
+- **Parallel rendering.** Two to four game instances render parts of the fragment at the same
+  time. The parts are joined without re-encoding, frame-exact.
+- **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). During
+  the render the program sets Remix to video-friendly settings (DLAA, no frame generation) and
+  restores your config afterwards.
 
-1. Переконайтеся, що Steam запущено, а Garry's Mod закрито.
-2. Запустіть `gmdr.exe`.
-3. Перетягніть файл демо у вікно (або «Відкрити демо...» вгорі ліворуч). Демо, записані командою `record`,
-   лежать у `…\steamapps\common\GarrysMod\garrysmod\demos` або просто в `garrysmod\`.
-4. Виберіть роздільну здатність, FPS, кодек і формат на вкладці «Відео» (або готовий пресет).
-5. Натисніть **«Тест 3 с»** вгорі праворуч — програма перевірить кожен крок і скаже, скільки триватиме рендер.
-6. Натисніть **«Почати рендер»**. Програма сама знайде GMod, запустить його у фоні і все
-   запише. Працювати за комп'ютером під час рендеру можна.
+**Audio and voice**
 
-Готове відео з'явиться поруч із демо (шлях видно під налаштуваннями, у рядку «Файл»: клацніть по
-ньому, щоб вибрати інший, або олівцем — щоб ввести шлях вручну).
+- Players' voices are decoded from the demo (Steam Voice / Opus) and placed tick-accurately.
+  Pick whose voices go in, set each player's volume, mute or solo them, and preview a voice
+  right in the app.
+- Audio processing:
+  - level every player to -18 LUFS;
+  - RNNoise neural noise suppression with a gate between phrases;
+  - duck the game audio under voices;
+  - final loudness per EBU R128 (-14 LUFS for YouTube).
+- Your own microphone from a separate recording (OBS, Audacity, Discord), with an offset.
+- Subtitles: "who is speaking" `.srt`, the game chat as subtitles, and **speech recognition**.
+  Voice chat becomes text locally with whisper.cpp, offline.
+- "Who is speaking" labels drawn right on the video, like the in-game voice indicator.
+- **Editing package**: separate 24-bit WAVs (game, each player, microphone) and an XML
+  project that Premiere Pro and DaVinci Resolve import with every track and marker in place.
 
-## Вікно програми
+**Workflow**
 
-Вікно зібране з панелей, як у Adobe Premiere Pro, у темній темі Adobe:
+- A Premiere Pro-style workspace:
+  - export settings;
+  - a Program monitor with a live preview while rendering;
+  - a timeline with a track per player, mute/solo, playhead and markers;
+  - voice, library, chat, queue and log panels.
+- **Fragments and markers** with I / O / M, like in Premiere. Markers become chapters in
+  MP4/MOV/MKV and a `.chapters.txt` with timestamps for a YouTube description.
+- **Chat and events** from the demo: messages, joins and leaves (with kick/ban reasons),
+  searchable and shown on the timeline. Chat addons that send text through net messages
+  (e.g. `customchat`) are understood too.
+- **Watch in game**: play the demo in GMod from any point in real time. In the game, F9 sets
+  the fragment start, F11 the end and F6 adds a marker. The changes show up in the program
+  right away.
+- **Render queue**: queue demos with their own settings. The game launches only once for the
+  whole queue.
+- **Demo library**: every demo in the game folder and your own folders, with map, length,
+  date and size, searchable and sortable.
+- **Test run** ("Test 3 s"): three seconds with a step-by-step check (game started, driver
+  answers, demo plays, frames and audio arrive, encoder works) and an estimate of the time and
+  file size of the full render.
+- Windows notifications, minimize to tray, and "then shut down / sleep" for overnight renders.
 
-- **зверху ліворуч** — налаштування експорту: вкладки «Відео», «Звук і голос», «Гра» і
-  «Фрагмент» із розділами, що згортаються, а внизу — вихідний файл і коротко про формат;
-- **зверху праворуч** — монітор «Програма»: під час рендеру там живе прев'ю кадрів і кроки
-  перевірки, до рендеру — «титр» демо (карта, сервер, хто записав, тривалість). Під ним —
-  таймкод курсора, кнопки фрагмента (перейти до початку, початок і кінець у курсорі, перейти
-  до кінця), позначка і «Переглянути в грі»;
-- **знизу ліворуч** — «Голоси» (гравці з гучністю і прослуховуванням), «Бібліотека», «Чат»,
-  «Черга» і «Журнал»;
-- **знизу праворуч** — «Таймлайн»: доріжка на кожного гравця з кнопками M (вимкнути) і S
-  (соло), доріжка чату, лінійка з таймкодами, синій курсор, позначки і смуга масштабу.
+**Reliability**
 
-Межі між панелями можна тягати мишею; «Вікно → Скинути розкладку панелей» повертає як було.
-Кнопки дій — «Тест 3 с», «До черги», «Почати рендер» — угорі праворуч, стан і прогрес рендеру —
-у рядку внизу вікна. Сині «гарячі» значення (роздільна здатність, швидкість, гучність) можна
-тягнути мишею вліво-вправо або клацнути й ввести число.
+- The game runs in the background, off screen and without focus, so you can keep working.
+  Windows power throttling and the unfocused FPS cap are turned off for it.
+- If GMod crashes or hangs, the program restarts it from the same point and keeps writing the
+  same file, seamlessly.
+- If the program or the PC crashes, the next start offers to finish the interrupted render.
+  At most a few seconds are lost.
+- MP4/MOV is written in fragments, so the file stays playable after any crash. The game pauses
+  when the encoder falls behind or disk space runs low. After the render the output is verified.
+- **Help → Collect a problem report** makes one ZIP with the log, settings, system info, the
+  GMod console and a crash dump. Your profile path is masked, and nothing is sent anywhere.
 
-Фрагмент і позначки — клавішами, як у Premiere: клацніть по лінійці таймлайну, щоб поставити
-курсор, і натисніть **I** (початок фрагмента), **O** (кінець) або **M** (позначка);
-**Shift+I** / **Shift+O** — перейти до початку чи кінця фрагмента, **Home** / **End** — до
-початку чи кінця демо. Те саме — у меню «Позначки».
+## Quick start
 
-## Налаштування
+1. Make sure Steam is running and Garry's Mod is closed.
+2. Run `gmdr.exe` and drop a `.dem` file onto the window, or click **Open demo...**.
+   Demos recorded with `record` are in `…\steamapps\common\GarrysMod\garrysmod\` or its
+   `demos` subfolder. The **Library** tab lists them all.
+3. Choose a preset, or set the resolution, FPS and codec on the **Video** tab.
+4. Optionally mark a fragment on the timeline: click the ruler, then press **I** and **O**.
+5. Click **Test 3 s** to check every step and see how long the render will take.
+6. Click **Start render**. The program finds GMod, launches it in the background and records
+   the demo.
 
-**Пресети.** «YouTube 1080p60», «YouTube 4K60 (10 біт)», «Монтаж — ProRes 422 HQ»,
-«Discord — 10 / 50 / 500 МБ», «Архів без втрат» — усе в один клік, далі можна підправити.
-Для Discord бітрейт розраховується так, щоб увесь фрагмент уклався в розмір файлу
-(«Розмір файлу» на вкладці «Відео» можна задати й вручну).
+The video appears next to the demo. The **File** line under the settings shows the path: click
+the file name to pick another one, or the pencil to type a path.
 
-**Відео.** Роздільна здатність — будь-яка (є пресети від 480p до 8K і вертикальні формати).
-FPS — будь-який, навіть дробовий (`59.94`, `60000/1001`). *Розмиття руху* (motion blur):
-гра рендерить N під-кадрів на кожен кадр відео, а програма усереднює їх — виходить плавне
-кіношне розмиття; *кут затвора* 180° дає класичний вигляд. Бітність 8/10/12: 10 біт прибирає
-смуги на градієнтах, особливо разом із motion blur (під-кадри змішуються з 16-бітною
-точністю). Субдискретизація 4:2:0 / 4:2:2 / 4:4:4.
+## The window
 
-**Кодеки.** Процесор: H.264 (x264), H.265 (x265), AV1 (SVT-AV1, libaom), VP9, Apple ProRes,
-DNxHR, FFV1, UT Video, PNG. Відеокарта: H.264/HEVC/AV1 через NVENC (NVIDIA), AMF (AMD),
-Quick Sync (Intel), Vulkan і Direct3D 12. При старті програма сама перевіряє, які GPU-кодеки
-реально працюють на вашій відеокарті, і показує лише їх. «Додатково → Точність кольору:
-максимальна» вмикає точне округлення (різниця на око не видна, але повільніше);
-«Захист від збою» — MP4/MOV фрагментами (типово ввімкнено). Формати файлів: MP4, MKV, MOV,
-WebM, AVI, NUT, а також послідовності кадрів PNG/TIFF/BMP/JPEG (звук тоді пишеться поруч
-у `audio.wav`). У «Додатково» можна передати будь-які параметри енкодера FFmpeg,
-наприклад `tune=film; x264-params=aq-mode=3`.
+| Panel | What it holds |
+|---|---|
+| Top left | Export settings: **Video**, **Audio & voice**, **Game** and **Fragment** tabs, with the output file below |
+| Top right | **Program** monitor: before a render it shows the demo's map, server, recorder and length; during a render, a live preview and the checks. Transport buttons sit under it |
+| Bottom left | **Voices** (volume, preview), **Library**, **Chat**, **Queue**, **Log** |
+| Bottom right | **Timeline**: a track per player with M (mute) and S (solo), a chat track, the ruler, the playhead and markers |
 
-**Звук і голос.** Кодек (AAC, Opus, FLAC, PCM 16/24, ALAC, MP3...), бітрейт і частота,
-гучність звуку гри і голосів, зсув звуку, вибір чиї голоси додавати (усі / лише ваш /
-усі, крім вас / вибрані в списку / жодного), гучність кожного гравця окремо (повзунки в
-панелі «Голоси», кнопки M і S на доріжках таймлайну; правий клік на імені — «соло»,
-«Прослухати», «Шумодав»), окремі доріжки
-для монтажу, файл мікрофона, субтитри «хто говорить» (.srt поруч із відео — VLC і mpv
-підхоплюють їх самі). «Обробка звуку»: вирівняти гучність гравців, шумодав, приглушувати гру
-під голоси, гучність результату за EBU R128.
+Drag the gutters between panels to resize them. **Window → Reset panel layout** restores the
+default. Blue values such as the resolution, speed or volume can be dragged left and right, or
+clicked to type a number.
 
-**Гра.** Папка GMod (знаходиться автоматично через бібліотеки Steam), 32- чи 64-бітна версія,
-де тримати вікно гри (за межами екрана / позаду інших вікон / на екрані), вимкнення звуку
-гри в мікшері Windows, розмір вікна гри (можна ×2 для згладжування), формат проміжних кадрів
-(TGA без втрат або JPEG, що в ~10 разів менше пише на диск), приховати HUD і руки/зброю,
-додаткові консольні команди, ручний режим, скільки копій гри рендерять фрагмент одночасно
-(паралельний рендер). Якщо встановлено GMod RTX через
-[RTXLauncher](https://github.com/Xenthio/RTXLauncher), з'явиться перемикач «GMod RTX»:
-програма запускає RTX-копію з її параметрами (`-dxlevel 90 -nod3d9ex`, `-insecure`) і довше
-розганяє демо, щоб денойзер встиг зібрати історію кадрів. Папку RTX-копії програма бере з
-налаштувань RTXLauncher сама, навіть якщо на вкладці «Гра» вказано звичайну гру. На час
-рендеру в `rtx.conf` підставляються налаштування для відео (DLSS у режимі повної роздільної
-здатності — DLAA, без генерації кадрів, без заставки Remix), а потім файл повертається як був.
-За межами екрана Remix віддає чорні кадри, тому з RTX вікно гри тримається позаду інших вікон.
-Через секунду після початку запису програма перевіряє, що кадр не чорний.
+| Key | Action |
+|---|---|
+| **I** / **O** | Set the fragment start / end at the playhead |
+| **M** | Add a marker at the playhead (or Ctrl+click the timeline) |
+| **Shift+I** / **Shift+O** | Go to the fragment start / end |
+| **Home** / **End** | Go to the start / end of the demo |
+| **Ctrl+O** | Open a demo |
 
-**Фрагмент.** Рендер усього демо або частини — на таймлайні мишею чи клавішами I і O (видно,
-хто і коли говорив, і де говорять кілька гравців одночасно), повзунками, точним часом
-(`1:02:03`) чи тіками. Для довгих демо (запис на сервері на кілька годин) рендерте саме фрагмент: гра
-швидко перемотає демо до нього (`demo_gototick`) і почне запис за кілька секунд до початку,
-тож чекати, поки програється все, що було раніше, не доведеться. Позначки (M або Ctrl+клік на
-таймлайні, F6 у грі) стають розділами у відео; «Переглянути в грі» — подивитися момент у самій грі й
-позначити фрагмент клавішами F9/F11.
+## How it works
 
-**Чат.** Чат і події з демо з пошуком; збереження в `.txt`; субтитри з чатом (`.srt`).
+A `.dem` file contains no pictures. It is a recording of the game's network packets: where
+entities are, which sounds played, what players said on voice chat. Only the GMod engine, with
+your maps, models, addons and Lua, can draw that correctly. So the program does not re-draw
+the game; it drives it.
 
-Усі налаштування зберігаються в `gmdr_settings.json` поруч із програмою, журнал — у `gmdr_log.txt`
-(якщо в папку програми не можна писати, наприклад у `Program Files`, — у `%LOCALAPPDATA%\GModDemoRender`).
+1. **Demo analysis.** The program parses the `HL2DEMO` format itself (protocol 24 plus
+   GMod-specific messages, including GMod 2026 servers). It reads the map, length, tick rate
+   and player names, and decodes the voice chat.
+2. **Fixed time step.** GMod starts with `host_framerate` set to FPS × sub-frames. Every
+   game frame is then exactly 1/FPS of demo time, however fast or slow the PC is.
+3. **Driver in the GMod menu.** A small Lua script starts the demo and waits until it really
+   plays. It turns `startmovie` on at the right tick, off at the end, and closes the game.
+4. **Frame pipeline.** The game writes each frame (TGA or JPEG) and the audio (WAV) to a
+   temporary folder. The program picks the frames up and decodes them in parallel. Then it
+   blends sub-frames for motion blur, scales and converts color (BT.709) on all cores, and
+   encodes with FFmpeg on its own thread. Finished files are deleted.
+5. **Audio.** The game audio, the decoded voices and your microphone are mixed and encoded in
+   sync with the video.
 
-## Голос гравців і ваш мікрофон
+The internals are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (in Ukrainian).
 
-Голоси інших гравців зберігаються в демо, і програма декодує їх сама — чисто і точно за
-часом. Щоб голос не задвоювався, під час рендеру голос усередині гри вимикається
-(`voice_scale 0`), а в відео додаються декодовані голоси. Кожен голос можна також зберегти
-окремим файлом (кнопка «Зберегти голоси у файли...»): для вибраного фрагмента або всього
-демо, лише тих, хто в цей час говорив. Усі файли починаються з того самого моменту, тож у
-програмі монтажу їх достатньо покласти на початок доріжок. Формат — WAV, а якщо разом вони
-займали б понад 2 ГБ (кількагодинне демо) — FLAC без втрат, де тиша майже не займає місця.
+## Voices and your microphone
 
-**Тихі й гучні гравці, відкриті мікрофони.** «Вирівняти гучність гравців» вимірює гучність
-мовлення кожного гравця по всьому демо (як `ebur128` у FFmpeg) і дає йому постійне підсилення
-до -18 LUFS (не більше +15 і не менше -12 дБ) — тихих чути, гучні не оглушують, а динаміка
-фраз не змінюється. «Шумодав» — нейромережа RNNoise (фільтр `arnndn`, модель
-`rnnoise-voice.rnnn` поруч із програмою): вона відрізняє голос від фону — шипіння, клавіатури,
-звуку гри з колонок — навіть коли фон майже такий гучний, як мова. Потім гейт глушить звук між
-фразами на 25 дБ (поріг між рівнем фону і мови саме цього гравця; відкривається за 20 мс до
-початку слова, тож початки не зрізаються). На справжньому демо з 11 гравцями фон між фразами
-став тихішим на 9–32 дБ, а гучність мови змінилась менш ніж на 1 LU. Без файлу моделі шумодав
-бере `afftdn` (лише шипіння).
+Other players' voices are stored in the demo, and the program decodes them cleanly and exactly
+in time. While rendering, in-game voice is muted (`voice_scale 0`) so voices are not doubled.
+**Save voices to files...** exports each player's voice for the fragment or the whole demo. All
+files start at the same moment, so they line up at the start of the tracks in an editor.
 
-**Ваш власний голос** сервер вам не пересилає, тому в звичайному демо його немає. Є два способи:
+**Your own voice** is not sent back to you by the server, so a normal demo does not have it.
+There are two ways around that:
 
-- перед записом демо введіть у консолі GMod `voice_loopback 1` — тоді ваш голос потрапить у
-  демо, і програма позначить його як «(ви)»;
-- або записуйте мікрофон окремо (OBS, Audacity, запис Discord) і додайте файл на вкладці
-  «Звук і голос» → «Власний мікрофон». Поле «Зсув» задає, з якої секунди відео починається
-  файл (можна від'ємне значення, щоб обрізати початок).
+- type `voice_loopback 1` in the GMod console before recording the demo. Your voice ends up in
+  the demo and is marked "(you)";
+- or record your microphone separately and add the file under **Audio & voice → Own
+  microphone**. The offset sets the second of video where the file starts; it can be negative.
 
-## Відеокарта і багатоядерність
+## Command line
 
-Декодування кадрів, motion blur, масштабування і перетворення кольору виконуються паралельно
-на всіх ядрах процесора. Кодування — або багатопотоковими CPU-кодеками (x264/x265/SVT-AV1
-завантажують усі ядра), або апаратним блоком відеокарти (NVENC/AMF/QSV), який майже не
-навантажує процесор. Саму картинку, звісно, малює відеокарта в грі. Кількість потоків можна
-обмежити в «Відео → Додатково».
+`gmdr-cli.exe` does the same work without a window, which suits batch jobs. Its messages are in
+Ukrainian by default; add `--lang en` or set `GMDR_LANG=en` for English.
 
-## Збірка з вихідного коду
+```
+gmdr-cli info demo.dem [--chat]
+gmdr-cli render demo.dem -o video.mp4 --size 2560x1440 --fps 60 --codec hevc_nvenc --bit-depth 10
+gmdr-cli render demo.dem -o film.mov --codec prores_ks --motion-blur 16 --shutter 180 --acodec pcm_s24le
+gmdr-cli render demo.dem -o clip.mp4 --start 30 --end 75 --hide-hud --mic mic.wav --mic-offset -1.5
+gmdr-cli render demo.dem --start 10:00 --end 11:00 --test-run
+gmdr-cli render demo.dem -o discord.mp4 --start 1:00 --end 1:30 --size 1280x720 --target-size 10
+gmdr-cli render demo.dem -o yt.mp4 --level-voices --denoise --duck-game --loudness -14
+gmdr-cli render demo.dem -o clip.mkv --markers "5:30=Fight; 7:10=Final" --chat-srt
+gmdr-cli render demo.dem -o fight.mp4 --also discord,vertical,thumb,gif
+gmdr-cli render demo.dem -o slowmo.mp4 --start 2:10 --end 2:14 --speed 0.25
+gmdr-cli render demo.dem -o long.mp4 --start 1:00:00 --end 1:20:00 --motion-blur 8 --parallel 2
+gmdr-cli render a.dem b.dem c.dem -o videos\
+gmdr-cli queue overnight.txt --then shutdown
+gmdr-cli transcribe demo.dem --language en -o speech.srt
+gmdr-cli watch demo.dem --from 12:30
+gmdr-cli voice demo.dem -o voices\ --start 1:00:00 --end 1:05:00
+gmdr-cli resume
+gmdr-cli encoders --test
+gmdr-cli report -o report.zip
+```
 
-Потрібно: **Visual Studio 2022 (17.8+) або 2026** з компонентом «Desktop development with C++»
-(у ньому вже є CMake). Інтернет потрібен, лише якщо немає папки `third_party\ffmpeg`.
+A queue file has one demo per line with its own options. Empty lines and lines starting with
+`#` are skipped:
 
-Найпростіше — запустити `build.bat` у папці проекту. Він сам знайде CMake з Visual Studio,
-налаштує проект і збере `build\Release\gmdr.exe` та `gmdr-cli.exe` (DLL FFmpeg копіюються
-поруч автоматично). Бібліотеки FFmpeg для збірки лежать у `third_party\ffmpeg`; якщо цієї
-папки немає, `build.bat` завантажить їх сам (`scripts\get_ffmpeg.ps1`).
+```
+"C:\demos\match.dem" --start 5:00 --end 7:30 -o "D:\video\fight.mp4"
+"C:\demos\match.dem" --start 12:00 --end 13:00 --hide-hud
+C:\demos\other.dem --size 2560x1440
+```
 
-Або у Visual Studio: «Файл → Відкрити → Папку...» → вибрати цю папку. VS сама підхопить
-`CMakeLists.txt` і `CMakePresets.json`; виберіть конфігурацію «Windows x64 Release», ціль
-`gmdr.exe` і натисніть «Запуск». Якщо `third_party\ffmpeg` немає, спершу завантажте FFmpeg:
+Run `gmdr-cli --help` for every option.
+
+## What the program changes
+
+- It adds `garrysmod\lua\menu\gmdr_driver.lua` and one line at the end of
+  `garrysmod\lua\menu\menu.lua`. The script does nothing until the program hands it a job. A
+  backup is kept as `menu.lua.gmdr_backup`. Remove it with **Tools → Remove the driver from
+  GMod**, or verify the game files in Steam.
+- During a render or a watch session it creates temporary files in `garrysmod\cfg\gmdr`,
+  `garrysmod\data\gmdr` and `garrysmod\gmdr_tmp`. They are deleted afterwards.
+- Console variables changed for the render (`fps_max`, `mat_vsync`, `voice_scale`,
+  `cl_drawhud`...) are restored. `config.cfg` is restored from a backup even if the game was
+  closed mid-render.
+- Garry's Mod is muted in the Windows volume mixer during the render (the video still has
+  sound). Windows is kept awake until the render ends.
+- The `.dem` file association is registered only if you turn on **Tools → Open .dem files with
+  a double click**. It goes under `HKCU` for your account only, and the same menu item removes
+  it.
+
+The program injects nothing into the game process and does not touch anti-cheat. It uses only
+standard engine features (`startmovie`, `host_framerate`, the menu Lua state) and ordinary
+Windows window management.
+
+Settings are saved in `gmdr_settings.json` next to the program, and the log in `gmdr_log.txt`.
+If the program folder is not writable (for example `Program Files`), they go to
+`%LOCALAPPDATA%\GModDemoRender` instead.
+
+## Troubleshooting
+
+If the cause of a problem is unclear, use **Help → Collect a problem report...** and attach the
+ZIP. You can look inside before sending it.
+
+- **"Garry's Mod is already running".** Close the game; the program launches it itself with
+  the right options.
+- **The game closes at once, or "the driver does not respond".** Make sure Steam is running.
+  If GMod was just updated and replaced `menu.lua`, use **Tools → Install the driver into GMod**.
+- **"The demo did not start".** The demo was recorded by another GMod version, or the server
+  used maps or addons you don't have. Check that the demo plays in the game itself
+  (`playdemo demos/name`). Joining that server once usually downloads the content.
+- **A step of the test run fails.** The step shows a hint and the last lines of the game
+  console.
+- **The background game stops producing frames.** The program moves the window back on screen,
+  behind other windows, and logs it. If it happens every time, choose **Game → Behind other
+  windows**. Don't minimize the game: a minimized game does not draw.
+- **The game menu flashes into a frame.** Demos also record the player pressing Esc. The
+  program hides the menu at once, but a single frame can sometimes slip into the video.
+- **The video size differs from the settings.** The game cannot open a window larger than the
+  monitor; frames are then scaled to the requested size, with a warning in the log.
+- **You hear sped-up audio from the speakers.** That's normal: the game plays sound at render
+  pace. The audio in the video is correct.
+- **Garry's Mod stays muted.** This happens if the game or the PC crashed mid-render. Unmute
+  it in the Windows volume mixer, or just start the next render.
+- **Low disk space.** Below 1 GiB free the game pauses until space is freed. Lower **Frame
+  queue on disk** on the Game tab or switch the frame format to JPEG.
+- **The program crashed.** A `gmdr_crash_<date>.dmp` appears next to it. Please attach it
+  together with `gmdr_log.txt` to your bug report.
+
+## Building from source
+
+You need **Visual Studio 2022 (17.8+) or 2026** with the *Desktop development with C++*
+workload, which already includes CMake.
+
+The simplest way is to run `build.bat`. It finds CMake, downloads the FFmpeg development
+libraries into `third_party\ffmpeg` if they are missing, and builds `build\Release\gmdr.exe`
+and `gmdr-cli.exe`. The FFmpeg DLLs are copied next to them.
+
+In Visual Studio, use **File → Open → Folder...** and pick the repository. Choose the *Windows
+x64 Release* configuration and the `gmdr.exe` target. If `third_party\ffmpeg` is missing, fetch
+it first:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\get_ffmpeg.ps1
 ```
 
-Linux (для розробки): потрібні `libavcodec-dev libavformat-dev libswscale-dev
-libswresample-dev libglfw3-dev`, далі `cmake --preset linux-release && cmake --build
---preset linux-release`. Крос-компіляція під Windows з Linux — `cmake/mingw-w64-toolchain.cmake`.
+`scripts\get_whisper.ps1` puts `whisper-cli` into `third_party\whisper` for speech recognition.
+The recognition model itself is downloaded by the program when you first need it.
 
-Тести: `-DGMDR_BUILD_TESTS=ON`, синтетичні демо — `python tests/tools/make_test_demo.py
-out.dem truth.json [--pe-bits 20] [--compress-userinfo] [--gmod2026]` (потрібен `ffmpeg` з
-libopus), далі `gmdr-tests <папка з демо>`. Санітайзери: `-DGMDR_SANITIZE=address` (MSVC,
-GCC, Clang) або `address,undefined` (GCC/Clang). Фазер: `-DGMDR_BUILD_FUZZERS=ON` (Clang або
-MSVC), запуск `gmdr-fuzz-demo папка_з_демо -max_total_time=120`.
+Linux builds are for development: install `libavcodec-dev libavformat-dev libavfilter-dev
+libswscale-dev libswresample-dev libglfw3-dev`, then run `cmake --preset linux-release &&
+cmake --build --preset linux-release`.
 
-## Консольна версія
+**Tests:**
 
-`gmdr-cli.exe` робить те саме без вікна — зручно для пакетної обробки:
+- Configure with `-DGMDR_BUILD_TESTS=ON`.
+- Generate synthetic demos with `python tests/tools/make_test_demo.py out.dem truth.json`
+  (needs `ffmpeg` with libopus), then run `gmdr-tests <folder with demos>`.
+- Sanitizers: `-DGMDR_SANITIZE=address`, or `address,undefined` with GCC/Clang.
+- Fuzzer: `-DGMDR_BUILD_FUZZERS=ON`.
 
-```
-gmdr-cli info  demo.dem
-gmdr-cli voice demo.dem -o голоси\ --start 1:00:00 --end 1:05:00
-gmdr-cli render demo.dem -o video.mp4 --size 2560x1440 --fps 60 --codec hevc_nvenc --bit-depth 10
-gmdr-cli render demo.dem -o film.mov --codec prores_ks --motion-blur 16 --shutter 180 --acodec pcm_s24le
-gmdr-cli render demo.dem -o clip.mp4 --start 30 --end 75 --hide-hud --mic mic.wav --mic-offset -1.5
-gmdr-cli render demo.dem --start 10:00 --end 11:00 --test-run    (тестовий прогін: кроки і прогноз)
-gmdr-cli render demo.dem -o discord.mp4 --start 1:00 --end 1:30 --size 1280x720 --target-size 10 --srt
-gmdr-cli render demo.dem -o out.mp4 --player-volume "steam:76561198152226525=0.5; slot:3=0" --window behind
-gmdr-cli render demo.dem -o clip.mkv --start 5:00 --end 9:00 --markers "5:30=Бій; 7:10=Фінал" --chat-srt
-gmdr-cli info demo.dem --chat                               (увесь чат і входи/виходи гравців)
-gmdr-cli watch demo.dem --from 12:30                        (переглянути в грі; F9/F11 — фрагмент, F6 — позначка)
-gmdr-cli render demo.dem -o yt.mp4 --level-voices --denoise --duck-game --loudness -14
-gmdr-cli voice demo.dem -o голоси\ --denoise-player steam:76561198152226525 --level-voices
-gmdr-cli render a.dem b.dem c.dem -o відео\ --size 1920x1080 (черга: гра запускається один раз)
-gmdr-cli queue список.txt --fps 60                          (черга з файлу; параметри — для всіх пунктів)
-gmdr-cli render demo.dem -o бій.mp4 --size 2560x1440 --also discord,vertical,thumb,gif   (+ _discord, _vertical, .jpg, .gif)
-gmdr-cli render demo.dem -o slowmo.mp4 --start 2:10 --end 2:14 --speed 0.25   (уповільнення вчетверо, звук розтягнуто)
-gmdr-cli transcribe demo.dem --language uk -o розмови.txt  (голосовий чат текстом: [час] Нік: репліка)
-gmdr-cli render demo.dem -o кліп.mp4 --start 5:00 --end 6:00 --speech-srt   (субтитри з текстом розмов)
-gmdr-cli render demo.dem -o бій.mp4 --start 1:00:00 --end 1:20:00 --motion-blur 8 --parallel 2   (дві копії гри)
-gmdr-cli resume                                             (дописати рендер, урваний збоєм програми чи ПК)
-gmdr-cli encode "C:\...\кадри" -o out.mkv --codec ffv1     (закодувати готові кадри startmovie)
-gmdr-cli encoders --test                                    (які кодеки працюють на цьому ПК)
-gmdr-cli report -o звіт.zip                                 (звіт про проблему: журнал, система, консоль GMod)
-gmdr-cli queue на_ніч.txt --then shutdown                   (після черги вимкнути ПК; хвилина на скасування)
-gmdr-cli --lang en render demo.dem -o clip.mp4              (повідомлення англійською)
-```
+CI builds and tests every push on Windows (MSVC, with end-to-end renders through a fake game)
+and Linux (GCC, ASan/UBSan), and fuzzes the demo parser.
 
-У файлі для `queue` кожен рядок — демо і його власні параметри (порожні рядки й рядки з `#`
-пропускаються):
+UI strings are Ukrainian in the source, with English translations in
+`src/core/util/i18n_en.inc`. After adding strings, run `python scripts/i18n.py check`.
 
 ```
-# список.txt
-"C:\demos\match.dem" --start 5:00 --end 7:30 -o "D:\video\бій.mp4"
-"C:\demos\match.dem" --start 12:00 --end 13:00 --hide-hud
-C:\demos\other.dem --size 2560x1440
+src/core/demo/     .dem parser, GMod network messages, string tables, chat and events
+src/core/voice/    Steam Voice packets, Opus decoding, voice timeline
+src/core/audio/    WAV, mixer, FFmpeg filters, loudness, gate, voice preview
+src/core/frames/   frame buffers, TGA/JPEG, live frame sequence reader, motion blur
+src/core/media/    FFmpeg video/audio encoders and muxer
+src/core/game/     GMod discovery, Lua driver, process and window control, mixer mute
+src/core/speech/   speech recognition via whisper.cpp
+src/core/render/   encode pipeline, background jobs (analysis, render, queue, resume), subtitles
+src/core/util/     logging, JSON, VDF, thread pool, i18n, crash reports, update check
+src/gui/           Dear ImGui interface (Win32 + Direct3D 11; GLFW on Linux)
+src/cli/           command-line version
+tests/             unit tests, synthetic demo generator, fake game, fuzzer, A/V comparison
 ```
 
-Пункт без свого `-o` пишеться поруч із демо (або в папку з `-o` командного рядка); якщо те саме
-демо в черзі кілька разів, файли отримують суфікс `_2`, `_3`.
+## License
 
-Повний список параметрів: `gmdr-cli --help`.
+GMod Demo Render is released under the [MIT License](LICENSE).
 
-## Що програма змінює у файлах гри і в системі
+Third-party components:
 
-- `garrysmod\lua\menu\gmdr_driver.lua` і один рядок у кінці `garrysmod\lua\menu\menu.lua`
-  (`pcall( include, "gmdr_driver.lua" )`). Скрипт нічого не робить, поки програма не створить
-  файл завдання. Резервна копія: `menu.lua.gmdr_backup`. Видалити: меню «Інструменти →
-  Видалити драйвер з GMod» або «Перевірити цілісність файлів гри» у Steam.
-- На час рендеру і перегляду: `garrysmod\cfg\gmdr\job_*.cfg`, `garrysmod\data\gmdr\*`,
-  `garrysmod\gmdr_tmp\*` — видаляються автоматично.
-- Налаштування, які змінюються на час рендеру (`fps_max`, `fps_max_nofocus`, `mat_vsync`,
-  `voice_scale`, `cl_drawhud`...), повертаються як були; `config.cfg` відновлюється з резервної
-  копії, навіть якщо гру закрили посеред рендеру.
-- Гучність Garry's Mod у мікшері Windows вимикається на час рендеру і вмикається після нього.
-  Якщо рендер обірвався аварійно, звук увімкнеться під час наступного рендеру (програма
-  пам'ятає це у файлі `gmod_audio_muted.flag`) — або ввімкніть його в мікшері вручну.
-- На час рендеру Windows не засинає (`SetThreadExecutionState`).
-- Лише якщо ви самі ввімкнете «Інструменти → Відкривати .dem подвійним кліком»: розділи
-  `HKCU\Software\Classes\GModDemoRender.dem`, `…\Applications\gmdr.exe` і значення в
-  `…\.dem\OpenWithProgids` (тільки для вашого облікового запису). Типовою програмою для `.dem`
-  вона стає, лише якщо інша ще не призначена. Той самий пункт меню все це прибирає.
+- [Dear ImGui](https://github.com/ocornut/imgui) (MIT).
+- [FFmpeg](https://ffmpeg.org). Releases ship the BtbN "gpl" build, which includes x264 and
+  x265, so the FFmpeg DLLs in the release archive are covered by the GPL. Their license is
+  included in the archive.
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT).
+- The RNNoise model "leavened-quisling" from
+  [rnnoise-models](https://github.com/GregorR/rnnoise-models). Its author states it is not
+  subject to copyright; see `third_party/rnnoise-models/README.md`.
 
-Програма не впроваджує код у процес гри і не чіпає античит — використовуються лише
-стандартні засоби рушія (`startmovie`, `host_framerate`, Lua меню) і звичайні функції Windows
-для вікна гри (розташування, пріоритет, енергозбереження).
-
-## Проблеми та рішення
-
-Якщо щось не так і причина незрозуміла — «Довідка → Зібрати звіт про проблему»: у ZIP буде все,
-що потрібно для діагностики (див. вище), і його можна переглянути перед тим, як комусь надіслати.
-
-**«Garry's Mod уже запущено».** Закрийте гру — програма запускає її сама з потрібними параметрами.
-
-**Гра закрилася одразу / «Драйвер не відповідає».** Переконайтеся, що Steam запущено. Якщо
-GMod щойно оновився і перезаписав `menu.lua`, натисніть «Інструменти → Встановити драйвер».
-
-**«Демо не запустилося».** Демо записане іншою версією GMod (після оновлень старі демо часто
-перестають відтворюватися) або на сервері були карти/аддони, яких у вас немає. Демо з сервера
-відтворюється лише з тим самим контентом: карта (її назву видно у вікні програми) і аддони
-мають бути у вас — найпростіше ще раз зайти на той сервер. Перевірте, чи відкривається демо
-в самій грі (`playdemo demos/назва`).
-
-**Імена гравців — «Гравець #7» замість ніків.** Так було з демо із серверів GMod 2026 року
-у версії 1.0; у 1.1 виправлено — просто відкрийте демо ще раз.
-
-**Тестовий прогін показує ✗ на якомусь кроці.** Під кроком є підказка, а в повідомленні —
-останні рядки консолі гри. Найчастіше: «Драйвер не відповідає» — «Інструменти → Встановити
-драйвер у GMod»; «Демо не завантажилось» — немає карти чи аддонів сервера.
-
-**Гра у фоні перестає віддавати кадри.** Програма сама поверне вікно на екран (позаду інших
-вікон) і напише про це в журналі. Якщо так щоразу — виберіть на вкладці «Гра» режим «Позаду
-інших вікон». Згортати гру не можна: згорнута гра не малює.
-
-**Під час відтворення на мить з'являється меню гри.** Гра записує в демо і натискання Esc
-гравцем; програма одразу ховає меню, але один кадр іноді встигає потрапити у відео.
-
-**Відео має інший розмір, ніж у налаштуваннях.** Гра не дозволяє вікно, більше за монітор, —
-кадри тоді масштабуються до потрібного розміру (про це буде попередження в журналі).
-
-**Під час рендеру з колонок чути пришвидшений звук.** Це нормально: гра грає звук у
-«рендерному» темпі. У відео звук правильний. Програма сама вимикає звук GMod у мікшері
-(«Гра → Вимкнути звук гри в мікшері Windows»).
-
-**Звук GMod лишився вимкненим.** Буває, якщо гра чи ПК впали посеред рендеру: відкрийте
-мікшер гучності Windows і ввімкніть Garry's Mod, або просто запустіть наступний рендер.
-
-**Мало місця на диску.** Коли вільного місця менше за 1 ГіБ, гра стає на паузу, поки його не
-звільнять. Зменште «Черга кадрів на диску» на вкладці «Гра» або виберіть JPEG.
-
-**Програма впала.** У папці програми з'явиться `gmdr_crash_<дата>.dmp` — додайте його разом
-із `gmdr_log.txt` до повідомлення про помилку.
-
-Детальний журнал кожного запуску — `gmdr_log.txt`, консоль гри — `garrysmod\console.log`.
-
-## Структура коду
-
-Код прокоментовано українською — його зручно читати як навчальний проект. Як влаштовані
-формат демо, драйвер у меню і конвеєр кадрів — у [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-```
-src/core/util/     журнал, рядки, JSON, VDF (формат Steam), пул потоків, відображення файлу
-                   в пам'ять, "не засинати", звіт про збій, переклад інтерфейсу (i18n_en.inc)
-src/core/demo/     читання .dem, побітовий розбір мережевих повідомлень GMod,
-                   таблиці рядків (імена гравців), автовизначення варіанту протоколу
-src/core/voice/    пакети Steam Voice (CRC32, кадри Opus), декодування і часова шкала
-src/core/audio/    WAV (включно з файлом, що ще пишеться), джерела звуку, змішувач, фільтри FFmpeg,
-                   гучність за EBU R128, гейт і вирівнювання голосу, уривки для прослуховування
-src/core/frames/   кадр у пам'яті (площини, пул буферів), TGA/JPEG, "живе" читання
-                   послідовності кадрів, motion blur
-src/core/media/    обгортки FFmpeg: відео- та аудіоенкодери, контейнери
-src/core/game/     пошук GMod, Lua-драйвер (gmdr_driver.lua), запуск/пауза процесу, вікно гри
-                   у фоні, звук гри в мікшері Windows
-src/core/speech/   розпізнавання мовлення (whisper.cpp): нарізка голосу, кеш розпізнаного
-src/core/render/   конвеєр кодування (окремий потік кодера), фонові завдання (аналіз, рендер,
-                   тестовий прогін, кодування кадрів), субтитри
-src/gui/           вікно в стилі Adobe (Dear ImGui + Win32/DirectX 11): app.cpp, панелі
-                   app_tab_*.cpp і app_panels.cpp, тема й віджети ui_widgets.cpp
-src/cli/           консольна версія
-scripts/           завантаження FFmpeg і whisper.cpp, перевірка перекладу (i18n.py)
-tests/             модульні тести, генератор синтетичного демо, імітатор гри, фазер
-                   парсера (fuzz_demo.cpp), перевірка синхронізації звуку й відео,
-                   тести Lua-драйвера
-.github/workflows/ збірка і тести на кожну зміну (Visual Studio, Linux + санітайзери, фазинг)
-```
-
-## Ліцензії
-
-Код програми можна вільно змінювати і використовувати. Бібліотеки: Dear ImGui (MIT),
-FFmpeg (збірка BtbN «gpl» містить x264/x265, тому поширення готових .exe разом із цими DLL
-підпадає під GPL). Модель RNNoise `leavened-quisling` з
-[rnnoise-models](https://github.com/GregorR/rnnoise-models) — за словами автора, не об'єкт
-авторського права (див. `third_party/rnnoise-models/README.md`). Garry's Mod — торгова марка Facepunch Studios; програма не пов'язана з
-Facepunch чи Valve.
+Garry's Mod is a trademark of Facepunch Studios. This project is not affiliated with Facepunch
+Studios or Valve.
