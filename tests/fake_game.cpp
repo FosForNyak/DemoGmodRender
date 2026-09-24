@@ -17,11 +17,15 @@
 //     навантажувати процесор — як RTX Remix, що компілює шейдери (гра зайнята, а не зависла)
 //   * FAKE_DEMO_CLOCK=1 — спалахи й біпи на цілих секундах ЧАСУ ДЕМО, а не від початку
 //     запису (так видно, що після перезапуску гри відео продовжилось без зсуву)
-//   * кадри в канали (frames/frame_pipe.hpp): назва фільму \\?\pipe\... (Windows) — кадри й звук
+//   * назву фільму розуміє, як файлова система Source: "//ID/файл" чи "\\ID\файл" — файл у шляху
+//     гри з позначкою ID (невідомий ID — garrysmod/), інша абсолютна назва — як є, решта — відносно
+//     garrysmod/. Тож \\?\pipe\x стає garrysmod/pipe/x, як у справжньому GMod
+//   * кадри в канали (frames/frame_pipe.hpp): назва фільму \??\pipe\... (Windows) — кадри й звук
 //     ідуть у канали, звук — шматками, щоразу відкриваючи "файл" заново, як WaveAppendTmpFile
 //     у рушії; на Linux кадри — у FIFO, які створила програма (звичайний запис файлу)
-//   * FAKE_NO_PIPES=1 — рушій, що не пише в канал, як GMod: у консолі «Attempt to open dangerous
-//     file path!», а кадри й звук не пишуться
+//   * кадр не записався — як GMod: «Couldn't write movie snapshot to file ...» у консолі, і запис
+//     фільму закінчується (демо грає далі)
+//   * FAKE_NO_PIPES=1 — рушій, що не може писати в канал: запис кадру в канал не вдається
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
@@ -107,6 +111,20 @@ static std::vector<uint8_t> encode_jpeg(const frames::Image& img, int quality) {
     std::vector<uint8_t> out;
     if (avcodec_receive_packet(ctx.get(), pkt.get()) == 0) out.assign(pkt->data, pkt->data + pkt->size);
     return out;
+}
+
+// Куди рушій пише "файл" з такою назвою (CBaseFileSystem: назва з двома скісними на початку — це
+// "//<ID шляху>/<файл>"; невідомий ID — шлях для запису типово, тобто garrysmod/)
+static fs::path engine_write_path(const fs::path& gm, const std::string& name) {
+    const auto sep = [](char c) { return c == '/' || c == '\\'; };
+    if (name.size() > 2 && sep(name[0]) && sep(name[1])) {
+        size_t i = 2;
+        while (i < name.size() && !sep(name[i])) ++i;   // ID шляху
+        while (i < name.size() && sep(name[i])) ++i;
+        return gm / fs::path(replace_all(name.substr(i), "\\", "/"));
+    }
+    if ((name.size() > 1 && name[1] == ':') || (!name.empty() && sep(name[0]))) return fs::path(name);
+    return gm / name;
 }
 
 // Куди рушій пише "файл": у канал (іменований канал Windows чи FIFO), а не на диск
@@ -280,10 +298,9 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
     // FAKE_STRIP_DIR=1 — імітувати рушій, що ігнорує папку в назві фільму (пише в garrysmod/)
     const bool strip = std::getenv("FAKE_STRIP_DIR") != nullptr;
     const bool no_pipes = std::getenv("FAKE_NO_PIPES") != nullptr;
-    bool pipe_refused = false;
-    // Назва в просторі каналів Windows — абсолютна, рушій бере її як є
+    bool movie_on = true;   // рушій ще записує фільм (після невдалого кадру — ні)
     const bool win_pipe = frames::is_windows_pipe_name(movie);
-    const fs::path movie_path = strip ? gm / fs::path(movie).filename() : win_pipe ? fs::path(movie) : gm / movie;
+    const fs::path movie_path = strip ? gm / fs::path(movie).filename() : engine_write_path(gm, movie);
     audio::WavWriter wav;
     EngineWav pipe_wav;
     if (win_pipe && !strip) {
@@ -308,6 +325,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
     const bool may_fail = (crash_at >= 0 || hang_at >= 0) && (std::getenv("FAKE_CRASH_REPEAT") || !fs::exists(crashed_mark));
     const double clock0 = std::getenv("FAKE_DEMO_CLOCK") ? start_tick * ti : 0.0;   // час демо першого кадру
     con << "FakeGMod: запис, host_framerate " << rate << "\n";
+    con << "Started recording movie, frames will record after console is cleared...\n";
     for (;;) {
         const double t = frame / rate;                           // час від початку запису
         const int tick = start_tick + static_cast<int>(t / ti);
@@ -327,7 +345,8 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             }
         }
         const std::string name = std::format("{}{:04d}.{}", movie_path.string(), frame, jpeg ? "jpg" : "tga");
-        auto bytes = jpeg ? encode_jpeg(img, 90) : frames::encode_tga(img, true, false);
+        std::vector<uint8_t> bytes;
+        if (movie_on) bytes = jpeg ? encode_jpeg(img, 90) : frames::encode_tga(img, true, false);
         if (frame == busy_at && busy_at >= 0) {
             const int secs = std::max(1, env_int("FAKE_BUSY_SECONDS") > 0 ? env_int("FAKE_BUSY_SECONDS") : 8);
             con << "FakeGMod: компілюю шейдери " << secs << " с\n";
@@ -335,12 +354,6 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             volatile double x = 0;
             for (const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(secs); std::chrono::steady_clock::now() < until;)
                 for (int i = 0; i < 100000; ++i) x = x + std::sqrt(static_cast<double>(i));
-        }
-        const bool skip_frame = no_pipes && is_pipe_target(name);   // рушій не вміє писати в канал
-        if (skip_frame && !pipe_refused) {
-            pipe_refused = true;
-            con << "Attempt to open dangerous file path! Blocking: '" << name << "'\n";
-            con.flush();
         }
         if (may_fail && (frame == crash_at || frame == hang_at)) {
             std::ofstream(crashed_mark) << frame;
@@ -357,9 +370,21 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             con.flush();
             for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-        if (!skip_frame) {
-            std::ofstream f(name, std::ios::binary);
-            f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (movie_on) {
+            bool written = false;
+            if (!(no_pipes && is_pipe_target(name))) {   // FAKE_NO_PIPES: у канал рушій записати не може
+                std::ofstream f(name, std::ios::binary);
+                f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+                written = f.good();
+            }
+            if (!written) {
+                // Як GMod: попередження з назвою, яку дали startmovie, і кінець запису фільму
+                con << std::format("Couldn't write movie snapshot to file {}{:04d}.{}.\n", movie, frame, jpeg ? "jpg" : "tga");
+                con << "Stopped recording movie...\n";
+                con.flush();
+                movie_on = false;
+                wav.close();
+            }
         }
         // ---- Звук: 44100/rate семплів на кадр ----
         audio_carry += 44100.0 / rate;
@@ -373,8 +398,10 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             abuf[static_cast<size_t>(i) * 2] = v;
             abuf[static_cast<size_t>(i) * 2 + 1] = v;
         }
-        if (pipe_wav.ok) pipe_wav.append(abuf.data(), static_cast<size_t>(n));
-        else wav.write(abuf.data(), static_cast<size_t>(n));
+        if (movie_on) {
+            if (pipe_wav.ok) pipe_wav.append(abuf.data(), static_cast<size_t>(n));
+            else wav.write(abuf.data(), static_cast<size_t>(n));
+        }
         audio_pos += n;
         ++frame;
         if (frame % 5 == 0) write_status(status, "recording", tick, total, start_tick, last_tick, "", frame);
@@ -384,7 +411,8 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         }
     }
     wav.close();
-    if (pipe_wav.ok) pipe_wav.fixup();
+    if (pipe_wav.ok && movie_on) pipe_wav.fixup();
+    con << (movie_on ? "Stopped recording movie...\n" : "No movie started.\n");   // endmovie драйвера
     write_status(status, "stopping", last_tick, total, start_tick, last_tick, "", frame);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     write_status(status, "done", last_tick, total, start_tick, last_tick, "", frame);

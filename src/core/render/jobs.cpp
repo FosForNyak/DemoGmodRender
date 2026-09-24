@@ -1651,7 +1651,7 @@ void RenderJob::run() {
     double speed = 0, wait_ms = 0;
     frames::Image img;
 
-    auto fatal = [&](const std::string& msg) {
+    auto fatal = [&](const std::string& msg, const std::string& own_hint = {}) {
         unmute_game();
         if (proc->suspended()) proc->resume();
         if (!s_.manual_mode) game::request_cancel(*gmod_, id_);
@@ -1669,7 +1669,7 @@ void RenderJob::run() {
                 if (p.checks[i].state == CheckItem::Pending) {
                     p.checks[i].state = CheckItem::Failed;
                     p.checks[i].detail = msg.substr(0, msg.find('\n'));
-                    hint = tr(kCheckHints[i]);
+                    hint = own_hint.empty() ? tr(kCheckHints[i]) : own_hint;
                     break;
                 }
         });
@@ -1948,24 +1948,32 @@ void RenderJob::run() {
                 replace_reader(std::make_unique<frames::FrameSequenceReader>(so));
                 break;
             }
-            if (pipe_of() && !cancel_ && !kill_) {
-                // Що сказала гра: рядки консолі про запис кадрів (GMod не дозволяє писати поза своїми
-                // папками — «Attempt to open dangerous file path»; цей захист програма не обходить)
-                bool blocked = false;
-                for (const auto& l : game::console_log_tail(*gmod_, 400)) {
-                    const std::string low = to_lower(l);
-                    if (low.find("dangerous") == std::string::npos && low.find("movie") == std::string::npos &&
-                        low.find("snapshot") == std::string::npos && low.find("pipe") == std::string::npos &&
-                        low.find("couldn't") == std::string::npos && low.find(to_lower(movie_prefix())) == std::string::npos)
-                        continue;
-                    blocked = blocked || low.find("dangerous") != std::string::npos;
-                    log_warn("{}", trf("Консоль гри: {}", l));
+            if (auto* pr = pipe_of(); pr && !cancel_ && !kill_) {
+                // Що сказала гра: рядки консолі цього запуску про запис фільму (від останнього
+                // «Started recording movie») і все, де є назва кадрів цього завдання. console.log
+                // гра лише дописує, тож раніші рядки — з попередніх запусків, їх не показуємо.
+                const auto lines = game::console_log_tail(*gmod_, 400);
+                size_t from = lines.size();
+                for (size_t i = lines.size(); i-- > 0;)
+                    if (to_lower(lines[i]).find("started recording movie") != std::string::npos) {
+                        from = i;
+                        break;
+                    }
+                const std::string ours = to_lower(movie_prefix());
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const std::string low = to_lower(lines[i]);
+                    if (low.find(ours) != std::string::npos ||
+                        (i >= from && (low.find("movie") != std::string::npos || low.find("snapshot") != std::string::npos)))
+                        log_warn("{}", trf("Консоль гри: {}", lines[i]));
                 }
-                const std::string why = blocked ? tr("GMod не дозволяє startmovie писати поза папками гри (захист «dangerous file path»), "
-                                                     "тож канал недоступний — програма цей захист не обходить.")
-                                                : tr("Гра не записала в канал жодного кадру.");
+                // Чи дійшла гра до каналу взагалі: якщо ні — рушій не зміг відкрити "файл" за такою назвою
+                const std::string why = pr->frame_opens() == 0
+                    ? tr("Гра не записала в канал жодного кадру: рушій жодного разу не відкрив канал за назвою, яку дала програма.")
+                    : trf("Гра не записала в канал жодного кадру (відкривала канал {} раз, але нічого не записала).", pr->frame_opens());
                 if (!pipe_strict_ && fall_back_to_files(why)) continue;
-                fatal(why + (pipe_strict_ ? tr(" Вибрано лише канал (--frame-transport pipe), тож на файли рендер не переходить.") : ""));
+                fatal(why + (pipe_strict_ ? tr(" Вибрано лише канал (--frame-transport pipe), тож на файли рендер не переходить.") : ""),
+                      pipe_strict_ ? tr("З цією грою канал не працює — запустіть рендер без --frame-transport pipe: тоді кадри підуть файлами.")
+                                   : std::string());
                 return;
             }
             if (!rp->saw_any_file() && frames_dir == tmp_dir_)

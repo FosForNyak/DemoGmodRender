@@ -28,6 +28,10 @@ std::string game_key(const fs::path& exe) {
     return std::format("{}|{}|{}", to_lower(path_to_utf8(exe.lexically_normal())), size, ticks);
 }
 
+// Якою назвою програма пропонує гри канал. Невдачу з іншою назвою (з попередньої версії програми)
+// не зважаємо: канал пробується знову
+std::string pipe_form() { return frames::pipe_movie_name("", ""); }
+
 json::Value load_store() {
     if (auto text = read_file_text(store_path()))
         if (auto j = json::parse(*text); j && j->is_object()) return *j;
@@ -61,7 +65,7 @@ TransportChoice choose_frame_transport(const RenderSettings& s, const fs::path& 
     const json::Value store = load_store();
     const json::Value& e = store[game_key(game_exe)];
     const double when = e["time"].as_number(0);
-    if (when > 0 && static_cast<double>(std::time(nullptr)) - when < kForgetAfterSeconds) {
+    if (when > 0 && static_cast<double>(std::time(nullptr)) - when < kForgetAfterSeconds && e["name"].as_string() == pipe_form()) {
         c.note = trf("з цією грою канал уже не спрацював ({})", e["why"].as_string());
         return c;
     }
@@ -76,6 +80,7 @@ void remember_pipe_failure(const fs::path& game_exe, const std::string& why) {
     std::string w = trim(why);
     while (!w.empty() && w.back() == '.') w.pop_back();   // пояснення йде в дужки в журналі
     e.set("why", json::Value::string(w));
+    e.set("name", json::Value::string(pipe_form()));
     store.set(game_key(game_exe), std::move(e));
     write_file_atomic(store_path(), store.dump(), nullptr);
 }

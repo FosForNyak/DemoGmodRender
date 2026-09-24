@@ -80,9 +80,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "рендер файлами не вдався" }
           python tests/tools/compare_av.py "$PWD\build\out_tga.mp4" $files --ffmpeg third_party\ffmpeg\bin
           if ($LASTEXITCODE -ne 0) { throw "рендер каналом відрізняється від рендеру файлами" }
-          # Рушій, що не пише в канал: рендер сам перезапускає гру з файлами і запам'ятовує це
+          # Стара назва каналу \\?\pipe\: рушій Source читає "\\" на початку як "//ID шляху/" і пише в
+          # garrysmod\pipe\..., якої немає (як справжній GMod). Рендер сам перезапускає гру з файлами,
+          # показує рядок консолі гри про невдалий кадр і запам'ятовує це
           Remove-Item "$PWD\build\frame_transport.json" -ErrorAction SilentlyContinue
-          $env:FAKE_NO_PIPES = "1"
+          $env:GMDR_PIPE_ROOT = "\\?\pipe\"
           $nopipe = "$PWD\build\out_nopipe.mp4"
           $log = & build\gmdr-cli.exe render build\td\test24.dem -o $nopipe --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
               --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 5 2>&1 | Out-String
@@ -90,9 +92,11 @@ jobs:
           $log2 = & build\gmdr-cli.exe render build\td\test24.dem -o "$PWD\build\out_nopipe2.mp4" --game-dir $fake `
               --game-exe "$PWD\build\gmdr-fakegame.exe" --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 2 2>&1 | Out-String
           $rc2 = $LASTEXITCODE
-          Remove-Item Env:FAKE_NO_PIPES
+          Remove-Item Env:GMDR_PIPE_ROOT
           Remove-Item "$PWD\build\frame_transport.json" -ErrorAction SilentlyContinue
-          if ($rc -ne 0 -or $log -notmatch "dangerous file path") { $log; throw "перехід з каналу на файли не спрацював (або не видно причини з консолі гри)" }
+          if ($rc -ne 0 -or $log -notmatch "Couldn't write movie snapshot to file \\\\\?\\pipe" -or $log -notmatch "жодного разу не відкрив канал") {
+            $log; throw "перехід з каналу на файли не спрацював (або не видно причини з консолі гри)"
+          }
           $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $nopipe)
           if ([math]::Abs($d - 4) -gt 0.1) { throw "після переходу на файли: очікувалось 4 с відео, а не $d" }
           if ($rc2 -ne 0 -or $log2 -notmatch "канал уже не спрацював") { $log2; throw "невдачу каналу не запам'ятано" }

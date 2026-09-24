@@ -74,11 +74,16 @@ std::string pipe_root() {
         if (r.back() != '\\' && r.back() != '/') r += '\\';
         return r;
     }
-    // \\?\ — без нормалізації шляху: у "\\.\pipe" рушій міг би прибрати "\." як зайву частину шляху
-    return "\\\\?\\pipe\\";
+    // "\??\pipe\" — NT-назва того самого простору каналів, що й "\\.\pipe\": Windows передає
+    // її ядру як є. Звичні форми з двома скісними на початку (\\.\pipe\, \\?\pipe\) рушій Source
+    // не пропускає: назву, що починається з "//" чи "\\", його файлова система читає як
+    // "//<ID шляху>/<файл>" — і пише <папка гри>\pipe\..., якої немає ("Couldn't write movie
+    // snapshot to file \\?\pipe\..." у консолі GMod). Ця ж назва з однією скісною — звичайний
+    // абсолютний шлях, і рушій відкриває його, як будь-який файл.
+    return "\\??\\pipe\\";
 }
 
-// Сервер створює канал за канонічною назвою; гра відкриває \\?\pipe\... — це той самий канал.
+// Сервер створює канал за канонічною назвою; гра відкриває \??\pipe\... — це той самий канал.
 std::wstring server_name(const std::string& name) { return L"\\\\.\\pipe\\" + path_from_utf8(name).wstring(); }
 
 struct Overlapped {
@@ -231,7 +236,7 @@ std::string pipe_movie_name(const std::string& dir_for_game, const std::string& 
 bool is_windows_pipe_name(const std::string& path) {
     if (path.size() < 9) return false;
     const std::string head = to_lower(replace_all(path.substr(0, 9), "/", "\\"));
-    return head == "\\\\?\\pipe\\" || head == "\\\\.\\pipe\\";
+    return head == "\\??\\pipe\\" || head == "\\\\?\\pipe\\" || head == "\\\\.\\pipe\\";
 }
 
 // ============================== Канали ОС ======================================
@@ -709,6 +714,7 @@ void FramePipeReader::io_loop() {
         size_t size = 0;
         std::string err;
         const auto t0 = std::chrono::steady_clock::now();
+        ++frame_opens_;
         const Got got = io_->read(idx, buf, size, stop_, &err);
         if (got == Got::Stopped) {
             recycle_buffer(std::move(buf));

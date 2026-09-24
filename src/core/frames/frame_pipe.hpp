@@ -4,7 +4,7 @@
 //  startmovie рушія Source пише кожен кадр окремим файлом <назва>0000.tga,
 //  <назва>0001.tga ...: відкриває, записує цілим і закриває, строго по черзі.
 //  Якщо дати startmovie назву в просторі іменованих каналів Windows
-//  (\\?\pipe\gmdr_<id>_), кожне таке "відкриття файлу" з'єднується з каналом,
+//  (\??\pipe\gmdr_<id>_), кожне таке "відкриття файлу" з'єднується з каналом,
 //  який програма створила заздалегідь, і кадр іде з гри прямо в її буфер.
 //  Жодного файлу кадру, жодного запису на диск. Номер кадру — у назві каналу,
 //  тож порядок той самий, що й у файлів.
@@ -55,10 +55,10 @@ bool frame_pipes_supported();
 
 // Назва для startmovie, за якою рушій писатиме в канали, а не у файли.
 // dir_for_game — папка кадрів відносно garrysmod/ (там FIFO на Linux).
-// Windows: \\?\pipe\<prefix> (корінь можна змінити змінною GMDR_PIPE_ROOT).
+// Windows: \??\pipe\<prefix> (корінь можна змінити змінною GMDR_PIPE_ROOT).
 std::string pipe_movie_name(const std::string& dir_for_game, const std::string& prefix);
 
-// Назва — у просторі іменованих каналів Windows (\\?\pipe\..., \\.\pipe\...).
+// Назва — у просторі іменованих каналів Windows (\??\pipe\..., \\?\pipe\..., \\.\pipe\...).
 bool is_windows_pipe_name(const std::string& path);
 
 class FramePipeReader final : public FrameSource {
@@ -76,6 +76,9 @@ public:
     bool audio_flowing() const { return audio_bytes_.load() > 44 || !audio_via_pipe_; }
     // Скільки байтів кадрів прийшло каналом (для журналу).
     uint64_t bytes_received() const { return bytes_received_.load(); }
+    // Скільки разів гра відкривала канали кадрів — з даними чи без (для журналу): 0 означає, що
+    // рушій жодного разу не дійшов до каналу за назвою, яку йому дали.
+    int frame_opens() const { return frame_opens_.load(); }
 
     // Гра завершила запис (або її закрито): дочитати те, що вже в каналах, і дописати звук.
     void set_producer_done() override;
@@ -135,6 +138,7 @@ private:
     std::atomic<int64_t>        delivered_{0};
     std::atomic<int64_t>        skipped_{0};
     std::atomic<uint64_t>       bytes_received_{0};
+    std::atomic<int>            frame_opens_{0};
     std::thread                 io_thread_;
     std::thread                 audio_thread_;
 };

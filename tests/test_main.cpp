@@ -828,6 +828,10 @@ static void test_frame_transport_choice() {
     render::RenderSettings s;
     CHECK(render::normalize_frame_transport("щось") == "auto");
     CHECK(render::normalize_frame_transport(" PIPE ") == "pipe");
+    CHECK(frames::is_windows_pipe_name("\\??\\pipe\\gmdr_1_0000.tga"));
+    CHECK(frames::is_windows_pipe_name("\\\\?\\PIPE\\gmdr_1_"));
+    CHECK(frames::is_windows_pipe_name("//./pipe/gmdr_1_"));
+    CHECK(!frames::is_windows_pipe_name("C:\\pipe\\gmdr_1_"));
     s.frame_transport = "files";
     CHECK(!render::choose_frame_transport(s, exe).pipe);
     if (frames::frame_pipes_supported()) {
@@ -846,6 +850,17 @@ static void test_frame_transport_choice() {
         render::remember_pipe_failure(exe, "ще раз");
         render::forget_pipe_failure(exe);
         CHECK(render::choose_frame_transport(s, exe).pipe);
+#ifdef _WIN32
+        // Невдача з іншою назвою каналу (попередня версія програми) не рахується — канал пробується знову
+        _putenv_s("GMDR_PIPE_ROOT", "\\\\?\\pipe\\");
+        render::remember_pipe_failure(exe, "стара назва");
+        CHECK(!render::choose_frame_transport(s, exe).pipe);
+        _putenv_s("GMDR_PIPE_ROOT", "");
+        CHECK(render::choose_frame_transport(s, exe).pipe);
+        render::forget_pipe_failure(exe);
+        // Назва для гри — з однією скісною на початку: інакше рушій Source прочитає її як "//ID/файл"
+        CHECK(frames::pipe_movie_name("", "gmdr_x_") == "\\??\\pipe\\gmdr_x_");
+#endif
         s.manual_mode = true;   // startmovie вводить сам гравець — лише файли
         CHECK(!render::choose_frame_transport(s, exe).pipe);
     }

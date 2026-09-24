@@ -53,10 +53,12 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
 - **Parallel rendering.** Two to four game instances render parts of the fragment at the same
   time. The parts are joined without re-encoding, frame-exact.
 - **Frames through a pipe where the game allows it.** The program offers `startmovie` a Windows
-  named pipe instead of a file, so frames could go straight into the encoder with no TGA files on
-  disk. In tests with the current GMod (regular and RTX) the game did not write into it — most
-  likely its own path protection ("Attempt to open dangerous file path"), which the program does
-  not bypass — so it switches to files by itself and shows the game's console lines in the log.
+  named pipe instead of a file, so frames go straight into the encoder with no TGA files on disk.
+  The first pipe name (`\\?\pipe\…`) did not work in the current GMod: the Source file system
+  reads a name that starts with two slashes as its own `//PATHID/file` syntax. The pipe is now
+  named `\??\pipe\…`, which is the same pipe written as a plain absolute path. This is not yet
+  confirmed with the real game. If the game still does not write into the pipe, the program
+  switches to files by itself and shows the game's console lines in the log.
 - **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
   page switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
   the render the program sets Remix to video-friendly settings (DLAA, no frame generation, shaders
@@ -201,7 +203,7 @@ the game; it drives it.
    plays. It turns `startmovie` on at the right tick, off at the end, and closes the game.
 4. **Frame pipeline.** `startmovie` writes every frame (TGA or JPEG) as a separate file
    `name0000.tga`, `name0001.tga`... The program gives it a name among Windows named pipes
-   (`\\?\pipe\gmdr_…`) instead of a folder and opens a pipe for each upcoming frame number
+   (`\??\pipe\gmdr_…`) instead of a folder and opens a pipe for each upcoming frame number
    in advance. When the game "opens the file" for a frame, it connects to that pipe, and the
    frame lands straight in the program's memory: no frame is written to disk, and the number in
    the name keeps the order. The audio arrives the same way and is kept as a WAV. The program
