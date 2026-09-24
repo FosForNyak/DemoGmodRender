@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "../util/thread_pool.hpp"
+#include "frame_source.hpp"
 #include "image.hpp"
 
 namespace gmdr::frames {
@@ -43,38 +44,30 @@ struct SequenceOptions {
     bool                  keep_yuv = true;        // JPEG віддавати в YUV (без перетворення в RGB)
 };
 
-// Час, витрачений на кадри (для показу "що гальмує").
-struct ReaderStats {
-    int64_t frames = 0;
-    double  read_ms = 0;     // сумарно: читання файлів
-    double  decode_ms = 0;   // сумарно: декодування
-};
-
-class FrameSequenceReader {
+class FrameSequenceReader final : public FrameSource {
 public:
     explicit FrameSequenceReader(SequenceOptions opt);
-    ~FrameSequenceReader();
+    ~FrameSequenceReader() override;
     FrameSequenceReader(const FrameSequenceReader&) = delete;
     FrameSequenceReader& operator=(const FrameSequenceReader&) = delete;
 
     // Гра завершила запис: більше нових файлів не буде.
-    void set_producer_done();
-    bool producer_done() const { return producer_done_.load(); }
+    void set_producer_done() override;
+    bool producer_done() const override { return producer_done_.load(); }
 
     // Наступний кадр за порядком. nullopt — кінець послідовності або скасування.
     std::optional<Image> next(const std::atomic<bool>* cancel = nullptr);
 
     // Те саме, але з обмеженням часу очікування.
-    enum class Wait { Frame, Timeout, End };
-    Wait next_for(Image& out, int timeout_ms);
+    Wait next_for(Image& out, int timeout_ms) override;
 
-    int64_t  pending_files() const;        // файлів на диску, ще не взятих в обробку
-    uint64_t pending_bytes() const;
-    int64_t  delivered() const { return delivered_.load(); }
-    int64_t  skipped() const { return skipped_.load(); }
-    bool     saw_any_file() const { return saw_any_.load(); }
-    std::string last_error() const;
-    ReaderStats stats() const;
+    int64_t  pending_files() const override;        // файлів на диску, ще не взятих в обробку
+    uint64_t pending_bytes() const override;
+    int64_t  delivered() const override { return delivered_.load(); }
+    int64_t  skipped() const override { return skipped_.load(); }
+    bool     saw_any_file() const override { return saw_any_.load(); }
+    std::string last_error() const override;
+    ReaderStats stats() const override;
 
     // Розібрати ім'я файлу: prefix + число + розширення. Повертає номер або -1.
     static int64_t parse_index(const std::string& filename, const std::string& prefix,

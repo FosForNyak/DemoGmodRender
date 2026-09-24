@@ -58,14 +58,39 @@ jobs:
           Set-Content "$fake\garrysmod\gameinfo.txt" "GameInfo {}"
           Set-Content "$fake\garrysmod\lua\menu\menu.lua" 'include( "util.lua" )'
           Set-Content "$fake\hl2.exe" ""
+          # Кадри й звук ідуть з гри іменованими каналами Windows (типово), без файлів кадрів на диску
           foreach ($cap in @("tga", "jpg")) {
             $out = "$PWD\build\out_$cap.mp4"
-            & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
-                --size 640x360 --fps 30 --codec libx264 --capture $cap --menu-delay 1 --srt
-            if ($LASTEXITCODE -ne 0) { throw "рендер ($cap) не вдався" }
+            $log = & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+                --size 640x360 --fps 30 --codec libx264 --capture $cap --menu-delay 1 --srt 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { $log; throw "рендер ($cap) не вдався" }
+            if ($log -notmatch "Каналом прийнято 374 кадрів") { $log; throw "рендер ($cap): кадри не пішли каналом" }
             & third_party\ffmpeg\bin\ffprobe.exe -v error -show_entries stream=codec_name,nb_frames,duration -of compact $out
             if (-not (Test-Path ($out -replace '\.mp4$', '.srt'))) { throw "немає субтитрів" }
           }
+          # Той самий рендер файлами на диску — кадри й звук мають збігтися з каналом
+          $files = "$PWD\build\out_tga_files.mp4"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $files --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --capture tga --menu-delay 1 --frame-transport files
+          if ($LASTEXITCODE -ne 0) { throw "рендер файлами не вдався" }
+          python tests/tools/compare_av.py "$PWD\build\out_tga.mp4" $files --ffmpeg third_party\ffmpeg\bin
+          if ($LASTEXITCODE -ne 0) { throw "рендер каналом відрізняється від рендеру файлами" }
+          # Рушій, що не пише в канал: рендер сам перезапускає гру з файлами і запам'ятовує це
+          Remove-Item "$PWD\build\frame_transport.json" -ErrorAction SilentlyContinue
+          $env:FAKE_NO_PIPES = "1"
+          $nopipe = "$PWD\build\out_nopipe.mp4"
+          $log = & build\gmdr-cli.exe render build\td\test24.dem -o $nopipe --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 5 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          $log2 = & build\gmdr-cli.exe render build\td\test24.dem -o "$PWD\build\out_nopipe2.mp4" --game-dir $fake `
+              --game-exe "$PWD\build\gmdr-fakegame.exe" --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 2 2>&1 | Out-String
+          $rc2 = $LASTEXITCODE
+          Remove-Item Env:FAKE_NO_PIPES
+          Remove-Item "$PWD\build\frame_transport.json" -ErrorAction SilentlyContinue
+          if ($rc -ne 0 -or $log -notmatch "не записала в канал жодного кадру") { $log; throw "перехід з каналу на файли не спрацював" }
+          $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $nopipe)
+          if ([math]::Abs($d - 4) -gt 0.1) { throw "після переходу на файли: очікувалось 4 с відео, а не $d" }
+          if ($rc2 -ne 0 -or $log2 -notmatch "канал уже не спрацював") { $log2; throw "невдачу каналу не запам'ятано" }
           & build\gmdr-cli.exe render build\td\test24.dem --test-run --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
               --size 640x360 --fps 30 --codec libx264 --menu-delay 1
           if ($LASTEXITCODE -ne 0) { throw "тестовий прогін не вдався" }

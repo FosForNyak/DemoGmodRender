@@ -191,6 +191,22 @@ void App::draw_page_game() {
                 ImGui::SameLine(0, 2);
                 changed |= hot_int("##rh", &s_.render_height, 4.0f, 16, 16384, "%d");
             }
+            label(tr("Передача кадрів"));
+            const bool via_files = s_.frame_transport == "files";
+            if (radio(tr("напряму, без файлів"), !via_files) && via_files) {
+                s_.frame_transport = "auto";
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (radio(tr("файлами на диску"), via_files)) {
+                s_.frame_transport = "files";
+                changed = true;
+            }
+            help_marker(tr("Напряму: гра, як і раніше, записує кожен кадр своїм startmovie, але не у файл, а в канал Windows, "
+                        "який програма відкрила заздалегідь, — кадр іде з гри одразу в кодер, на диск не пишеться нічого. "
+                        "У гру нічого не впроваджується, тож це працює і з RTXLauncher. Якщо ця збірка гри в канал не пише, "
+                        "програма сама перезапустить гру з того самого місця з файлами і запам'ятає це. Файлами: гра пише "
+                        "кадри в тимчасову папку, програма їх одразу читає і видаляє."));
             label(tr("Формат кадрів"));
             if (radio(tr("TGA (без втрат)"), s_.capture_format != "jpg")) {
                 s_.capture_format = "tga";
@@ -205,10 +221,13 @@ void App::draw_page_game() {
                 ImGui::SameLine();
                 changed |= hot_int("##jq", &s_.jpeg_quality, 0.2f, 50, 100, tr("якість %d"));
             }
-            help_marker(tr("Гра передає кадри через тимчасові файли (прочитані одразу видаляються). TGA — найкраща якість. JPEG — у ~10 разів менше запису на диск."));
-            label(tr("Черга кадрів на диску"));
-            changed |= slider_int("##pending", &s_.max_pending_frames, 16, 600, tr("до %d кадрів"), field_width(20));
-            help_marker(tr("Якщо кодування не встигає за грою, гра ставиться на паузу, щоб тимчасові кадри не заповнили диск."));
+            help_marker(tr("TGA — без втрат, найкраща якість. JPEG — у ~10 разів менше даних з гри (коли кадри йдуть файлами — "
+                        "менше запису на диск), але з втратами."));
+            if (via_files) {   // каналом кадри на диску не накопичуються: гра сама чекає на кодер
+                label(tr("Черга кадрів на диску"));
+                changed |= slider_int("##pending", &s_.max_pending_frames, 16, 600, tr("до %d кадрів"), field_width(20));
+                help_marker(tr("Якщо кодування не встигає за грою, гра ставиться на паузу, щоб тимчасові кадри не заповнили диск."));
+            }
             changed |= toggle(tr("Закрити гру після рендеру"), &s_.quit_game_when_done);
             changed |= toggle(tr("Високий пріоритет гри"), &s_.high_priority);
             changed |= toggle(tr("Ручний режим (я сам керую записом у грі)"), &s_.manual_mode);

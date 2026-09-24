@@ -52,6 +52,9 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
   ProRes master. After the render you can also get a thumbnail, a GIF and an animated WebP.
 - **Parallel rendering.** Two to four game instances render parts of the fragment at the same
   time. The parts are joined without re-encoding, frame-exact.
+- **No frame files on disk.** Frames go from the game's own `startmovie` straight into the
+  encoder through Windows named pipes, so a long 4K render does not write hundreds of gigabytes
+  of TGA files to the disk and read them back.
 - **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
   page switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
   the render the program sets Remix to video-friendly settings (DLAA, no frame generation) and
@@ -193,10 +196,16 @@ the game; it drives it.
    game frame is then exactly 1/FPS of demo time, however fast or slow the PC is.
 3. **Driver in the GMod menu.** A small Lua script starts the demo and waits until it really
    plays. It turns `startmovie` on at the right tick, off at the end, and closes the game.
-4. **Frame pipeline.** The game writes each frame (TGA or JPEG) and the audio (WAV) to a
-   temporary folder. The program picks the frames up and decodes them in parallel. Then it
-   blends sub-frames for motion blur, scales and converts color (BT.709) on all cores, and
-   encodes with FFmpeg on its own thread. Finished files are deleted.
+4. **Frame pipeline.** `startmovie` writes every frame (TGA or JPEG) as a separate file
+   `name0000.tga`, `name0001.tga`... The program gives it a name among Windows named pipes
+   (`\\?\pipe\gmdr_…`) instead of a folder and opens a pipe for each upcoming frame number
+   in advance. When the game "opens the file" for a frame, it connects to that pipe, and the
+   frame lands straight in the program's memory: no frame is written to disk, and the number in
+   the name keeps the order. The audio arrives the same way and is kept as a WAV. The program
+   decodes the frames in parallel, blends sub-frames for motion blur, scales and converts color
+   (BT.709) on all cores, and encodes with FFmpeg on its own thread. If a game build does not
+   write into the pipe, the program restarts the game from the same point with frames going
+   through files in a temporary folder (read and deleted right away) and remembers that.
 5. **Audio.** The game audio, the decoded voices and your microphone are mixed and encoded in
    sync with the video.
 
@@ -296,7 +305,9 @@ Run `gmdr-cli --help` for every option.
   backup is kept as `menu.lua.gmdr_backup`. Remove it with **Tools → Remove the driver from
   GMod**, or verify the game files in Steam.
 - During a render or a watch session it creates temporary files in `garrysmod\cfg\gmdr`,
-  `garrysmod\data\gmdr` and `garrysmod\gmdr_tmp`. They are deleted afterwards.
+  `garrysmod\data\gmdr` and `garrysmod\gmdr_tmp` (the game audio WAV; frames too, if they go
+  through files). They are deleted afterwards. Frames go through named pipes
+  `\\.\pipe\gmdr_…` that exist only while the render runs.
 - Console variables changed for the render (`fps_max`, `mat_vsync`, `voice_scale`,
   `cl_drawhud`...) are restored. `config.cfg` is restored from a backup even if the game was
   closed mid-render.
@@ -307,8 +318,8 @@ Run `gmdr-cli --help` for every option.
   it.
 
 The program injects nothing into the game process and does not touch anti-cheat. It uses only
-standard engine features (`startmovie`, `host_framerate`, the menu Lua state) and ordinary
-Windows window management.
+standard engine features (`startmovie`, `host_framerate`, the menu Lua state), Windows named
+pipes that the game writes into like into any file, and ordinary Windows window management.
 
 Settings are saved in `gmdr_settings.json` next to the program, and the log in `gmdr_log.txt`.
 If the program folder is not writable (for example `Program Files`), they go to
@@ -339,8 +350,13 @@ ZIP. You can look inside before sending it.
   pace. The audio in the video is correct.
 - **Garry's Mod stays muted.** This happens if the game or the PC crashed mid-render. Unmute
   it in the Windows volume mixer, or just start the next render.
-- **Low disk space.** Below 1 GiB free the game pauses until space is freed. Lower **Frame
-  queue on disk** on the Game page (Advanced mode) or switch the frame format to JPEG.
+- **Low disk space.** Below 1 GiB free the game pauses until space is freed. Frames going
+  through pipes take no disk space; if they go through files (Game page → **Frame transfer**,
+  Advanced mode), lower **Frame queue on disk** or switch the frame format to JPEG.
+- **"The game did not write a single frame into the pipe".** This game build handles the
+  `startmovie` name differently. The render restarts the game with files by itself, and later
+  renders with this game use files right away. The pipe is tried again after the game updates
+  (or in 30 days), or right away with `gmdr-cli render ... --frame-transport pipe`.
 - **The program crashed.** A `gmdr_crash_<date>.dmp` appears next to it. Please attach it
   together with `gmdr_log.txt` to your bug report.
 
@@ -387,7 +403,7 @@ After adding strings, run `python scripts/i18n.py check` (English is required) a
 src/core/demo/     .dem parser, GMod network messages, string tables, chat and events
 src/core/voice/    Steam Voice packets, Opus decoding, voice timeline
 src/core/audio/    WAV, mixer, FFmpeg filters, loudness, gate, voice preview
-src/core/frames/   frame buffers, TGA/JPEG, live frame sequence reader, motion blur
+src/core/frames/   frame buffers, TGA/JPEG, frames through pipes, live frame sequence reader, motion blur
 src/core/media/    FFmpeg video/audio encoders and muxer
 src/core/game/     GMod discovery, Lua driver, process and window control, mixer mute
 src/core/speech/   speech recognition via whisper.cpp

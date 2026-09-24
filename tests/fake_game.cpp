@@ -15,9 +15,14 @@
 //     чи "зависнути"; лише один раз (далі є garrysmod/fake_crashed.txt), з FAKE_CRASH_REPEAT=1 — щоразу
 //   * FAKE_DEMO_CLOCK=1 — спалахи й біпи на цілих секундах ЧАСУ ДЕМО, а не від початку
 //     запису (так видно, що після перезапуску гри відео продовжилось без зсуву)
+//   * кадри в канали (frames/frame_pipe.hpp): назва фільму \\?\pipe\... (Windows) — кадри й звук
+//     ідуть у канали, звук — шматками, щоразу відкриваючи "файл" заново, як WaveAppendTmpFile
+//     у рушії; на Linux кадри — у FIFO, які створила програма (звичайний запис файлу)
+//   * FAKE_NO_PIPES=1 — рушій, що не вміє писати в канал: такі кадри й звук мовчки не пишуться
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
+#include "core/frames/frame_pipe.hpp"
 #include "core/frames/tga.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/util/file_util.hpp"
@@ -31,14 +36,20 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <cstring>
 #include <fstream>
 #include <thread>
+#include <vector>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 using namespace gmdr;
 namespace fs = std::filesystem;
 
 static void write_status(const fs::path& p, const std::string& state, int tick, int total, int start_tick, int last_tick,
-                         const std::string& msg = "") {
+                         const std::string& msg = "", int64_t frames = 0) {
     json::Value j = json::Value::object();
     j.set("state", json::Value::string(state));
     j.set("message", json::Value::string(msg));
@@ -46,6 +57,7 @@ static void write_status(const fs::path& p, const std::string& state, int tick, 
     j.set("total", json::Value::number(total));
     j.set("start_tick", json::Value::number(start_tick));
     j.set("last_tick", json::Value::number(last_tick));
+    j.set("frames", json::Value::number(static_cast<double>(frames)));   // як лічильник кадрів драйвера
     j.set("playing", json::Value::boolean(state == "recording" || state == "loading"));
     write_file_atomic(p, j.dump(), nullptr);
 }
@@ -93,6 +105,66 @@ static std::vector<uint8_t> encode_jpeg(const frames::Image& img, int quality) {
     if (avcodec_receive_packet(ctx.get(), pkt.get()) == 0) out.assign(pkt->data, pkt->data + pkt->size);
     return out;
 }
+
+// Куди рушій пише "файл": у канал (іменований канал Windows чи FIFO), а не на диск
+static bool is_pipe_target(const std::string& path) {
+    if (frames::is_windows_pipe_name(path)) return true;
+#ifndef _WIN32
+    struct stat st {};
+    return ::stat(path.c_str(), &st) == 0 && S_ISFIFO(st.st_mode);
+#else
+    return false;
+#endif
+}
+
+// Звук у канал так, як його пише рушій Source (WaveCreateTmpFile / WaveAppendTmpFile /
+// WaveFixupTmpFile): заголовок окремим відкриттям, далі кожен шматок — знову відкрити,
+// дописати, закрити; наприкінці — "виправлення" розмірів (у канал вони просто допишуться в кінець).
+struct EngineWav {
+    std::string path;
+    int64_t     bytes = 0;
+    bool        ok = false;
+    void open_write_close(const void* data, size_t n, const char* mode) {
+        std::FILE* f = audio::open_file_utf8(fs::path(path), mode);
+        if (!f) return;
+        std::fwrite(data, 1, n, f);
+        std::fclose(f);
+    }
+    void create(const std::string& p) {
+        path = p;
+        uint8_t h[44] = {};
+        auto w32 = [&](int off, uint32_t v) { std::memcpy(h + off, &v, 4); };
+        std::memcpy(h, "RIFF", 4);
+        std::memcpy(h + 8, "WAVEfmt ", 8);
+        w32(16, 16);
+        h[20] = 1;   // PCM
+        h[22] = 2;   // стерео
+        w32(24, 44100);
+        w32(28, 44100 * 4);
+        h[32] = 4;
+        h[34] = 16;
+        std::memcpy(h + 36, "data", 4);
+        open_write_close(h, sizeof(h), "wb");
+        ok = true;
+    }
+    void append(const float* in, size_t frames) {
+        std::vector<int16_t> pcm(frames * 2);
+        for (size_t i = 0; i < pcm.size(); ++i)
+            pcm[i] = static_cast<int16_t>(std::lrint(std::clamp(in[i], -1.0f, 1.0f) * 32767.0f));
+        open_write_close(pcm.data(), pcm.size() * 2, "r+b");
+        bytes += static_cast<int64_t>(pcm.size() * 2);
+    }
+    void fixup() {
+        const uint32_t riff = static_cast<uint32_t>(36 + bytes), data = static_cast<uint32_t>(bytes);
+        std::FILE* f = audio::open_file_utf8(fs::path(path), "r+b");
+        if (!f) return;
+        std::fseek(f, 4, SEEK_SET);
+        std::fwrite(&riff, 4, 1, f);
+        std::fseek(f, 40, SEEK_SET);
+        std::fwrite(&data, 4, 1, f);
+        std::fclose(f);
+    }
+};
 
 // Одне завдання драйвера. Повертає код виходу гри, або -1 — гра лишається відкритою (черга).
 static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, double max_fps, std::ofstream& con);
@@ -204,9 +276,17 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
     const int end_tick = end_req > 0 ? std::min(end_req, total) : total;
     // FAKE_STRIP_DIR=1 — імітувати рушій, що ігнорує папку в назві фільму (пише в garrysmod/)
     const bool strip = std::getenv("FAKE_STRIP_DIR") != nullptr;
-    const fs::path movie_path = strip ? gm / fs::path(movie).filename() : gm / movie;
+    const bool no_pipes = std::getenv("FAKE_NO_PIPES") != nullptr;
+    // Назва в просторі каналів Windows — абсолютна, рушій бере її як є
+    const bool win_pipe = frames::is_windows_pipe_name(movie);
+    const fs::path movie_path = strip ? gm / fs::path(movie).filename() : win_pipe ? fs::path(movie) : gm / movie;
     audio::WavWriter wav;
-    wav.open(fs::path(movie_path.string() + ".wav"), 44100, 2, audio::WavWriter::Format::Int16);
+    EngineWav pipe_wav;
+    if (win_pipe && !strip) {
+        if (!no_pipes) pipe_wav.create(movie_path.string() + ".wav");
+    } else {
+        wav.open(fs::path(movie_path.string() + ".wav"), 44100, 2, audio::WavWriter::Format::Int16);
+    }
     frames::Image img;
     img.allocate(w, h, frames::PixelLayout::BGR24);
     int64_t frame = 0;
@@ -244,6 +324,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         }
         const std::string name = std::format("{}{:04d}.{}", movie_path.string(), frame, jpeg ? "jpg" : "tga");
         auto bytes = jpeg ? encode_jpeg(img, 90) : frames::encode_tga(img, true, false);
+        const bool skip_frame = no_pipes && is_pipe_target(name);   // рушій не вміє писати в канал
         if (may_fail && (frame == crash_at || frame == hang_at)) {
             std::ofstream(crashed_mark) << frame;
             if (frame == crash_at) {
@@ -259,7 +340,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             con.flush();
             for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-        {
+        if (!skip_frame) {
             std::ofstream f(name, std::ios::binary);
             f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         }
@@ -275,22 +356,24 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
             abuf[static_cast<size_t>(i) * 2] = v;
             abuf[static_cast<size_t>(i) * 2 + 1] = v;
         }
-        wav.write(abuf.data(), static_cast<size_t>(n));
+        if (pipe_wav.ok) pipe_wav.append(abuf.data(), static_cast<size_t>(n));
+        else wav.write(abuf.data(), static_cast<size_t>(n));
         audio_pos += n;
         ++frame;
-        if (frame % 5 == 0) write_status(status, "recording", tick, total, start_tick, last_tick);
+        if (frame % 5 == 0) write_status(status, "recording", tick, total, start_tick, last_tick, "", frame);
         if (max_fps > 0) {
             const auto target = t0 + std::chrono::duration<double>(frame / max_fps);
             std::this_thread::sleep_until(target);
         }
     }
     wav.close();
-    write_status(status, "stopping", last_tick, total, start_tick, last_tick);
+    if (pipe_wav.ok) pipe_wav.fixup();
+    write_status(status, "stopping", last_tick, total, start_tick, last_tick, "", frame);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    write_status(status, "done", last_tick, total, start_tick, last_tick);
+    write_status(status, "done", last_tick, total, start_tick, last_tick, "", frame);
     con << "FakeGMod: записано " << frame << " кадрів\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     if ((*job)["wait_next"].as_bool(false)) return -1;
-    write_status(status, "quit", last_tick, total, start_tick, last_tick);
+    write_status(status, "quit", last_tick, total, start_tick, last_tick, "", frame);
     return 0;
 }

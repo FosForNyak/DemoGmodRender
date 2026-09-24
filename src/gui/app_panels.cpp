@@ -79,6 +79,7 @@ void App::draw_monitor_panel(ImVec2 pos, ImVec2 size) {
                 if (p.stat_blend_ms > 0) sts += trf(" · змішування {:.1f}", p.stat_blend_ms);
                 sts += trf(" · колір {:.1f} · кодування {:.1f} · звук {:.1f}", p.stat_convert_ms, p.stat_encode_ms, p.stat_audio_ms);
                 if (p.stat_game_wait >= 0) sts += trf("  |  чекали на гру {:.0f}% часу", p.stat_game_wait * 100);
+                if (p.frames_via_pipe) sts += tr("  |  кадри йдуть з гри каналом, без диска");
                 ImGui::PushTextWrapPos(0);
                 ImGui::TextColored(kColDim, "%s", sts.c_str());
                 ImGui::PopTextWrapPos();

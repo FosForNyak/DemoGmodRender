@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../demo/analysis.hpp"
+#include "../frames/frame_pipe.hpp"
 #include "../game/gmod_install.hpp"
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
@@ -51,6 +52,7 @@ struct Progress {
     double      expected_seconds = 0;
     int64_t     pending_files = 0;
     uint64_t    pending_bytes = 0;
+    bool        frames_via_pipe = false;   // кадри йдуть з гри каналом, без файлів на диску
     double      speed_fps = 0;         // кадрів відео за секунду реального часу
     double      elapsed = 0;
     double      eta = -1;
@@ -239,6 +241,12 @@ private:
     std::filesystem::path                           config_backup_;
     std::filesystem::path                           rtx_backup_;
     std::filesystem::path                           stray_dir_;   // куди гра насправді писала кадри (якщо не в tmp)
+    // Кадри з гри: каналом, без файлів на диску (frame_transport.hpp), чи файлами. Канал створюється
+    // разом із завданням для гри (write_game_job) — він має бути готовий раніше, ніж гра почне запис.
+    std::filesystem::path                           game_exe_;
+    bool                                            pipe_transport_ = false;
+    bool                                            pipe_strict_ = false;   // лише канал, без переходу на файли
+    std::unique_ptr<frames::FramePipeReader>        pipe_reader_;
     bool                                            job_written_ = false;
     std::string                                     demo_for_game_;      // шлях демо для playdemo
     std::map<std::string, std::string>              config_originals_;   // значення з config.cfg до рендеру

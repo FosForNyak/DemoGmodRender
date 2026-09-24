@@ -1,5 +1,6 @@
 #include "jobs.hpp"
 
+#include "../frames/frame_pipe.hpp"
 #include "../frames/sequence_reader.hpp"
 #include "../game/audio_mute.hpp"
 #include "../game/lua_driver.hpp"
@@ -13,6 +14,7 @@
 #include "../util/strings.hpp"
 #include "../util/thread_pool.hpp"
 #include "encode_session.hpp"
+#include "frame_transport.hpp"
 #include "markers.hpp"
 #include "subtitles.hpp"
 #include "dubbing.hpp"
@@ -1068,6 +1070,13 @@ bool RenderJob::prepare(std::string* error) {
                                               "cl_showfps", "voice_scale", "cl_drawhud",
                                               "r_drawviewmodel", "sv_cheats"};
     config_originals_ = game::read_config_values(*gmod_, touched);
+    // Як кадри йдуть з гри: каналом (без файлів на диску) чи файлами
+    game_exe_ = s_.game_exe.empty() ? gmod_->default_exe() : path_from_utf8(s_.game_exe);
+    const TransportChoice transport = choose_frame_transport(s_, game_exe_);
+    pipe_transport_ = transport.pipe;
+    pipe_strict_ = transport.strict;
+    if (!transport.pipe && !transport.note.empty())
+        log_info("{}", trf("Кадри йтимуть файлами на диску: {}", transport.note));
     // Копія гри: config.cfg зберіг основний рендер, а завдання пишеться при запуску (по черзі з іншими копіями)
     if (part_) return true;
     config_backup_ = backup_dir / "config.cfg.bak";
@@ -1080,11 +1089,33 @@ bool RenderJob::write_game_job(int32_t start_tick, std::string* error) {
     game::DriverJob job;
     job.id = id_;
     job.demo = demo_for_game_;
-    job.movie = "gmdr_tmp/" + id_ + "/" + movie_prefix();
-    if (s_.capture_format == "jpg" || s_.capture_format == "jpeg")
+    const bool jpeg = s_.capture_format == "jpg" || s_.capture_format == "jpeg";
+    if (jpeg)
         job.movie_flags = {"jpeg", "jpeg_quality", std::to_string(std::clamp(s_.jpeg_quality, 1, 100)), "wav"};
     else
         job.movie_flags = {"raw"};
+    // Канал для кадрів (і звуку) цього запуску гри: створюється до того, як гра дістане завдання,
+    // і має ту саму назву, що й файли, — лише не в папці, а серед каналів ОС
+    const std::string dir_for_game = "gmdr_tmp/" + id_;
+    pipe_reader_.reset();
+    if (pipe_transport_) {
+        frames::PipeOptions po;
+        po.dir = tmp_dir_;
+        po.prefix = movie_prefix();
+        po.ext = jpeg ? ".jpg" : ".tga";
+        po.decode_threads = s_.threads > 0 ? std::max(1, s_.threads / 2) : 0;
+        auto reader = std::make_unique<frames::FramePipeReader>(po);
+        if (reader->ok()) {
+            pipe_reader_ = std::move(reader);
+        } else if (pipe_strict_) {
+            if (error) *error = tr("Не вдалося створити канал для кадрів: ") + reader->last_error();
+            return false;
+        } else {
+            log_warn("{}", trf("Не вдалося створити канал для кадрів ({}) — кадри йтимуть файлами на диску", reader->last_error()));
+            pipe_transport_ = false;
+        }
+    }
+    job.movie = pipe_reader_ ? frames::pipe_movie_name(dir_for_game, movie_prefix()) : dir_for_game + "/" + movie_prefix();
     // Кадр відео = 1/FPS секунди демо, помножене на швидкість (уповільнення — менший крок)
     job.host_framerate = fps->value() * std::clamp(s_.motion_blur, 1, 256) / video_speed(s_);
     job.start_tick = start_tick;
@@ -1114,6 +1145,7 @@ bool RenderJob::write_game_job(int32_t start_tick, std::string* error) {
 }
 
 void RenderJob::cleanup(bool game_closing) {
+    pipe_reader_.reset();   // канал, створений для запуску гри, що так і не відбувся
     if (!gmod_) return;
     if (job_written_) game::remove_job_files(*gmod_, id_);
     if (!stray_dir_.empty()) {
@@ -1565,14 +1597,32 @@ void RenderJob::run() {
 
     // ---- 4. Конвеєр ----
     frames::SequenceOptions so;
-    so.dir = tmp_dir_;
-    so.prefix = movie_prefix();
     so.live = true;
     so.delete_after_read = !s_.keep_temp_files;
     so.decode_threads = s_.threads > 0 ? std::max(1, s_.threads / 2) : 0;
-    auto reader_ptr = std::make_unique<frames::FrameSequenceReader>(so);
-    frames::FrameSequenceReader* rp = reader_ptr.get();
+    // Кадри поточного запуску гри: канал, створений разом із його завданням (write_game_job), або
+    // файли в папці dir
+    uint64_t pipe_bytes = 0;   // скільки прийшло каналом за попередні запуски гри
+    int64_t pipe_frames = 0;
+    auto open_reader = [&](const fs::path& dir) -> std::unique_ptr<frames::FrameSource> {
+        if (pipe_reader_) return std::move(pipe_reader_);
+        so.dir = dir;
+        so.prefix = movie_prefix();
+        return std::make_unique<frames::FrameSequenceReader>(so);
+    };
+    std::unique_ptr<frames::FrameSource> reader_ptr = open_reader(tmp_dir_);
+    frames::FrameSource* rp = reader_ptr.get();
+    auto pipe_of = [&] { return dynamic_cast<frames::FramePipeReader*>(rp); };
+    auto replace_reader = [&](std::unique_ptr<frames::FrameSource> next) {
+        if (auto* pr = pipe_of()) {
+            pipe_bytes += pr->bytes_received();
+            pipe_frames += pr->delivered();
+        }
+        reader_ptr = std::move(next);
+        rp = reader_ptr.get();
+    };
     fs::path frames_dir = tmp_dir_;
+    bool pipe_announced = false;
     Clock::time_point recording_since{};
     bool relocated = false;
     ThreadPool pool(s_.threads > 0 ? static_cast<unsigned>(s_.threads) : 0);
@@ -1604,6 +1654,7 @@ void RenderJob::run() {
         if (proc->running()) proc->terminate();
         session.abort();
         rp->set_producer_done();
+        replace_reader(nullptr);   // канал (і WAV, що він дописує) — закрити до прибирання тимчасової папки
         session_ptr.reset();
         cleanup();
         // Перший крок, що не пройшов, — позначаємо з підказкою
@@ -1670,8 +1721,8 @@ void RenderJob::run() {
         rp->set_producer_done();
         for (const auto until = Clock::now() + std::chrono::seconds(30); Clock::now() < until;) {
             const auto w = rp->next_for(img, 200);
-            if (w == frames::FrameSequenceReader::Wait::End) break;
-            if (w != frames::FrameSequenceReader::Wait::Frame) continue;
+            if (w == frames::FrameSource::Wait::End) break;
+            if (w != frames::FrameSource::Wait::Frame) continue;
             if (resync) continue;   // запуск, що впав до першого кадру: час його кадрів невідомий
             if (drop_subframes > 0) {
                 --drop_subframes;
@@ -1688,15 +1739,12 @@ void RenderJob::run() {
             log_warn("{}", trf("Не вдалося записати завдання для гри: {}", err));
             return false;
         }
-        so.dir = frames_dir;
-        so.prefix = movie_prefix();
-        reader_ptr = std::make_unique<frames::FrameSequenceReader>(so);
-        rp = reader_ptr.get();
         auto p2 = launch_game(resume_tick);
         if (!p2) {
             log_warn("{}", trf("Не вдалося перезапустити гру: {}", err));
             return false;
         }
+        replace_reader(open_reader(frames_dir));   // канал нового запуску створено разом із його завданням
         proc = std::move(p2);
         apply_process_tweaks(*proc);
         t_launch = Clock::now();
@@ -1712,6 +1760,45 @@ void RenderJob::run() {
         return true;
     };
 
+    // ---- Канал не спрацював: кадри файлами ----
+    // Рушій не пише в канал (ця збірка гри інакше обробляє назву для startmovie). Кодування ще не
+    // почалось, тож гра просто запускається знову з того самого місця, а кадри йдуть файлами, як
+    // раніше. Програма це запам'ятовує: наступні рендери з цією грою одразу пишуть файли.
+    auto fall_back_to_files = [&](const std::string& why) -> bool {
+        remember_pipe_failure(game_exe_, why);
+        pipe_transport_ = false;
+        log_warn("{}", trf("{} Перезапускаю гру — кадри йтимуть файлами на диску (з цією грою так буде й надалі).", why));
+        if (proc->suspended()) proc->resume();
+        if (proc->running()) proc->terminate();
+        if (part_) proc->wait(15000);
+        else game::GameProcess::wait_all_exited(kGameProcessNames, 15000);
+        ++segment_;   // нові імена файлів: від каналу нічого не лишилось, але так надійніше
+        const int32_t tick = std::max(0, s_.start_tick);
+        if (!part_ && !write_game_job(tick, &err)) {
+            log_warn("{}", trf("Не вдалося записати завдання для гри: {}", err));
+            return false;
+        }
+        auto p2 = launch_game(tick);
+        if (!p2) {
+            log_warn("{}", trf("Не вдалося перезапустити гру: {}", err));
+            return false;
+        }
+        frames_dir = tmp_dir_;
+        replace_reader(open_reader(frames_dir));
+        proc = std::move(p2);
+        apply_process_tweaks(*proc);
+        t_launch = Clock::now();
+        last_frame_t = Clock::now();
+        st.reset();
+        producer_done = false;
+        recording_seen = false;
+        recording_since = {};
+        relocated = false;
+        window_placed = false;
+        attached_after_relaunch = false;
+        return true;
+    };
+
     for (;;) {
         if (kill_) {
             log_warn("{}", trf("Рендер перервано — закриваю гру"));
@@ -1719,6 +1806,7 @@ void RenderJob::run() {
             if (proc->running()) proc->terminate();
             session.abort();
             rp->set_producer_done();
+            replace_reader(nullptr);
             session_ptr.reset();
             cleanup();
             update([](Progress& p) { p.stage = tr("Скасовано"); });
@@ -1822,8 +1910,13 @@ void RenderJob::run() {
 
         // ---- Якщо гра пише кадри не туди, куди ми чекаємо, — шукаємо їх ----
         if (recording_seen && recording_since == Clock::time_point{}) recording_since = Clock::now();
-        if (!relocated && recording_since != Clock::time_point{} && !rp->saw_any_file() &&
-            (Clock::now() - recording_since > std::chrono::seconds(8) || producer_done)) {
+        const auto recording_for = recording_since == Clock::time_point{} ? Clock::duration::zero() : Clock::now() - recording_since;
+        // Канал: гра вже відрендерила кілька кадрів запису (лічильник драйвера), а в канал не прийшло
+        // нічого. Сам час тут не ознака: перший кадр з RTX може рендеритись довго.
+        const bool via_pipe = pipe_of() != nullptr;
+        const bool frames_missing = via_pipe ? st && st->frames >= 5 && (recording_for > std::chrono::seconds(3) || producer_done)
+                                             : recording_for > std::chrono::seconds(8) || producer_done;
+        if (!relocated && recording_since != Clock::time_point{} && !rp->saw_any_file() && frames_missing) {
             relocated = true;
             const std::vector<fs::path> candidates = {gmod_->garrysmod, gmod_->garrysmod / "gmdr_tmp", gmod_->root};
             for (const auto& dir : candidates) {
@@ -1833,12 +1926,23 @@ void RenderJob::run() {
                     if (starts_with_i(path_to_utf8(it->path().filename()), movie_prefix())) found = true;
                 if (!found) continue;
                 log_warn("{}", trf("Гра записує кадри в іншу папку ({}) — переключаюся на неї", path_to_utf8(dir)));
+                if (via_pipe) {
+                    // Рушій відкинув назву каналу і пише звичайні файли — з цією грою далі одразу файлами
+                    remember_pipe_failure(game_exe_, tr("гра записала кадри файлами, а не в канал"));
+                    pipe_transport_ = false;
+                }
                 frames_dir = dir;
                 stray_dir_ = dir;
                 so.dir = dir;
-                reader_ptr = std::make_unique<frames::FrameSequenceReader>(so);
-                rp = reader_ptr.get();
+                so.prefix = movie_prefix();
+                replace_reader(std::make_unique<frames::FrameSequenceReader>(so));
                 break;
+            }
+            if (pipe_of() && !cancel_ && !kill_) {
+                const std::string why = tr("Гра не записала в канал жодного кадру.");
+                if (!pipe_strict_ && fall_back_to_files(why)) continue;
+                fatal(why + (pipe_strict_ ? tr(" Вибрано лише канал (--frame-transport pipe), тож на файли рендер не переходить.") : ""));
+                return;
             }
             if (!rp->saw_any_file() && frames_dir == tmp_dir_)
                 log_warn("{}", trf("Гра вже записує, але кадрів ще немає. Якщо так і лишиться — перевірте консоль гри (garrysmod/console.log)"));
@@ -1855,10 +1959,28 @@ void RenderJob::run() {
         const auto wait_t0 = Clock::now();
         const auto w = rp->next_for(img, 40);
         if (starving) wait_ms += std::chrono::duration<double, std::milli>(Clock::now() - wait_t0).count();
-        if (w == frames::FrameSequenceReader::Wait::End) break;
-        if (w == frames::FrameSequenceReader::Wait::Frame) {
+        if (w == frames::FrameSource::Wait::End) break;
+        if (w == frames::FrameSource::Wait::Frame) {
             recording_seen = true;
             last_frame_t = Clock::now();
+            if (auto* pr = pipe_of(); pr && !pipe_announced) {
+                // Звук рушій пише так само, як кадри (на Windows — теж у канал); його WAV створюється
+                // разом із початком запису, тож до першого кадру вже має бути
+                if (s_.audio && s_.game_audio && !pr->audio_connected()) {
+                    for (const auto t0 = Clock::now(); !pr->audio_connected() && Clock::now() - t0 < std::chrono::seconds(3);)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    if (!pr->audio_connected() && !pipe_strict_ && !session.started()) {
+                        img.release();
+                        if (fall_back_to_files(tr("Кадри йдуть каналом, а звук гри — ні."))) continue;
+                        fatal(tr("Не вдалося перезапустити гру, щоб писати кадри файлами."));
+                        return;
+                    }
+                }
+                pipe_announced = true;
+                if (pipe_strict_) forget_pipe_failure(game_exe_);
+                log_info("{}", trf("Кадри йдуть з гри напряму в програму (канал), без файлів на диску"));
+                update([](Progress& p) { p.frames_via_pipe = true; });
+            }
             if (!session.started()) {
                 // Чекаємо на тік першого кадру (потрібен для синхронізації голосу)
                 int32_t first_tick = std::max(0, s_.start_tick);
@@ -1874,8 +1996,9 @@ void RenderJob::run() {
                 log_info("{}", trf("Запис почався: тік {}, кадри гри {}x{}", first_tick, img.width, img.height));
                 video_start_tick = first_tick;
                 set_check(kCheckDemo, CheckItem::Ok, trf("тік {}", first_tick));
-                set_check(kCheckFrames, CheckItem::Ok, std::format("{}×{}, {}", img.width, img.height,
-                                                                   frames::is_yuv(img.layout) ? "JPEG" : "TGA"));
+                set_check(kCheckFrames, CheckItem::Ok, std::format("{}×{}, {}{}", img.width, img.height,
+                                                                   frames::is_yuv(img.layout) ? "JPEG" : "TGA",
+                                                                   pipe_of() ? tr(", каналом") : ""));
                 first_frame_t = Clock::now();
                 if (img.width != rw || img.height != rh)
                     log_warn("{}", trf("Гра рендерить {}x{} замість {}x{} (обмеження монітора?) — кадри буде масштабовано до {}x{}",
@@ -2087,8 +2210,9 @@ void RenderJob::run() {
         }
 
         // ---- Зворотний тиск: не даємо кадрам заполонити диск ----
+        // (каналом кадри на диск не йдуть: гра сама чекає на записі, поки програма не звільнить пам'ять)
         const int64_t pending = rp->pending_files();
-        const bool queue_high = pending > std::max(8, s_.max_pending_frames);
+        const bool queue_high = !pipe_of() && pending > std::max(8, s_.max_pending_frames);
         const bool queue_low = pending <= std::max(2, s_.max_pending_frames / 3);
         if (!proc->suspended() && proc->running() && (queue_high || (disk_low && !cancel_))) {
             if (proc->suspend()) log_debug("Гра на паузі: {}", disk_low ? "мало місця на диску" : trf("кодер не встигає ({} кадрів у черзі)", pending));
@@ -2156,6 +2280,9 @@ void RenderJob::run() {
     }
 
     // ---- 5. Завершення ----
+    // Канал закривається раніше, ніж WAV звуку гри, який він дописував, знадобиться далі
+    const int64_t skipped_frames = rp->skipped();
+    replace_reader(nullptr);
     if (proc->suspended()) proc->resume();
     unmute_game();
     set_stage(tr("Завершення файлу"));
@@ -2240,7 +2367,10 @@ void RenderJob::run() {
         handoff_->waiting_id = id_;
     }
     cleanup(!hand_over && s_.quit_game_when_done);
-    if (rp->skipped() > 0) log_warn("{}", trf("Пропущено кадрів: {}", rp->skipped()));
+    if (skipped_frames > 0) log_warn("{}", trf("Пропущено кадрів: {}", skipped_frames));
+    if (pipe_frames > 0)
+        log_info("{}", trf("Каналом прийнято {} кадрів гри ({}) — жоден кадр не записувався на диск", pipe_frames,
+                           format_bytes(pipe_bytes)));
     const auto chapters =
         s_.chapters ? chapters_for_range(parse_markers(s_.markers), video_start_tick,
                                          video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti)

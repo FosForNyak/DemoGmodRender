@@ -166,6 +166,8 @@ static void print_usage() {
   --rtx                  копія GMod RTX від RTXLauncher (її параметри запуску)
   --rtx-dir ПАПКА        папка копії GMod RTX (типово — з налаштувань RTXLauncher); вмикає --rtx
   --parallel N           рендерити фрагмент частинами в N копіях гри одночасно (2..4, -multirun)
+  --frame-transport auto|pipe|files   як кадри йдуть з гри: auto — каналом, без файлів на диску
+                         (якщо гра в канал не пише — файлами), pipe — лише каналом, files — файлами
 Інше:
   --config ФАЙЛ.json  --save-config ФАЙЛ.json  --keep-temp  -v (детальний журнал)
   --lang en|uk|de|pl...  мова повідомлень (English, українська, Deutsch, Polski…; або змінна GMDR_LANG)
@@ -294,6 +296,14 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
     if (c.has("--engine-voice")) s.mute_engine_voice = false;
     if (c.has("--mic")) s.mic_file = c.get("--mic");
     if (c.has("--capture")) s.capture_format = c.get("--capture");
+    if (c.has("--frame-transport")) {
+        const std::string v = to_lower(c.get("--frame-transport"));
+        if (v != "auto" && v != "pipe" && v != "files") {
+            err = tr("--frame-transport: auto, pipe або files");
+            return false;
+        }
+        s.frame_transport = v;
+    }
     if (c.has("--hide-hud")) s.hide_hud = true;
     if (c.has("--hide-viewmodel")) s.hide_viewmodel = true;
     if (c.has("--exec"))

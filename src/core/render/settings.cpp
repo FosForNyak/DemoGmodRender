@@ -7,7 +7,7 @@ namespace gmdr::render {
 
 // Макроси, щоб не писати кожне поле двічі (серіалізація/десеріалізація).
 #define GMDR_SETTINGS_FIELDS(X)                                                                       \
-    X(demo_path) X(game_dir) X(game_exe) X(render_width) X(render_height) X(capture_format)          \
+    X(demo_path) X(game_dir) X(game_exe) X(render_width) X(render_height) X(capture_format) X(frame_transport) \
     X(jpeg_quality) X(hide_hud) X(hide_viewmodel) X(extra_commands) X(extra_launch_args)             \
     X(max_pending_frames) X(quit_game_when_done) X(manual_mode) X(mute_engine_voice) X(menu_delay)   \
     X(high_priority) X(game_window) X(mute_game_sound) X(rtx) X(rtx_game_dir) X(start_tick) X(end_tick)              \

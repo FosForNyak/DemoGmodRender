@@ -17,6 +17,7 @@
 #include "core/demo/library.hpp"
 #include "core/demo/string_tables.hpp"
 #include "core/frames/blender.hpp"
+#include "core/frames/frame_pipe.hpp"
 #include "core/frames/image_decode.hpp"
 #include "core/frames/tga.hpp"
 #include "core/frames/sequence_reader.hpp"
@@ -36,6 +37,7 @@
 #include "core/render/derived.hpp"
 #include "core/render/overlay.hpp"
 #include "core/render/edit_package.hpp"
+#include "core/render/frame_transport.hpp"
 #include "core/render/report.hpp"
 #include "core/util/zip_writer.hpp"
 #include "core/util/file_assoc.hpp"
@@ -666,6 +668,167 @@ static void test_frame_files() {
     for (auto& e : fs::directory_iterator(dir)) left += e.path().extension() == ".tga";
     CHECK(left == 0);
     fs::remove_all(dir);
+}
+
+// Кадри каналом (frames/frame_pipe.hpp): "гра" пише кожен кадр так само, як startmovie, — відкриває
+// "файл" <назва>0000.tga за назвою для startmovie, пише і закриває, — а читач віддає кадри по порядку,
+// не створюючи на диску жодного файлу кадру.
+static void test_frame_pipe() {
+    std::printf("[frame pipe]\n");
+    namespace fs = std::filesystem;
+    if (!frames::frame_pipes_supported()) {
+        std::printf("  канали не підтримуються — пропускаю\n");
+        return;
+    }
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_pipe";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    frames::Image img;
+    img.allocate(64, 36, frames::PixelLayout::BGR24);
+    auto frame_bytes = [&](int k) {
+        std::fill(img.data.begin(), img.data.end(), static_cast<uint8_t>(k * 7));
+        return frames::encode_tga(img, true, false);
+    };
+    const std::string prefix = "gmdr_t" + make_unique_id() + "_";
+    frames::PipeOptions po;
+    po.dir = dir;
+    po.prefix = prefix;
+    po.decode_threads = 2;
+    po.max_buffered = 3;   // мало місця: гра чекатиме на записі, поки тест не забере кадри
+    auto reader = std::make_unique<frames::FramePipeReader>(po);
+    CHECK(reader->ok());
+    if (!reader->ok()) {
+        std::printf("  %s\n", reader->last_error().c_str());
+        return;
+    }
+    const std::string movie = frames::pipe_movie_name(path_to_utf8(dir), prefix);   // як отримає гра
+    auto write = [&](int k, const std::vector<uint8_t>& bytes, size_t n) {
+        std::FILE* f = audio::open_file_utf8(path_from_utf8(std::format("{}{:04d}.tga", movie, k)), "wb");
+        if (!f) return false;
+        if (n > 0) std::fwrite(bytes.data(), 1, n, f);
+        std::fclose(f);
+        return true;
+    };
+    const int total = 30, skip = 7, cut = 12, probe = 4;
+    std::atomic<int> write_failures{0};
+    std::vector<uint8_t> wav_expected;
+    std::thread producer([&] {
+#ifdef _WIN32
+        // Звук — як у рушії: заголовок одним відкриттям, далі кожен шматок — знову відкрити й дописати
+        auto wav_write = [&](const std::vector<uint8_t>& b, const char* mode) {
+            std::FILE* f = audio::open_file_utf8(path_from_utf8(movie + ".wav"), mode);
+            if (!f) {
+                ++write_failures;
+                return;
+            }
+            std::fwrite(b.data(), 1, b.size(), f);
+            std::fclose(f);
+            wav_expected.insert(wav_expected.end(), b.begin(), b.end());
+        };
+        std::vector<uint8_t> head(44, 0);
+        std::memcpy(head.data(), "RIFF", 4);
+        wav_write(head, "wb");
+#endif
+        for (int k = 0; k < total; ++k) {
+            if (k == skip) continue;   // гра пропустила номер
+            const auto bytes = frame_bytes(k);
+            if (k == probe && !write(k, bytes, 0)) ++write_failures;   // відкрила й закрила, нічого не записавши
+            if (!write(k, bytes, k == cut ? bytes.size() / 2 : bytes.size())) ++write_failures;
+#ifdef _WIN32
+            wav_write(std::vector<uint8_t>(400 + k, static_cast<uint8_t>(k)), "r+b");
+#endif
+        }
+    });
+    int got = 0;
+    int64_t last = -1;
+    bool order_ok = true, pixels_ok = true;
+    frames::Image out;
+    bool producer_joined = false;
+    for (int guard = 0; guard < 1000; ++guard) {
+        const auto w = reader->next_for(out, 100);
+        if (w == frames::FrameSource::Wait::End) break;
+        if (w == frames::FrameSource::Wait::Timeout) {
+            if (!producer_joined) {
+                producer.join();
+                producer_joined = true;
+                reader->set_producer_done();
+            }
+            continue;
+        }
+        if (out.index <= last) order_ok = false;
+        last = out.index;
+        if (out.row(0, 0)[0] != static_cast<uint8_t>(out.index * 7)) pixels_ok = false;
+        ++got;
+        // Повільний "кодер": канал має тримати гру, а не губити кадри
+        if (got < 5) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    if (!producer_joined) {
+        producer.join();
+        reader->set_producer_done();
+    }
+    CHECK(write_failures == 0);
+    CHECK(got == total - 2);   // без пропущеного номера й обрізаного кадру
+    CHECK(order_ok);
+    CHECK(pixels_ok);
+    CHECK(reader->skipped() == 2);
+    CHECK(reader->saw_any_file());
+    CHECK(reader->audio_connected());
+    CHECK(reader->bytes_received() > 0);
+    reader.reset();
+    // На диску — жодного файлу кадру (FIFO прибрано разом із читачем)
+    int left = 0;
+    for (auto& e : fs::directory_iterator(dir)) left += e.path().extension() == ".tga";
+    CHECK(left == 0);
+#ifdef _WIN32
+    // Звук: усе, що "гра" писала в канал, по порядку — у звичайному WAV у тимчасовій папці
+    auto wav = read_file_bytes(dir / path_from_utf8(prefix + ".wav"));
+    CHECK(wav && *wav == wav_expected);
+#endif
+    // Гра так і не відкрила канал: читач закривається без очікування
+    {
+        frames::PipeOptions po2 = po;
+        po2.prefix = "gmdr_t" + make_unique_id() + "_";
+        frames::FramePipeReader idle(po2);
+        CHECK(idle.ok());
+        CHECK(idle.next_for(out, 50) == frames::FrameSource::Wait::Timeout);
+        idle.set_producer_done();
+        CHECK(idle.next_for(out, 2000) == frames::FrameSource::Wait::End);
+        CHECK(!idle.saw_any_file());
+    }
+    fs::remove_all(dir);
+}
+
+// Вибір способу передачі кадрів і пам'ять про невдачу каналу з конкретною грою
+static void test_frame_transport_choice() {
+    std::printf("[frame transport]\n");
+    namespace fs = std::filesystem;
+    const fs::path exe = fs::temp_directory_path() / ("gmdr_fake_exe_" + make_unique_id());
+    write_file_text(exe, "exe");
+    render::RenderSettings s;
+    CHECK(render::normalize_frame_transport("щось") == "auto");
+    CHECK(render::normalize_frame_transport(" PIPE ") == "pipe");
+    s.frame_transport = "files";
+    CHECK(!render::choose_frame_transport(s, exe).pipe);
+    if (frames::frame_pipes_supported()) {
+        s.frame_transport = "auto";
+        auto c = render::choose_frame_transport(s, exe);
+        CHECK(c.pipe && !c.strict);
+        render::remember_pipe_failure(exe, "тест.");
+        c = render::choose_frame_transport(s, exe);
+        CHECK(!c.pipe && c.note.find("тест)") != std::string::npos);
+        s.frame_transport = "pipe";   // явний вибір — канал попри попередню невдачу
+        c = render::choose_frame_transport(s, exe);
+        CHECK(c.pipe && c.strict);
+        write_file_text(exe, "exe, оновлена гра");   // інший розмір exe — пробуємо канал знову
+        s.frame_transport = "auto";
+        CHECK(render::choose_frame_transport(s, exe).pipe);
+        render::remember_pipe_failure(exe, "ще раз");
+        render::forget_pipe_failure(exe);
+        CHECK(render::choose_frame_transport(s, exe).pipe);
+        s.manual_mode = true;   // startmovie вводить сам гравець — лише файли
+        CHECK(!render::choose_frame_transport(s, exe).pipe);
+    }
+    fs::remove(exe);
 }
 
 // Фазинг: демо приходять ззовні, тож пошкоджений файл не повинен ронити програму.
@@ -2302,6 +2465,8 @@ int main(int argc, char** argv) {
     test_color_conversion();
     test_subtitles_and_sizes();
     test_frame_files();
+    test_frame_pipe();
+    test_frame_transport_choice();
     test_job_elapsed();
     test_driver_cfg();
     test_extra_versions();

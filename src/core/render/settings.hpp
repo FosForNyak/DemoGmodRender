@@ -21,6 +21,9 @@ struct RenderSettings {
     int         render_width = 0;         // розмір вікна гри (0 — як вихідне відео)
     int         render_height = 0;
     std::string capture_format = "tga";   // tga (без втрат) / jpg
+    // Як кадри йдуть з гри: auto — каналом, без файлів на диску (якщо гра в канал не пише —
+    // файлами), pipe — лише каналом, files — файлами в тимчасовій папці (frame_transport.hpp)
+    std::string frame_transport = "auto";
     int         jpeg_quality = 95;
     bool        hide_hud = false;
     bool        hide_viewmodel = false;
