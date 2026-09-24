@@ -1,7 +1,7 @@
 // =============================================================================
-//  app_tab_range.cpp — вкладка «Фрагмент» і таймлайн у стилі Premiere Pro:
-//  доріжка на кожного гравця (заголовок з M/S і прослуховуванням), доріжка чату,
-//  лінійка з таймкодами, синій курсор, позначки, смуга масштабу знизу.
+//  app_timeline.cpp — таймлайн: доріжка на кожного гравця (заголовок з M/S і
+//  прослуховуванням), доріжка чату, лінійка з таймкодами, курсор, позначки,
+//  смуга масштабу знизу. Кольори — з палітри теми.
 // =============================================================================
 #include "app.hpp"
 
@@ -23,121 +23,6 @@
 namespace gmdr::gui {
 
 using namespace ui;
-
-// ============================= Вкладка "Фрагмент" =================================
-void App::draw_tab_range() {
-    const float fs_ = ImGui::GetFontSize();
-    const float lw = fs_ * 10.5f;
-    bool changed = false;
-    if (!analysis_) {
-        ImGui::TextColored(kColDim, "%s", tr("Спершу відкрийте демо."));
-        return;
-    }
-    const double ti = analysis_->tick_interval;
-    const int32_t last = analysis_->last_tick;
-    if (section(tr("Фрагмент"))) {
-        if (checkbox(tr("Увесь запис"), &whole_demo_)) {
-            if (whole_demo_) {
-                s_.start_tick = 0;
-                s_.end_tick = -1;
-            }
-            changed = true;
-        }
-        ImGui::SameLine();
-        if (pill_button(tr("Переглянути в грі"), Kind::Secondary, 0, Icon::Play)) start_watch(whole_demo_ ? 0 : std::max(0, s_.start_tick));
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", tr("Запустити гру і програти демо з початку фрагмента (у реальному часі, зі звуком).\n"
-                                    "У грі: F9 — початок фрагмента, F11 — кінець, F6 — позначка. Вони одразу з'являться тут.\n"
-                                    "Коли надивитеся — просто закрийте гру."));
-        ImGui::BeginDisabled(whole_demo_);
-        float start_s = static_cast<float>(std::max(0, s_.start_tick) * ti);
-        float end_s = static_cast<float>((s_.end_tick > 0 ? s_.end_tick : last) * ti);
-        const float max_s = static_cast<float>(last * ti);
-        const float sw = std::max(fs_ * 10, ImGui::GetContentRegionAvail().x - lw - fs_ * 5.5f);
-        label(tr("Початок"), lw);
-        if (slider_float("##start", &start_s, 0.0f, max_s, format_duration(start_s).c_str(), sw)) {
-            s_.start_tick = static_cast<int32_t>(start_s / ti);
-            if (s_.end_tick > 0 && s_.start_tick >= s_.end_tick) s_.end_tick = std::min(last, s_.start_tick + 1);
-            changed = true;
-        }
-        ImGui::SameLine();
-        ImGui::TextColored(kColDim, tr("тік %d"), s_.start_tick);
-        label(tr("Кінець"), lw);
-        if (slider_float("##end", &end_s, 0.0f, max_s, format_duration(end_s).c_str(), sw)) {
-            s_.end_tick = static_cast<int32_t>(end_s / ti);
-            if (s_.end_tick >= last) s_.end_tick = -1;
-            if (s_.end_tick > 0 && s_.end_tick <= s_.start_tick) s_.start_tick = std::max(0, s_.end_tick - 1);
-            changed = true;
-        }
-        ImGui::SameLine();
-        ImGui::TextColored(kColDim, tr("тік %d"), s_.end_tick > 0 ? s_.end_tick : last);
-        label(tr("Точні тіки"), lw);
-        ImGui::SetNextItemWidth(fs_ * 6);
-        changed |= ImGui::InputInt("##st", &s_.start_tick, 0);
-        ImGui::SameLine();
-        ImGui::TextUnformatted("—");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(fs_ * 6);
-        int end_shown = s_.end_tick > 0 ? s_.end_tick : last;
-        if (ImGui::InputInt("##et", &end_shown, 0)) {
-            s_.end_tick = end_shown >= last ? -1 : end_shown;
-            changed = true;
-        }
-        // Точний час — зручно для довгих демо (повзунок на кількагодинному записі грубий)
-        label(tr("Точний час"), lw);
-        auto time_input = [&](const char* id, std::string& buf, bool& active, int32_t tick, auto&& apply) {
-            if (!active) buf = format_timecode(tick * ti);
-            ImGui::SetNextItemWidth(fs_ * 7);
-            ImGui::InputText(id, &buf);
-            active = ImGui::IsItemActive();
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
-                if (auto t = parse_timecode(buf)) {
-                    apply(static_cast<int32_t>(std::llround(*t / ti)));
-                    changed = true;
-                } else {
-                    log_warn("{}", trf("Не розумію час «{}». Приклади: 95.5 — секунди, 1:35 — хв:с, 1:02:03 — год:хв:с", buf));
-                }
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("год:хв:сек, хв:сек або секунди, напр. 1:02:03.5"));
-        };
-        time_input("##stime", start_time_buf_, start_time_active_, s_.start_tick, [&](int32_t t) {
-            s_.start_tick = t;
-            if (s_.end_tick > 0 && s_.start_tick >= s_.end_tick) s_.end_tick = std::min(last, s_.start_tick + 1);
-        });
-        ImGui::SameLine();
-        ImGui::TextUnformatted("—");
-        ImGui::SameLine();
-        time_input("##etime", end_time_buf_, end_time_active_, s_.end_tick > 0 ? s_.end_tick : last, [&](int32_t t) {
-            s_.end_tick = t >= last ? -1 : t;
-            if (s_.end_tick > 0 && s_.end_tick <= s_.start_tick) s_.start_tick = std::max(0, s_.end_tick - 1);
-        });
-        s_.start_tick = std::clamp(s_.start_tick, 0, std::max(0, last - 1));
-        if (s_.end_tick == 0 || s_.end_tick > last) s_.end_tick = -1;
-        ImGui::EndDisabled();
-        const double dur = ((s_.end_tick > 0 ? s_.end_tick : last) - s_.start_tick) * ti;
-        label(tr("Тривалість"), lw);
-        ImGui::TextColored(kColAccent, "%s", format_duration(dur).c_str());
-        if (auto fps = parse_rational(s_.fps)) {
-            ImGui::SameLine();
-            ImGui::TextColored(kColDim, tr("Кадрів відео: %.0f, кадрів рендеру гри: %.0f"), dur * fps->value(),
-                               dur * fps->value() * std::max(1, s_.motion_blur));
-        }
-        if (dur > 30 * 60) {
-            ImGui::PushStyleColor(ImGuiCol_Text, kColWarn);
-            ImGui::TextWrapped("%s", tr("Це довгий відрізок: рендер триватиме годинами, а файл буде великим. "
-                                     "Для кліпу зніміть «Увесь запис» і виберіть фрагмент."));
-            ImGui::PopStyleColor();
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, kColDim);
-        ImGui::TextWrapped("%s", tr("Підказка: у самій грі номер тіку видно в панелі демо (Shift+F2). "
-                                 "До далекого фрагмента гра швидко перемотає демо (demo_gototick) і почне запис "
-                                 "за кілька секунд до нього, тож чекати, поки програється початок, не доведеться."));
-        ImGui::PopStyleColor();
-    }
-    if (changed) mark_dirty();
-    ImGui::Spacing();
-    if (section(tr("Позначки"))) draw_markers_list();
-}
 
 void App::rebuild_timeline() {
     timeline_.clear();
@@ -195,7 +80,7 @@ void App::draw_timeline() {
     const double in_t = std::max(0, s_.start_tick) * ti;
     const double out_t = (s_.end_tick > 0 ? s_.end_tick : last_tick) * ti;
 
-    // ---- Верхній рядок: курсор великим синім таймкодом, «Увесь запис», вхід/вихід ----
+    // ---- Верхній рядок: курсор великим таймкодом, «Увесь запис», вхід/вихід ----
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float right = p.x + ImGui::GetContentRegionAvail().x;
@@ -208,7 +93,7 @@ void App::draw_timeline() {
         const float row_h = ImGui::GetItemRectSize().y;
         ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, p.y + (row_h - ImGui::GetFrameHeight()) * 0.5f));
         ImGui::BeginDisabled(job_running());
-        if (checkbox(tr("Увесь запис"), &whole_demo_)) {
+        if (toggle(tr("Увесь запис"), &whole_demo_)) {
             if (whole_demo_) {
                 s_.start_tick = 0;
                 s_.end_tick = -1;
@@ -242,7 +127,7 @@ void App::draw_timeline() {
                     "Коліщатко — масштаб, протягніть правою кнопкою — зсунути, подвійний клік — уся шкала;\n"
                     "смуга внизу — масштаб і зсув. Правий клік — меню: позначка, початок/кінець фрагмента, перегляд у грі.\n"
                     "M і S на доріжці — вимкнути гравця і лише цей гравець (соло), навушники — прослухати.\n"
-                    "Доріжка «Чат»: світлі риски — повідомлення, зелені — входи, червоні — виходи; наведіть, щоб прочитати.\n"
+                    "Доріжка «Чат»: тьмяні риски — повідомлення, зелені — входи, червоні — виходи; наведіть, щоб прочитати.\n"
                     "Смужка під лінійкою: синій — говорить один, жовтий — двоє, червоний — троє і більше."));
     }
 
@@ -271,8 +156,8 @@ void App::draw_timeline() {
     const double fps_eff = fps > 0 ? fps : 60.0;
 
     // Фон: заголовки доріжок і сама шкала
-    dl->AddRectFilled(ImVec2(origin.x, origin.y), ImVec2(x0 - 1, tracks_bottom), IM_COL32(31, 31, 31, 255));
-    dl->AddRectFilled(ImVec2(x0, tracks_top), ImVec2(x0 + W, tracks_bottom), IM_COL32(24, 24, 24, 255));
+    dl->AddRectFilled(ImVec2(origin.x, origin.y), ImVec2(x0 - 1, tracks_bottom), kTlHead);
+    dl->AddRectFilled(ImVec2(x0, tracks_top), ImVec2(x0 + W, tracks_bottom), kTlBody);
 
     // ---- Заголовки доріжок ----
     std::map<std::string, double> volumes;
@@ -284,28 +169,28 @@ void App::draw_timeline() {
         s_.voice_volumes = out;
         mark_dirty();
     };
-    // Кольори міток Premiere (Iris, Caribbean, Lavender, Mango, Forest, Rose, Cerulean, Violet)
+    // Кольори доріжок гравців
     static const ImU32 kLabel[] = {IM_COL32(98, 135, 209, 255), IM_COL32(35, 170, 150, 255), IM_COL32(190, 130, 210, 255),
                                    IM_COL32(222, 160, 60, 255), IM_COL32(95, 170, 80, 255),  IM_COL32(214, 100, 145, 255),
                                    IM_COL32(50, 160, 215, 255), IM_COL32(140, 110, 215, 255)};
     if (ev_h > 0) {
         const float y = tracks_top;
-        dl->AddLine(ImVec2(origin.x, y + ev_h - 1), ImVec2(x0 + W, y + ev_h - 1), IM_COL32(18, 18, 18, 255));
+        dl->AddLine(ImVec2(origin.x, y + ev_h - 1), ImVec2(x0 + W, y + ev_h - 1), kTlLine);
         dl->AddText(ImVec2(origin.x + 8 * u, y + (ev_h - fs) * 0.5f), kTextDim, tr("Чат"));
     }
     for (int i = 0; i < lanes; ++i) {
         const auto& lane = timeline_[static_cast<size_t>(i)];
         const float y = lanes_top + i * lane_h;
-        dl->AddRectFilled(ImVec2(origin.x, y), ImVec2(x0 - 1, y + lane_h - 1), IM_COL32(40, 40, 40, 255));
-        dl->AddLine(ImVec2(origin.x, y + lane_h - 1), ImVec2(x0 + W, y + lane_h - 1), IM_COL32(18, 18, 18, 255));
-        // «A1» — номер аудіодоріжки, як у Premiere
+        dl->AddRectFilled(ImVec2(origin.x, y), ImVec2(x0 - 1, y + lane_h - 1), kTlLaneHead);
+        dl->AddLine(ImVec2(origin.x, y + lane_h - 1), ImVec2(x0 + W, y + lane_h - 1), kTlLine);
+        // «A1» — номер аудіодоріжки
         const std::string an = std::format("A{}", i + 1);
         const float box_w = std::round(fs * 1.75f), box_h = std::round(fs * 1.1f);
         const ImVec2 b0(origin.x + 5 * u, y + std::round((lane_h - box_h) * 0.5f));
-        dl->AddRectFilled(b0, ImVec2(b0.x + box_w, b0.y + box_h), IM_COL32(62, 62, 62, 255), 3 * u);
+        dl->AddRectFilled(b0, ImVec2(b0.x + box_w, b0.y + box_h), kLabel[i % IM_ARRAYSIZE(kLabel)] & IM_COL32(255, 255, 255, 70), 4 * u);
         ImGui::PushFont(bold_font(), base * 0.8f);
         const ImVec2 ats = ImGui::CalcTextSize(an.c_str());
-        dl->AddText(ImVec2(b0.x + (box_w - ats.x) * 0.5f, b0.y + (box_h - ats.y) * 0.5f), IM_COL32(200, 200, 200, 255), an.c_str());
+        dl->AddText(ImVec2(b0.x + (box_w - ats.x) * 0.5f, b0.y + (box_h - ats.y) * 0.5f), kText, an.c_str());
         ImGui::PopFont();
         // Кнопки праворуч: навушники, M, S
         const float bsz = std::round(fs * 1.2f);
@@ -361,7 +246,7 @@ void App::draw_timeline() {
         if (y + fs < tracks_bottom) {
             dl->AddText(ImVec2(origin.x + 8 * u, y), kTextDim, more.c_str());
             if (ImGui::IsMouseHoveringRect(ImVec2(origin.x, y), ImVec2(x0, y + fs)))
-                ImGui::SetTooltip("%s", tr("На шкалі — гравці, що говорили найбільше; решта — у панелі «Голоси»."));
+                ImGui::SetTooltip("%s", tr("На шкалі — гравці, що говорили найбільше; решта — на сторінці «Звук і голоси»."));
         }
     }
     if (total_lanes == 0)
@@ -462,7 +347,7 @@ void App::draw_timeline() {
     // ---- Малювання шкали ----
     dl->PushClipRect(ImVec2(x0, origin.y), ImVec2(x0 + W, tracks_bottom), true);
     // Лінійка з поділками й таймкодами
-    dl->AddRectFilled(ImVec2(x0, ruler_y), ImVec2(x0 + W, ruler_y + ruler_h), IM_COL32(35, 35, 35, 255));
+    dl->AddRectFilled(ImVec2(x0, ruler_y), ImVec2(x0 + W, ruler_y + ruler_h), kTlRuler);
     const float label_w = ImGui::CalcTextSize("00:00:00:00").x + fs * 1.2f;
     static const double steps[] = {1.0 / 30, 1.0 / 10, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400};
     double step = steps[IM_ARRAYSIZE(steps) - 1];
@@ -479,26 +364,25 @@ void App::draw_timeline() {
         const float x = std::round(t2x(t));
         const bool major = std::abs(std::remainder(t, step)) < mstep * 0.5;
         dl->AddLine(ImVec2(x, ruler_y + ruler_h - (major ? ruler_h * 0.45f : ruler_h * 0.2f)), ImVec2(x, ruler_y + ruler_h),
-                    major ? IM_COL32(150, 150, 150, 255) : IM_COL32(90, 90, 90, 255));
-        if (major) dl->AddText(ImVec2(x + 3 * u, ruler_y + 2 * u), IM_COL32(170, 170, 170, 255), timecode(t, fps_eff).c_str());
+                    major ? kTlTickMajor : kTlTickMinor);
+        if (major) dl->AddText(ImVec2(x + 3 * u, ruler_y + 2 * u), kTlRulerText, timecode(t, fps_eff).c_str());
     }
     ImGui::PopFont();
-    // Фрагмент на лінійці — світла смуга (як вхід/вихід у Premiere); під час рендеру вже записана
-    // частина зеленіє — як смуга рендеру в Premiere
+    // Фрагмент на лінійці — акцентна смуга; під час рендеру вже записана частина зеленіє
     if (!whole_demo_) {
         const float xa = t2x(in_t), xb = t2x(out_t);
-        dl->AddRectFilled(ImVec2(xa, ruler_y + ruler_h - 5 * u), ImVec2(xb, ruler_y + ruler_h), IM_COL32(190, 190, 190, 200));
+        dl->AddRectFilled(ImVec2(xa, ruler_y + ruler_h - 5 * u), ImVec2(xb, ruler_y + ruler_h), kAccent);
     }
     if (job_ && job_->running() && dynamic_cast<const render::RenderJob*>(job_.get())) {
         const auto p = job_->progress();
         if (p.frames > 0 && p.fraction > 0) {
             const float xa = t2x(in_t), xb = t2x(in_t + (out_t - in_t) * std::clamp(p.fraction, 0.0, 1.0));
-            dl->AddRectFilled(ImVec2(xa, ruler_y + ruler_h - 5 * u), ImVec2(xb, ruler_y + ruler_h), IM_COL32(60, 190, 110, 255));
+            dl->AddRectFilled(ImVec2(xa, ruler_y + ruler_h - 5 * u), ImVec2(xb, ruler_y + ruler_h), kGreen);
         }
     }
-    // Смужка активності під лінійкою (скільки гравців говорить одночасно) — як смуга рендеру
+    // Смужка активності під лінійкою (скільки гравців говорить одночасно)
     const float act_y = ruler_y + ruler_h;
-    dl->AddRectFilled(ImVec2(x0, act_y), ImVec2(x0 + W, act_y + act_h), IM_COL32(18, 18, 18, 255));
+    dl->AddRectFilled(ImVec2(x0, act_y), ImVec2(x0 + W, act_y + act_h), kTlLine);
     if (!activity_.empty()) {
         const int nb = static_cast<int>(activity_.size());
         for (int x = 0; x < static_cast<int>(W); ++x) {
@@ -515,23 +399,23 @@ void App::draw_timeline() {
     // Доріжка чату й подій
     if (ev_h > 0) {
         const float ey = tracks_top;
-        dl->AddRectFilled(ImVec2(x0, ey), ImVec2(x0 + W, ey + ev_h - 1), IM_COL32(30, 30, 30, 255));
+        dl->AddRectFilled(ImVec2(x0, ey), ImVec2(x0 + W, ey + ev_h - 1), kTlLane);
         for (const auto& e : analysis_->events) {
             const double t = e.tick * ti;
             if (t < view_t0_ || t > view_t1_) continue;
             const float x = std::floor(t2x(t));
-            const ImU32 col = e.kind == demo::DemoEventKind::Chat     ? IM_COL32(205, 210, 220, 200)
+            const ImU32 col = e.kind == demo::DemoEventKind::Chat     ? kTextDim
                               : e.kind == demo::DemoEventKind::Join   ? IM_COL32(110, 215, 125, 230)
                               : e.kind == demo::DemoEventKind::Leave  ? IM_COL32(240, 110, 100, 230)
                                                                       : IM_COL32(240, 200, 100, 220);
             dl->AddRectFilled(ImVec2(x, ey + 3 * u), ImVec2(x + std::max(1.5f, 2 * u), ey + ev_h - 4 * u), col, 1.0f);
         }
     }
-    // Доріжки гравців: кліпи-відрізки мовлення в кольорах міток Premiere
+    // Доріжки гравців: кліпи-відрізки мовлення
     for (int i = 0; i < lanes; ++i) {
         const auto& lane = timeline_[static_cast<size_t>(i)];
         const float y = lanes_top + i * lane_h;
-        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + W, y + lane_h - 1), IM_COL32(27, 27, 27, 255));
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + W, y + lane_h - 1), kTlLane);
         const bool muted = volumes.count(lane.key) && volumes[lane.key] <= 0.0;
         const ImU32 col = muted ? IM_COL32(88, 88, 88, 255) : kLabel[i % IM_ARRAYSIZE(kLabel)];
         const ImU32 top = muted ? IM_COL32(120, 120, 120, 255) : (col | IM_COL32(40, 40, 40, 0));
@@ -546,10 +430,10 @@ void App::draw_timeline() {
     // Поза фрагментом — темніше
     if (!whole_demo_) {
         const float xa = t2x(in_t), xb = t2x(out_t);
-        if (xa > x0) dl->AddRectFilled(ImVec2(x0, tracks_top), ImVec2(xa, tracks_bottom), IM_COL32(0, 0, 0, 90));
-        if (xb < x0 + W) dl->AddRectFilled(ImVec2(xb, tracks_top), ImVec2(x0 + W, tracks_bottom), IM_COL32(0, 0, 0, 90));
-        dl->AddLine(ImVec2(xa, tracks_top), ImVec2(xa, tracks_bottom), IM_COL32(210, 210, 210, 110));
-        dl->AddLine(ImVec2(xb, tracks_top), ImVec2(xb, tracks_bottom), IM_COL32(210, 210, 210, 110));
+        if (xa > x0) dl->AddRectFilled(ImVec2(x0, tracks_top), ImVec2(xa, tracks_bottom), kTlShade);
+        if (xb < x0 + W) dl->AddRectFilled(ImVec2(xb, tracks_top), ImVec2(x0 + W, tracks_bottom), kTlShade);
+        dl->AddLine(ImVec2(xa, tracks_top), ImVec2(xa, tracks_bottom), ((kAccent & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 170)));
+        dl->AddLine(ImVec2(xb, tracks_top), ImVec2(xb, tracks_bottom), ((kAccent & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 170)));
     }
     // Позначки: зелений «прапорець» на лінійці і тонка лінія на доріжках
     for (size_t i = 0; i < markers_.size(); ++i) {
@@ -561,10 +445,10 @@ void App::draw_timeline() {
         dl->AddLine(ImVec2(x, ruler_y + ruler_h * 0.5f), ImVec2(x, tracks_bottom), (col & 0x00FFFFFF) | IM_COL32(0, 0, 0, hot ? 200 : 110));
         draw_icon(dl, Icon::Marker, ImVec2(x, ruler_y + ruler_h * 0.32f), fs * 0.75f, col);
     }
-    // Синій курсор (playhead) із «голівкою» на лінійці
+    // Курсор (playhead) із «голівкою» на лінійці
     if (playhead_t_ >= view_t0_ && playhead_t_ <= view_t1_) {
         const float x = std::round(t2x(playhead_t_));
-        dl->AddLine(ImVec2(x, ruler_y + ruler_h * 0.5f), ImVec2(x, tracks_bottom), kBlue, std::max(1.0f, 1.5f * u));
+        dl->AddLine(ImVec2(x, ruler_y + ruler_h * 0.5f), ImVec2(x, tracks_bottom), kAccent, std::max(1.0f, 1.5f * u));
         const float hw = std::round(6 * u), hh = std::round(ruler_h * 0.55f);
         const float hy = ruler_y + ruler_h - hh;
         dl->PathLineTo(ImVec2(x - hw, hy));
@@ -572,12 +456,12 @@ void App::draw_timeline() {
         dl->PathLineTo(ImVec2(x + hw, hy + hh * 0.55f));
         dl->PathLineTo(ImVec2(x, hy + hh));
         dl->PathLineTo(ImVec2(x - hw, hy + hh * 0.55f));
-        dl->PathFillConvex(kBlue);
+        dl->PathFillConvex(kAccent);
     }
     // Лінія під мишею і підказка: час, хто говорить, позначка, чат поруч
     if (hovered) {
         const double t = std::clamp(x2t(io.MousePos.x), 0.0, dur);
-        dl->AddLine(ImVec2(io.MousePos.x, tracks_top), ImVec2(io.MousePos.x, tracks_bottom), IM_COL32(255, 255, 255, 70));
+        dl->AddLine(ImVec2(io.MousePos.x, tracks_top), ImVec2(io.MousePos.x, tracks_bottom), kTextFaint);
         std::string who;
         for (const auto& lane : timeline_)
             for (const auto& [a, b] : lane.spans)
@@ -603,7 +487,7 @@ void App::draw_timeline() {
     }
     dl->PopClipRect();
     // Межа між заголовками і шкалою
-    dl->AddLine(ImVec2(x0 - 1, origin.y), ImVec2(x0 - 1, tracks_bottom), IM_COL32(16, 16, 16, 255));
+    dl->AddLine(ImVec2(x0 - 1, origin.y), ImVec2(x0 - 1, tracks_bottom), kTlLine);
 
     // ---- Смуга масштабу: ручка — видима частина; тягніть середину — зсув, краї — масштаб ----
     const float ny = tracks_bottom + nav_gap;
@@ -644,12 +528,12 @@ void App::draw_timeline() {
         view_t0_ = 0;
         view_t1_ = static_cast<float>(dur);
     }
-    dl->AddRectFilled(ImVec2(x0, ny), ImVec2(x0 + W, ny + nav_h), IM_COL32(24, 24, 24, 255), nr);
+    dl->AddRectFilled(ImVec2(x0, ny), ImVec2(x0 + W, ny + nav_h), kField, nr);
     const bool nav_act = ImGui::IsItemActive();
     dl->AddRectFilled(ImVec2(hx0, ny + 1), ImVec2(hx1, ny + nav_h - 1),
-                      nav_act ? IM_COL32(110, 110, 110, 255) : nav_hov ? IM_COL32(92, 92, 92, 255) : IM_COL32(74, 74, 74, 255), nr);
-    dl->AddCircleFilled(ImVec2(hx0 + nr, ny + nr), nr * 0.55f, IM_COL32(190, 190, 190, 255));
-    dl->AddCircleFilled(ImVec2(hx1 - nr, ny + nr), nr * 0.55f, IM_COL32(190, 190, 190, 255));
+                      nav_act ? kTextDim : nav_hov ? kTextFaint : kPanelLine, nr);
+    dl->AddCircleFilled(ImVec2(hx0 + nr, ny + nr), nr * 0.55f, kText);
+    dl->AddCircleFilled(ImVec2(hx1 - nr, ny + nr), nr * 0.55f, kText);
     ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + avail.y));
     ImGui::Dummy(ImVec2(0, 0));
 }

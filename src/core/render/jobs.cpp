@@ -903,13 +903,13 @@ const char* const kCheckNames[kCheckCount] = {"Гру запущено", "Дра
                                               "Демо завантажилось і грає", "Кадри надходять",
                                               "Звук гри записується", "Кодування працює", "RTX у кадрі"};
 const char* const kCheckHints[kCheckCount] = {
-    "Перевірте папку і версію гри на вкладці «Гра».",
+    "Перевірте папку і версію гри на сторінці «Гра».",
     "Натисніть «Інструменти → Встановити драйвер у GMod» (GMod міг оновити menu.lua) і переконайтеся, що Steam запущено.",
     "Перевірте, що демо відкривається в самій грі (playdemo) і що у вас є карта й аддони з сервера.",
-    "Гра не записує кадри: перевірте місце на диску з грою; спробуйте режим вікна «позаду інших» на вкладці «Гра».",
+    "Гра не записує кадри: перевірте місце на диску з грою; спробуйте режим вікна «позаду інших» на сторінці «Гра».",
     "Гра не пише звук: вимкніть і ввімкніть звук у налаштуваннях GMod або вимкніть «Звук гри», щоб рендерити без нього.",
     "Кодек не працює з цими налаштуваннями: спробуйте інший кодек або формат файлу.",
-    "Кадр чорний: Remix не малює, коли вікно гри за межами екрана. Виберіть на вкладці «Гра» вікно «Позаду інших вікон» "
+    "Кадр чорний: Remix не малює, коли вікно гри за межами екрана. Виберіть на сторінці «Гра» вікно «Позаду інших вікон» "
     "або «На екрані» і перевірте, що RTX-копія гри запускається з RTXLauncher."};
 } // namespace
 
@@ -965,19 +965,26 @@ std::optional<game::GModInstall> resolve_game(RenderSettings& s, bool need_drive
     std::optional<game::GModInstall> g = locate_game(s, &log);
     for (const auto& l : log) log_debug("{}", l);
     if (s.rtx && !g) {
-        if (error) *error = tr("Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на вкладці «Гра».");
+        if (error) *error = tr("Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на сторінці «Гра».");
         return std::nullopt;
     }
     if (!g || !g->valid()) {
         if (error) *error = tr("Не знайдено Garry's Mod. Вкажіть папку гри (…\\steamapps\\common\\GarrysMod) у налаштуваннях.");
         return std::nullopt;
     }
-    // Вибраний exe — з іншої копії гри (наприклад, звичайної, а рендеримо RTX): береться типовий
-    if (!s.game_exe.empty() &&
-        !to_lower(path_to_utf8(path_from_utf8(s.game_exe).lexically_normal()))
-             .starts_with(to_lower(path_to_utf8(g->root.lexically_normal())))) {
-        log_info("{}", trf("Вибраний exe гри не з цієї копії — беру типовий: {}", path_to_utf8(g->default_exe())));
-        s.game_exe.clear();
+    // Вибраний exe — з іншої копії GMod (наприклад, звичайної, а рендеримо RTX): береться типовий.
+    // Exe поза будь-якою копією гри (імітатор гри в тестах) лишається як є.
+    if (!s.game_exe.empty()) {
+        std::error_code ec;
+        fs::path dir = path_from_utf8(s.game_exe).parent_path();
+        for (int up = 0; up < 3 && !dir.empty(); ++up, dir = dir.parent_path()) {
+            if (!fs::exists(dir / "garrysmod" / "gameinfo.txt", ec) && !fs::exists(dir / "garrysmod" / "lua", ec)) continue;
+            if (to_lower(path_to_utf8(dir.lexically_normal())) != to_lower(path_to_utf8(g->root.lexically_normal()))) {
+                log_info("{}", trf("Вибраний exe гри не з цієї копії — беру типовий: {}", path_to_utf8(g->default_exe())));
+                s.game_exe.clear();
+            }
+            break;
+        }
     }
     log_info("Garry's Mod: {}", path_to_utf8(g->root));
     recover_leftovers(*g);
@@ -2001,7 +2008,7 @@ void RenderJob::run() {
             effective_mode = game::WindowMode::Behind;
             last_frame_t = Clock::now();
             log_warn("{}", trf("Гра за межами екрана не віддає кадрів — повертаю вікно на екран (позаду інших вікон). "
-                     "Якщо так буде щоразу, виберіть на вкладці «Гра» режим «позаду інших вікон»."));
+                     "Якщо так буде щоразу, виберіть на сторінці «Гра» режим «позаду інших вікон»."));
             proc->show_window_front();
             proc->place_window(game::WindowMode::Behind);
         } else if (silent > watchdog && can_restart()) {

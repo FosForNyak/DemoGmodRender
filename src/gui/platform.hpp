@@ -27,6 +27,9 @@ bool  platform_begin_frame();
 void  platform_end_frame(const float clear_rgba[4]);
 void  platform_shutdown();
 float platform_dpi_scale();
+bool  platform_prefers_light_theme();   // у системі вибрано світлу тему застосунків
+// Рамка вікна під тему: темна чи світла, колір заголовка (0xRRGGBB; Windows 11)
+void  platform_set_frame_style(bool dark, unsigned rgb);
 void  platform_set_title(const std::string& title);
 
 using FileFilter = std::pair<std::string, std::string>;   // {"Демо GMod", "*.dem"}

@@ -1,7 +1,8 @@
 // =============================================================================
 //  app.cpp — інтерфейс програми GMod Demo Render (Dear ImGui): запуск, дії,
-//  розкладка панелей, меню й попапи. Вкладки налаштувань і панелі — в
-//  app_tab_*.cpp і app_panels.cpp, віджети в стилі Adobe — в ui_widgets.cpp.
+//  меню й попапи. Каркас вікна — app_shell.cpp, сторінки — app_page_*.cpp,
+//  монітор і таймлайн — app_panels.cpp і app_timeline.cpp, тема й віджети —
+//  ui_theme.cpp і ui_widgets.cpp.
 //
 //  Dear ImGui — "immediate mode" бібліотека: весь інтерфейс заново описується
 //  кожен кадр звичайним кодом (if (ImGui::Button(...)) { ... }). Тому тут
@@ -89,12 +90,13 @@ void App::init(const std::vector<std::string>& args) {
     });
     media::install_ffmpeg_log_bridge(AV_LOG_ERROR);
 
-    // ---- шрифти з кирилицею + тема в стилі Adobe ----
+    // ---- шрифти з кирилицею (тема — після налаштувань) ----
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // розташування вікон не зберігаємо
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigDragClickToInputText = true;   // клік по «гарячому» значенню — ввести число, як у Premiere
-    ui::apply_theme(platform_dpi_scale());
+    io.ConfigDragClickToInputText = true;   // клік по «гарячому» значенню — ввести число
+    dpi_ = platform_dpi_scale();
+    apply_ui_theme();
     // Звичайний і напівжирний (заголовки панелей, секції, кнопки дій); символи ✓ ✗ ▶ тощо —
     // з резервного шрифту, у основному їх може не бути
     auto load_font = [&](const std::vector<std::string>& candidates) -> ImFont* {
@@ -128,6 +130,9 @@ void App::init(const std::vector<std::string>& args) {
     if (settings_ok) log_info("{}", trf("Налаштування завантажено"));
     else if (!settings_err.empty()) log_warn("{}", trf("Не вдалося прочитати налаштування: {}", settings_err));
     whole_demo_ = s_.start_tick <= 0 && s_.end_tick <= 0;
+    apply_ui_theme();   // тема, акцент, масштаб і щільність — з налаштувань
+    for (const auto& p : pages())
+        if (s_.ui_page == p.id) page_ = p.page;
     platform_set_minimize_to_tray(s_.minimize_to_tray);
     load_queue();
     // Для автотестів: сповіщення і відлік після рендеру — без самого рендеру
@@ -356,7 +361,7 @@ void App::start_render(bool test_run) {
     if (!analysis_) return;
     if (!gmod_) {
         popup_title_ = tr("Не знайдено Garry's Mod");
-        popup_text_ = tr("Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).");
+        popup_text_ = tr("Вкажіть папку гри на сторінці «Гра» (…\\steamapps\\common\\GarrysMod).");
         open_popup_ = true;
         return;
     }
@@ -537,10 +542,10 @@ void App::poll() {
             return;
         }
         if (auto* tj = dynamic_cast<render::TranscribeJob*>(job_.get())) {
-            // Розпізнавання мовлення: репліки одразу з'являються у вкладці «Чат»
+            // Розпізнавання мовлення: репліки одразу з'являються на сторінці «Чат і мовлення»
             if (tj->state() == render::JobState::Succeeded) {
                 transcript_ = tj->transcript();
-                log_info("{}", trf("Розпізнано реплік: {} — вони у вкладці «Чат»", transcript_ ? transcript_->lines.size() : 0));
+                log_info("{}", trf("Розпізнано реплік: {} — вони на сторінці «Чат і мовлення»", transcript_ ? transcript_->lines.size() : 0));
             } else if (tj->state() == render::JobState::Failed) {
                 popup_title_ = tr("Розпізнавання мовлення: помилка");
                 popup_text_ = tj->error();
@@ -637,60 +642,7 @@ bool App::on_close_request() {
     return true;
 }
 
-// ================================ Малювання =======================================
-void App::frame() {
-    poll();
-    update_taskbar();
-    handle_shortcuts();
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    // Головне вікно — лише «підкладка» темного кольору: у проміжках між панелями видно її
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, kGutter);
-    ImGui::Begin("##main", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
-    draw_menu_bar();
-    draw_header_bar();
-
-    const float fs_ = ImGui::GetFontSize();
-    const float gap = std::round(fs_ * 0.3f);
-    const float status_h = std::round(fs_ * 1.9f);
-    const float top = ImGui::GetCursorScreenPos().y;
-    const float bottom = vp->WorkPos.y + vp->WorkSize.y - status_h;
-    draw_workspace(ImVec2(vp->WorkPos.x + gap, top), ImVec2(vp->WorkSize.x - gap * 2, bottom - top - gap));
-    draw_status_bar(ImVec2(vp->WorkPos.x, bottom), ImVec2(vp->WorkSize.x, status_h));
-    draw_popups();
-    ImGui::End();
-}
-
-// Робочий простір як у Premiere Pro: чотири панелі, межі між ними можна тягати
-void App::draw_workspace(ImVec2 pos, ImVec2 size) {
-    const float fs_ = ImGui::GetFontSize();
-    const float gap = std::round(fs_ * 0.3f);
-    const float min_w = fs_ * 18, min_h = fs_ * 8;
-    float top_h = std::clamp(std::round(split_y_ * size.y), min_h, std::max(min_h, size.y - min_h - gap));
-    float lt = std::clamp(std::round(split_x_top_ * size.x), min_w, std::max(min_w, size.x - min_w - gap));
-    float lb = std::clamp(std::round(split_x_bottom_ * size.x), min_w, std::max(min_w, size.x - min_w - gap));
-    const float bottom_h = size.y - top_h - gap;
-    const float by = pos.y + top_h + gap;
-    draw_settings_panel(pos, ImVec2(lt, top_h));
-    draw_monitor_panel(ImVec2(pos.x + lt + gap, pos.y), ImVec2(size.x - lt - gap, top_h));
-    draw_project_panel(ImVec2(pos.x, by), ImVec2(lb, bottom_h));
-    draw_timeline_panel(ImVec2(pos.x + lb + gap, by), ImVec2(size.x - lb - gap, bottom_h));
-    ui::splitter("##split_top", true, ImVec2(pos.x + lt, pos.y), ImVec2(gap, top_h), &lt, min_w, size.x - min_w - gap);
-    ui::splitter("##split_bottom", true, ImVec2(pos.x + lb, by), ImVec2(gap, bottom_h), &lb, min_w, size.x - min_w - gap);
-    ui::splitter("##split_y", false, ImVec2(pos.x, pos.y + top_h), ImVec2(size.x, gap), &top_h, min_h, size.y - min_h - gap);
-    if (size.x > 0 && size.y > 0) {
-        split_x_top_ = lt / size.x;
-        split_x_bottom_ = lb / size.x;
-        split_y_ = top_h / size.y;
-    }
-}
-
+// ================================ Дії з вікна =====================================
 void App::open_demo_dialog() {
     if (job_running()) return;
     auto f = open_file_dialog(tr("Відкрити демо Garry's Mod"), {{tr("Демо GMod (*.dem)"), "*.dem"}, {tr("Усі файли"), "*.*"}},
@@ -704,31 +656,8 @@ void App::set_playhead(double seconds) {
     focus_timeline(playhead_t_);
 }
 
-// Клавіші як у Premiere: I / O — початок і кінець фрагмента в курсорі, M — позначка,
-// Shift+I / Shift+O — перейти до них, Home / End — на початок і кінець демо
-void App::handle_shortcuts() {
-    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O) && !job_running()) open_demo_dialog();
-    const ImGuiIO& io = ImGui::GetIO();
-    if (!analysis_ || io.WantTextInput || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) return;
-    if (io.KeyCtrl || io.KeyAlt || io.KeySuper) return;
-    const double ti = analysis_->tick_interval;
-    const int32_t tick = static_cast<int32_t>(std::llround(playhead_t_ / ti));
-    if (io.KeyShift) {
-        if (ImGui::IsKeyPressed(ImGuiKey_I, false)) set_playhead(std::max(0, s_.start_tick) * ti);
-        if (ImGui::IsKeyPressed(ImGuiKey_O, false)) set_playhead((s_.end_tick > 0 ? s_.end_tick : analysis_->last_tick) * ti);
-        return;
-    }
-    if (!job_running()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_I, false)) set_fragment_start(tick);
-        if (ImGui::IsKeyPressed(ImGuiKey_O, false)) set_fragment_end(tick);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_M, false)) add_marker_at(tick, {});
-    if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) set_playhead(0);
-    if (ImGui::IsKeyPressed(ImGuiKey_End, false)) set_playhead(analysis_->duration_seconds);
-}
-
-void App::draw_menu_bar() {
-    if (!ImGui::BeginMenuBar()) return;
+// Меню у верхній панелі (між логотипом і поточним демо)
+void App::draw_menus() {
     if (ImGui::BeginMenu(tr("Файл"))) {
         if (ImGui::MenuItem(tr("Відкрити демо..."), "Ctrl+O", false, !job_running())) open_demo_dialog();
         if (ImGui::MenuItem(tr("Закодувати готові кадри..."), nullptr, false, !job_running())) {
@@ -760,7 +689,7 @@ void App::draw_menu_bar() {
             mark_dirty();
         }
         // Мова інтерфейсу: назви мов — кожна своєю мовою, щоб знайти свою
-        if (ImGui::BeginMenu("Мова / Language")) {
+        if (ImGui::BeginMenu("Мова / Language##menu")) {
             const std::string cur = s_.ui_language.empty() ? system_ui_language() : s_.ui_language;
             for (const auto& [code, name] : {std::pair<const char*, const char*>{"uk", "Українська"}, {"en", "English"}})
                 if (ImGui::MenuItem(name, nullptr, cur == code) && cur != code) {
@@ -822,7 +751,7 @@ void App::draw_menu_bar() {
         if (ImGui::MenuItem(tr("Відкрити папку програми"))) open_path(path_to_utf8(executable_dir()));
         ImGui::EndMenu();
     }
-    // Позначки і фрагмент — у синьому курсорі таймлайну (клавіші як у Premiere)
+    // Позначки і фрагмент — у курсорі таймлайну (клавіші як у програмах монтажу)
     if (ImGui::BeginMenu(tr("Позначки"))) {
         const bool have = analysis_ != nullptr;
         const double ti = have ? analysis_->tick_interval : 0.0;
@@ -847,15 +776,48 @@ void App::draw_menu_bar() {
         if (ImGui::MenuItem(tr("Переглянути в грі з курсора"), nullptr, false, have && !job_running())) start_watch(tick);
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu(tr("Вікно"))) {
-        if (ImGui::MenuItem(tr("Скинути розкладку панелей"))) {
-            split_x_top_ = split_x_bottom_ = 0.42f;
-            split_y_ = 0.56f;
+    if (ImGui::BeginMenu(tr("Вигляд"))) {
+        if (ImGui::MenuItem(tr("Стандартний режим"), nullptr, !s_.ui_advanced)) {
+            s_.ui_advanced = false;
+            mark_dirty();
+        }
+        if (ImGui::MenuItem(tr("Розширений режим"), nullptr, s_.ui_advanced)) {
+            s_.ui_advanced = true;
+            mark_dirty();
         }
         ImGui::Separator();
-        const char* project_tabs[] = {tr("Голоси"), tr("Бібліотека"), tr("Чат"), tr("Черга"), tr("Журнал")};
-        for (int i = 0; i < IM_ARRAYSIZE(project_tabs); ++i)
-            if (ImGui::MenuItem(project_tabs[i], nullptr, project_tab_ == i)) project_tab_ = i;
+        int n = 0;
+        for (const auto& p : pages()) {
+            if (!page_visible(p.page)) continue;
+            ++n;
+            const std::string key = n <= 9 ? std::format("Ctrl+{}", n) : std::string();
+            if (ImGui::MenuItem(tr(p.label), key.empty() ? nullptr : key.c_str(), page_ == p.page)) go_to(p.page);
+        }
+        ImGui::Separator();
+        const bool media = page_info(page_).media;
+        if (ImGui::MenuItem(tr("Монітор"), nullptr, show_monitor_, media)) show_monitor_ = !show_monitor_;
+        if (ImGui::MenuItem(tr("Таймлайн"), nullptr, show_timeline_, media)) show_timeline_ = !show_timeline_;
+        if (ImGui::MenuItem(tr("Бічна панель лише значками"), "Ctrl+B", s_.ui_sidebar_collapsed)) {
+            s_.ui_sidebar_collapsed = !s_.ui_sidebar_collapsed;
+            mark_dirty();
+        }
+        if (ImGui::MenuItem(tr("Скинути розкладку"))) {
+            split_x_ = 0.56f;
+            split_y_ = 0.64f;
+            show_monitor_ = show_timeline_ = true;
+        }
+        ImGui::Separator();
+        if (ImGui::BeginMenu(tr("Тема"))) {
+            const char* themes[] = {tr("Темна"), tr("Світла"), tr("Як у Windows")};
+            for (int i = 0; i < 3; ++i)
+                if (ImGui::MenuItem(themes[i], nullptr, ui::theme_index(s_.ui_theme) == i)) {
+                    s_.ui_theme = ui::theme_id(i);
+                    theme_dirty_ = true;
+                    mark_dirty();
+                }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem(tr("Налаштування..."), "Ctrl+,")) go_to(Page::Settings);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(tr("Довідка"))) {
@@ -865,48 +827,6 @@ void App::draw_menu_bar() {
         if (ImGui::MenuItem(tr("Про програму"))) show_about_ = true;
         ImGui::EndMenu();
     }
-    ImGui::EndMenuBar();
-}
-
-// Панель налаштувань експорту (як Effect Controls / Export Settings у Premiere): вкладки,
-// а знизу — вихідний файл і підсумок налаштувань
-void App::draw_settings_panel(ImVec2 pos, ImVec2 size) {
-    // Для автотестів інтерфейсу: GMDR_TEST_TAB=0..6 — відкрити вкладку при старті
-    // (0 Відео, 1 Звук і голос, 2 Гра, 3 Фрагмент — тут; 4 Чат, 5 Черга, 6 Бібліотека — у нижній панелі)
-    static int forced_tab = [] {
-        const char* e = std::getenv("GMDR_TEST_TAB");
-        return e ? std::atoi(e) : -1;
-    }();
-    if (forced_tab >= 0) {
-        if (forced_tab <= 3) settings_tab_ = forced_tab;
-        else project_tab_ = forced_tab == 4 ? 2 : forced_tab == 5 ? 3 : 1;
-        forced_tab = -1;
-    }
-    const std::vector<std::string> tabs = {tr("Відео"), tr("Звук і голос"), tr("Гра"), tr("Фрагмент")};
-    const ImGuiStyle& st = ImGui::GetStyle();
-    const float footer_h = ImGui::GetFrameHeight() + ImGui::GetTextLineHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2;
-    ui::begin_panel("##settings", pos, size, tabs, &settings_tab_, nullptr, footer_h);
-    ImGui::BeginDisabled(job_running());
-    switch (settings_tab_) {
-    case 0: draw_tab_video(); break;
-    case 1: draw_tab_audio(); break;
-    case 2: draw_tab_game(); break;
-    default: draw_tab_range(); break;
-    }
-    ImGui::EndDisabled();
-    // GMDR_TEST_SCROLL=0..1 — прокрутити панель налаштувань (частка від кінця) у перших кадрах
-    static const double forced_scroll = [] {
-        const char* e = std::getenv("GMDR_TEST_SCROLL");
-        return e ? std::atof(e) : -1.0;
-    }();
-    static int scroll_frames = 60;
-    if (forced_scroll >= 0 && scroll_frames > 0) {
-        --scroll_frames;
-        ImGui::SetScrollY(ImGui::GetScrollMaxY() * static_cast<float>(forced_scroll));
-    }
-    ui::panel_footer();
-    draw_output_footer();
-    ui::end_panel();
 }
 
 void App::update_taskbar() {
@@ -1098,14 +1018,14 @@ void App::draw_power_countdown() {
         ImGui::Spacing();
         ImGui::Spacing();
         bool now = left <= 0;
-        if (ui::pill_button(tr("Скасувати"), ui::Kind::Cta)) {
+        if (ui::action_button(tr("Скасувати"), ui::Kind::Cta)) {
             log_info("{}", trf("«{}» після рендеру скасовано", power_action_name(after_done_)));
             after_done_ = PowerAction::None;
             power_countdown_ = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ui::pill_button(tr("Зараз"), ui::Kind::Negative)) now = true;
+        if (ui::action_button(tr("Зараз"), ui::Kind::Negative)) now = true;
         if (now && power_countdown_) {
             power_countdown_ = false;
             ImGui::CloseCurrentPopup();
@@ -1153,7 +1073,7 @@ void App::draw_popups() {
         // Головна дія — синя, решта — контурні
         bool primary_used = false;
         auto action = [&](const char* label) {
-            const bool r = ui::pill_button(label, primary_used ? ui::Kind::Secondary : ui::Kind::Cta);
+            const bool r = ui::action_button(label, primary_used ? ui::Kind::Secondary : ui::Kind::Cta);
             primary_used = true;
             ImGui::SameLine();
             return r;
@@ -1192,7 +1112,7 @@ void App::draw_popups() {
                 }
             }
         }
-        if (ui::pill_button("OK", primary_used ? ui::Kind::Secondary : ui::Kind::Cta, fs_ * 5)) ImGui::CloseCurrentPopup();
+        if (ui::action_button("OK", primary_used ? ui::Kind::Secondary : ui::Kind::Cta, fs_ * 5)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -1206,13 +1126,13 @@ void App::draw_popups() {
         ImGui::Text(tr("Файл уже існує:\n%s\n\nПерезаписати?"), s_.output_path.c_str());
         ImGui::Spacing();
         ImGui::Spacing();
-        if (ui::pill_button(tr("Так"), ui::Kind::Cta, fs_ * 6)) {
+        if (ui::action_button(tr("Так"), ui::Kind::Cta, fs_ * 6)) {
             confirm_overwrite_ = true;
             ImGui::CloseCurrentPopup();
             start_render();
         }
         ImGui::SameLine();
-        if (ui::pill_button(tr("Ні"), ui::Kind::Secondary, fs_ * 6)) ImGui::CloseCurrentPopup();
+        if (ui::action_button(tr("Ні"), ui::Kind::Secondary, fs_ * 6)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -1233,16 +1153,16 @@ void App::draw_popups() {
             ImGui::Spacing();
             ImGui::Spacing();
             ImGui::BeginDisabled(job_running());
-            if (ui::pill_button(tr("Дорендерити"), ui::Kind::Cta)) {
+            if (ui::action_button(tr("Дорендерити"), ui::Kind::Cta)) {
                 start_resume();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if (ui::pill_button(tr("Пізніше"), ui::Kind::Secondary)) ImGui::CloseCurrentPopup();
+            if (ui::action_button(tr("Пізніше"), ui::Kind::Secondary)) ImGui::CloseCurrentPopup();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Запитати знову наступного разу (або «Файл → Дописати урваний рендер»)"));
             ImGui::SameLine();
-            if (ui::pill_button(tr("Забути"), ui::Kind::Secondary)) {
+            if (ui::action_button(tr("Забути"), ui::Kind::Secondary)) {
                 render::forget_resume(r.id);
                 resume_offer_.reset();
                 ImGui::CloseCurrentPopup();
@@ -1263,13 +1183,13 @@ void App::draw_popups() {
         ImGui::TextUnformatted(tr("Рендер ще триває. Перервати його і закрити програму?"));
         ImGui::Spacing();
         ImGui::Spacing();
-        if (ui::pill_button(tr("Так, вийти"), ui::Kind::Negative)) {
+        if (ui::action_button(tr("Так, вийти"), ui::Kind::Negative)) {
             if (job_) job_->kill();
             quit_ = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ui::pill_button(tr("Ні"), ui::Kind::Cta, fs_ * 6)) ImGui::CloseCurrentPopup();
+        if (ui::action_button(tr("Ні"), ui::Kind::Cta, fs_ * 6)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -1284,7 +1204,7 @@ void App::draw_popups() {
                            LIBAVCODEC_VERSION_MINOR, IMGUI_VERSION);
         ImGui::TextColored(kColDim, tr("Ядер процесора: %u"), std::max(1u, std::thread::hardware_concurrency()));
         ImGui::Spacing();
-        if (ui::pill_button("OK", ui::Kind::Cta, fs_ * 6)) ImGui::CloseCurrentPopup();
+        if (ui::action_button("OK", ui::Kind::Cta, fs_ * 6)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -1312,8 +1232,8 @@ void App::draw_popups() {
         ImGui::TextColored(kColAccent, "%s", tr("Поради"));
         ImGui::BulletText("%s", tr("Перед довгим рендером натисніть «Тест 3 с»: програма перевірить кожен крок і порахує, скільки "
                                 "триватиме рендер і скільки важитиме файл."));
-        ImGui::BulletText("%s", tr("Фрагмент і позначки — як у Premiere: клацніть по лінійці таймлайну, щоб поставити курсор, "
-                                "і натисніть I (початок), O (кінець) або M (позначка)."));
+        ImGui::BulletText("%s", tr("Фрагмент і позначки — клавішами, як у програмах монтажу: клацніть по лінійці таймлайну, щоб "
+                                "поставити курсор, і натисніть I (початок), O (кінець) або M (позначка)."));
         ImGui::BulletText("%s", tr("Гра працює у фоні (вікно за межами екрана), її звук у мікшері Windows вимкнено — на відео це "
                                 "не впливає. Подивитися на гру можна кнопкою «Показати гру»."));
         ImGui::BulletText("%s", tr("Якщо звук гри під час рендеру чути (режим «на екрані»), він грає пришвидшено — це нормально, "
@@ -1322,7 +1242,7 @@ void App::draw_popups() {
         ImGui::BulletText("%s", tr("Демо з сервера програється, лише якщо у вас є ті самі карти й аддони."));
         ImGui::PopTextWrapPos();
         ImGui::EndChild();
-        if (ui::pill_button(tr("Зрозуміло"), ui::Kind::Cta, fs_ * 8)) ImGui::CloseCurrentPopup();
+        if (ui::action_button(tr("Зрозуміло"), ui::Kind::Cta, fs_ * 8)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }

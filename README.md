@@ -24,7 +24,7 @@ run `gmdr.exe`. Nothing needs to be installed.
 - Microsoft Visual C++ 2015–2022 Redistributable (x64). Most Steam games already install it.
 
 The interface is in English or Ukrainian. By default it follows your Windows language, and you
-can switch it in **Tools → Мова / Language**.
+can switch it in **Settings → Language** or **Tools → Мова / Language**.
 
 ## Features
 
@@ -50,7 +50,7 @@ can switch it in **Tools → Мова / Language**.
 - **Parallel rendering.** Two to four game instances render parts of the fragment at the same
   time. The parts are joined without re-encoding, frame-exact.
 - **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
-  tab switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
+  page switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
   the render the program sets Remix to video-friendly settings (DLAA, no frame generation) and
   restores your config afterwards.
 
@@ -73,11 +73,14 @@ can switch it in **Tools → Мова / Language**.
 
 **Workflow**
 
-- A Premiere Pro-style workspace:
-  - export settings;
-  - a Program monitor with a live preview while rendering;
-  - a timeline with a track per player, mute/solo, playhead and markers;
-  - voice, library, chat, queue and log panels.
+- A workspace with side navigation: Overview (everything about the demo and the render
+  result on one screen), Video, Audio & voices, Game, Library, Queue and Settings, next to a
+  monitor with a live preview and a timeline with a track per player, mute/solo, playhead and
+  markers.
+- **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every
+  codec, game and audio option plus the Fragment & markers, Chat & speech and Log pages.
+- Dark and light themes (or follow Windows), seven accent colors, 80–200% interface scale and
+  a compact density.
 - **Fragments and markers** with I / O / M, like in Premiere. Markers become chapters in
   MP4/MOV/MKV and a `.chapters.txt` with timestamps for a YouTube description.
 - **Chat and events** from the demo: messages, joins and leaves (with kick/ban reasons),
@@ -113,28 +116,39 @@ can switch it in **Tools → Мова / Language**.
 1. Make sure Steam is running and Garry's Mod is closed.
 2. Run `gmdr.exe` and drop a `.dem` file onto the window, or click **Open demo...**.
    Demos recorded with `record` are in `…\steamapps\common\GarrysMod\garrysmod\` or its
-   `demos` subfolder. The **Library** tab lists them all.
-3. Choose a preset, or set the resolution, FPS and codec on the **Video** tab.
+   `demos` subfolder. The **Library** page lists them all, and the demo name at the top of the
+   window opens a list of recent demos.
+3. Choose a preset, or set the resolution, FPS and codec on the **Video** page.
 4. Optionally mark a fragment on the timeline: click the ruler, then press **I** and **O**.
 5. Click **Test 3 s** to check every step and see how long the render will take.
 6. Click **Start render**. The program finds GMod, launches it in the background and records
    the demo.
 
-The video appears next to the demo. The **File** line under the settings shows the path: click
-the file name to pick another one, or the pencil to type a path.
+The video appears next to the demo. The **Output file** card on the Video page (and on the
+Overview) shows the path: click the file name to pick another one, or the pencil to type a path.
 
 ## The window
 
-| Panel | What it holds |
-|---|---|
-| Top left | Export settings: **Video**, **Audio & voice**, **Game** and **Fragment** tabs, with the output file below |
-| Top right | **Program** monitor: before a render it shows the demo's map, server, recorder and length; during a render, a live preview and the checks. Transport buttons sit under it |
-| Bottom left | **Voices** (volume, preview), **Library**, **Chat**, **Queue**, **Log** |
-| Bottom right | **Timeline**: a track per player with M (mute) and S (solo), a chat track, the ruler, the playhead and markers |
+The top bar holds the menus, the current demo (click it for recent demos), the
+**Standard / Advanced** switch and the action buttons. The sidebar switches pages:
 
-Drag the gutters between panels to resize them. **Window → Reset panel layout** restores the
-default. Blue values such as the resolution, speed or volume can be dragged left and right, or
-clicked to type a number.
+| Page | What it holds |
+|---|---|
+| Overview | The demo at a glance: duration, players, voice chat, messages and markers; server, protocol and warnings; the player list; what the render will produce |
+| Video | Output file, preset, resolution, frame rate, motion blur, speed, codec, quality, extra versions |
+| Audio & voices | Game audio, players' voices with volume and preview, voice processing, subtitles and labels, your microphone |
+| Game | Standard / RTX game copy and its folder, the driver, how the game renders |
+| Fragment & markers | Precise fragment times and the marker list (Advanced) |
+| Chat & speech | Chat, events and recognized speech with search and filters (Advanced) |
+| Library, Queue | All demos; several renders in a row |
+| Settings | Theme, accent color, scale, density, language, notifications, tray, `.dem` files |
+
+Next to the settings pages sits the **monitor**: before a render it shows the demo's map,
+server, recorder and length; during a render, a live preview and the checks. Under them is the
+**timeline**: a track per player with M (mute) and S (solo), a chat track, the ruler, the
+playhead and markers. Drag the gutters to resize them, or hide them with the buttons at the
+right of the status bar. Accent-colored values such as the resolution, speed or volume can be
+dragged left and right, or clicked to type a number.
 
 | Key | Action |
 |---|---|
@@ -143,6 +157,9 @@ clicked to type a number.
 | **Shift+I** / **Shift+O** | Go to the fragment start / end |
 | **Home** / **End** | Go to the start / end of the demo |
 | **Ctrl+O** | Open a demo |
+| **Ctrl+1…9** | Switch pages |
+| **Ctrl+B** | Sidebar with icons only / with labels |
+| **Ctrl+,** | Settings |
 
 ## How it works
 
@@ -179,7 +196,7 @@ There are two ways around that:
 
 - type `voice_loopback 1` in the GMod console before recording the demo. Your voice ends up in
   the demo and is marked "(you)";
-- or record your microphone separately and add the file under **Audio & voice → Own
+- or record your microphone separately and add the file under **Audio & voices → Own
   microphone**. The offset sets the second of video where the file starts; it can be negative.
 
 ## Command line
@@ -260,8 +277,8 @@ ZIP. You can look inside before sending it.
 - **A step of the test run fails.** The step shows a hint and the last lines of the game
   console.
 - **The background game stops producing frames.** The program moves the window back on screen,
-  behind other windows, and logs it. If it happens every time, choose **Game → Behind other
-  windows**. Don't minimize the game: a minimized game does not draw.
+  behind other windows, and logs it. If it happens every time, choose **Behind other windows**
+  on the Game page. Don't minimize the game: a minimized game does not draw.
 - **The game menu flashes into a frame.** Demos also record the player pressing Esc. The
   program hides the menu at once, but a single frame can sometimes slip into the video.
 - **The video size differs from the settings.** The game cannot open a window larger than the
@@ -271,7 +288,7 @@ ZIP. You can look inside before sending it.
 - **Garry's Mod stays muted.** This happens if the game or the PC crashed mid-render. Unmute
   it in the Windows volume mixer, or just start the next render.
 - **Low disk space.** Below 1 GiB free the game pauses until space is freed. Lower **Frame
-  queue on disk** on the Game tab or switch the frame format to JPEG.
+  queue on disk** on the Game page (Advanced mode) or switch the frame format to JPEG.
 - **The program crashed.** A `gmdr_crash_<date>.dmp` appears next to it. Please attach it
   together with `gmdr_log.txt` to your bug report.
 

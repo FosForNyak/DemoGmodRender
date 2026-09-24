@@ -9,7 +9,7 @@
   python scripts/i18n.py merge <файл>   додати переклади з такого JSON і перегенерувати i18n_en.inc
                                         (порядок — як у коді, переклади рядків, яких уже немає, прибираються)
 
-Що вважається ключем: перший аргумент-літерал tr(...)/trf(...) (сусідні літерали склеюються,
+Що вважається ключем: перший аргумент-літерал tr(...)/trf(...)/N_(...) (сусідні літерали склеюються,
 суфікс ImGui "##id" відкидається), усі кириличні літерали в src/gui/app_ui.hpp (таблиці пресетів, кодеків)
 і масиви kCheckNames/kCheckHints у src/core/render/jobs.cpp.
 """
@@ -178,7 +178,7 @@ def used_keys():
                 if everything and kind == 'str':
                     v, k = literal_group(tokens, k)
                     add(v)
-                elif kind == 'id' and text in ('tr', 'trf'):
+                elif kind == 'id' and text in ('tr', 'trf', 'N_'):
                     p = significant(tokens, k)
                     if p < len(tokens) and tokens[p][1] == '(':
                         q = significant(tokens, p)

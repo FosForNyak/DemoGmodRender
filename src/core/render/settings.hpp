@@ -99,6 +99,13 @@ struct RenderSettings {
     std::string whisper_model;            // файл моделі ggml-*.bin (порожньо — найкраща знайдена)
     std::string whisper_cli;              // whisper-cli (порожньо — поруч із програмою)
     std::string ui_language;              // мова інтерфейсу: "uk", "en"; порожньо — за мовою або регіоном Windows
+    bool        ui_advanced = false;      // режим інтерфейсу: розширений (усі параметри) чи стандартний
+    std::string ui_theme = "dark";        // тема: dark / light / system
+    std::string ui_accent = "violet";     // колір акценту (ui::accent_presets)
+    double      ui_scale = 1.0;           // масштаб інтерфейсу поверх DPI монітора (0.8..2)
+    bool        ui_compact = false;       // щільніше: менші відступи
+    bool        ui_sidebar_collapsed = false;   // бічна навігація — лише значки
+    std::string ui_page;                  // остання відкрита сторінка
     bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"

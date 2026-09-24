@@ -107,6 +107,8 @@ void platform_shutdown() {
 }
 
 float platform_dpi_scale() { return g_dpi; }
+bool platform_prefers_light_theme() { return false; }
+void platform_set_frame_style(bool, unsigned) {}
 void platform_set_title(const std::string& title) { glfwSetWindowTitle(g_window, title.c_str()); }
 
 std::string open_file_dialog(const std::string& title, const std::vector<FileFilter>& filters, const std::string& initial) {

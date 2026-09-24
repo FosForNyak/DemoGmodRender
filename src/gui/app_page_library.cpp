@@ -1,5 +1,5 @@
 // =============================================================================
-//  app_tab_library.cpp — вкладка «Бібліотека»: усі демо з теки гри і ваших тек.
+//  app_page_library.cpp — сторінка «Бібліотека»: усі демо з теки гри і ваших тек.
 //  Пошук за назвою, картою, сервером і гравцем; подвійний клік — відкрити;
 //  правий клік — відкрити, додати ціле демо до черги, показати в папці.
 // =============================================================================
@@ -25,15 +25,6 @@ namespace gmdr::gui {
 namespace fs = std::filesystem;
 using namespace ui;
 
-namespace {
-std::string format_date(int64_t unix_time) {
-    const std::time_t t = static_cast<std::time_t>(unix_time);
-    char buf[32] = {};
-    if (const std::tm* tm = std::localtime(&t)) std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", tm);
-    return buf;
-}
-} // namespace
-
 std::vector<std::string> App::library_dirs() const {
     std::vector<std::string> dirs;
     if (gmod_) dirs.push_back(path_to_utf8(gmod_->garrysmod));
@@ -55,14 +46,15 @@ void App::poll_library() {
     library_scanned_ = true;
 }
 
-void App::draw_tab_library() {
+void App::draw_page_library() {
     const float fs_ = ImGui::GetFontSize();
     if (!library_scanned_ && !library_future_.valid()) rescan_library();
     poll_library();
+    page_header(tr("Бібліотека"), tr("Усі демо з теки гри і ваших тек. Подвійний клік — відкрити, правий клік — до черги."));
 
     // ---- Панель: пошук, оновити, додати теку ----
     const char* add_label = tr("Додати теку...");
-    const float right_w = ImGui::GetFrameHeight() + pill_width(add_label, Kind::Secondary, Icon::Plus) + ImGui::GetStyle().ItemSpacing.x * 2;
+    const float right_w = ImGui::GetFrameHeight() + action_width(add_label, Kind::Secondary, Icon::Plus) + ImGui::GetStyle().ItemSpacing.x * 2;
     search_input("##libsearch", tr("пошук: назва, карта, сервер, гравець"), &library_search_,
                  std::max(fs_ * 8, ImGui::GetContentRegionAvail().x - right_w));
     ImGui::SameLine();
@@ -70,7 +62,7 @@ void App::draw_tab_library() {
     if (icon_button("##rescan", Icon::Refresh, tr("Оновити"))) rescan_library();
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (pill_button(add_label, Kind::Secondary, 0, Icon::Plus)) {
+    if (action_button(add_label, Kind::Secondary, 0, Icon::Plus)) {
         const std::string d = pick_folder_dialog(tr("Тека з демо (разом із підтеками)"));
         if (!d.empty()) {
             s_.library_dirs += (s_.library_dirs.empty() ? "" : ";") + d;
@@ -150,7 +142,7 @@ void App::draw_tab_library() {
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(e.seconds > 0 ? format_duration(e.seconds).c_str() : (e.error.empty() ? "?" : "—"));
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(format_date(e.modified).c_str());
+                ImGui::TextUnformatted(format_date_time(e.modified).c_str());
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(format_bytes(e.size).c_str());
             }
@@ -165,7 +157,7 @@ void App::draw_tab_library() {
     ImGui::TextColored(kColDim, tr("Теки: %s"), list.empty() ? tr("(гру не знайдено — додайте теку з демо)") : list.c_str());
     if (!s_.library_dirs.empty()) {
         ImGui::SameLine();
-        if (ImGui::SmallButton(tr("Прибрати мої теки"))) {
+        if (action_button(tr("Прибрати мої теки"), Kind::Ghost)) {
             s_.library_dirs.clear();
             mark_dirty();
             rescan_library();

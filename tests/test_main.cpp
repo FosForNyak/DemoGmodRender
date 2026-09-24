@@ -1672,8 +1672,9 @@ static void test_i18n() {
     CHECK(std::string(tr("Звук гри")) == "Game audio");
     CHECK(trf("Знайдено: {}", "C:/x") == "Found: C:/x");
     CHECK(std::string(tr("Огляд...##mic")) == "Browse...##mic");
-    CHECK(trf("Черга ({})###queue", 3) == "Queue (3)###queue");
-    CHECK(tr(std::string("Програма")) == "Program");
+    CHECK(trf("Почати чергу ({})", 3) == "Start the queue (3)");
+    CHECK(std::string(tr("Монітор###program")) == "Monitor###program");
+    CHECK(tr(std::string("Огляд")) == "Overview");
     // Немає перекладу — лишається як є (імена гравців, шляхи тощо)
     CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
     CHECK(std::string(tr("")).empty());

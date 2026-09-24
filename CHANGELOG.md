@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **New interface.** Side navigation with pages instead of Adobe-style panels: Overview shows everything about the demo and the future render on one screen (duration, players, voice chat, server, protocol, warnings, output file, versions, subtitles). Settings are grouped into cards on the Video, Audio & voices and Game pages; the monitor and the timeline sit next to them and can be hidden.
+- **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every codec, game and audio option and the Fragment & markers, Chat & speech and Log pages.
+- **Own look**: a new logo, dark and light themes (or same as Windows), seven accent colors, 80–200% interface scale and a compact density — on the new Settings page. The window frame follows the theme on Windows 11.
+- The demo name in the top bar opens recent demos; Ctrl+1…9 switch pages, Ctrl+B collapses the sidebar, Ctrl+, opens Settings.
 - The Game tab has a **Standard / RTX** switch. Each mode keeps its own game folder: the regular game is found through Steam, the RTX copy through RTXLauncher. A GMod RTX folder entered as the regular game folder is moved to RTX mode automatically. Console: `--rtx-dir FOLDER`.
 
 ## 1.0.0 — 2026-09-24

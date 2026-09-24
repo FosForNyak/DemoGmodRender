@@ -373,6 +373,21 @@ void platform_shutdown() {
 }
 
 float platform_dpi_scale() { return g_dpi; }
+
+bool platform_prefers_light_theme() {
+    DWORD v = 0, size = sizeof(v);
+    return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS &&
+           v != 0;
+}
+
+void platform_set_frame_style(bool dark, unsigned rgb) {
+    if (!g_hwnd) return;
+    BOOL d = dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &d, sizeof(d));
+    const COLORREF c = RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+    DwmSetWindowAttribute(g_hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &c, sizeof(c));
+}
 void platform_set_title(const std::string& title) { SetWindowTextW(g_hwnd, utf8_to_wide(title).c_str()); }
 
 std::string open_file_dialog(const std::string& title, const std::vector<FileFilter>& filters, const std::string& initial) {

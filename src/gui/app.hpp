@@ -1,19 +1,25 @@
 // =============================================================================
 //  app.hpp — головне вікно програми (Dear ImGui).
 //
-//  Вікно зібране з панелей у стилі Adobe Premiere Pro: зверху ліворуч — налаштування
-//  експорту, праворуч — монітор програми, знизу ліворуч — голоси, бібліотека, чат,
-//  черга й журнал, праворуч — таймлайн; межі між панелями можна тягати.
+//  Вікно: угорі — логотип, меню, поточне демо, режим (стандартний / розширений) і
+//  кнопки дій; ліворуч — бічна навігація по сторінках; посередині — сторінка, праворуч
+//  від неї монітор (прев'ю), знизу таймлайн (обидва можна сховати); унизу — рядок стану.
 //
 //  Реалізація розкладена по файлах за частинами вікна:
-//    app.cpp            — запуск, дії (відкрити демо, рендер...), розкладка, меню, попапи
-//    app_tab_video.cpp  — вкладка «Відео» (кодек, якість, пресети)
-//    app_tab_audio.cpp  — вкладка «Звук і голос»
-//    app_tab_game.cpp   — вкладка «Гра»
-//    app_tab_range.cpp  — вкладка «Фрагмент» і таймлайн
-//    app_tab_chat.cpp   — вкладка «Чат», позначки, перегляд демо в грі
-//    app_panels.cpp     — заголовок, монітор, голоси, рядок стану, журнал
-//    ui_widgets.cpp     — віджети й тема в стилі Adobe
+//    app.cpp               — запуск, дії (відкрити демо, рендер...), меню, попапи
+//    app_shell.cpp         — каркас: верхня панель, бічна навігація, розкладка, рядок стану
+//    app_page_home.cpp     — «Огляд»: усе про демо і майбутній рендер
+//    app_page_video.cpp    — «Відео» (кодек, якість, пресети, вихідний файл)
+//    app_page_audio.cpp    — «Звук і голоси»
+//    app_page_game.cpp     — «Гра» (стандарт / RTX, рендер у грі)
+//    app_page_fragment.cpp — «Фрагмент і позначки»
+//    app_page_chat.cpp     — «Чат і мовлення», позначки, перегляд демо в грі
+//    app_page_library.cpp  — «Бібліотека» демо
+//    app_page_queue.cpp    — «Черга» рендерів
+//    app_page_settings.cpp — «Налаштування» (вигляд, мова, поведінка)
+//    app_timeline.cpp      — таймлайн
+//    app_panels.cpp        — монітор, голоси, перевірки, журнал
+//    ui_theme.cpp, ui_widgets.cpp — тема й віджети
 // =============================================================================
 #pragma once
 
@@ -39,6 +45,7 @@
 #include "core/util/log.hpp"
 #include "core/util/power.hpp"
 #include "core/util/update_check.hpp"
+#include "app_ui.hpp"
 #include "imgui.h"
 #include "voice_player.hpp"
 
@@ -50,7 +57,8 @@ public:
     ~App();
 
     void init(const std::vector<std::string>& args);
-    void frame();   // малювання інтерфейсу (між NewFrame і Render)
+    void before_frame();   // перед NewFrame: застосувати змінену тему
+    void frame();          // малювання інтерфейсу (між NewFrame і Render)
     void on_files_dropped(const std::vector<std::string>& files);
     bool on_close_request();
     bool wants_quit() const { return quit_; }
@@ -74,12 +82,29 @@ private:
         std::vector<std::pair<float, float>> spans;
     };
 
+    // ---- сторінки (бічна навігація) ----
+    enum class Page { Home, Video, Audio, Game, Fragment, Chat, Library, Queue, Log, Settings, Count };
+    struct PageInfo {
+        Page        page;
+        const char* id;          // для налаштувань і GMDR_TEST_PAGE
+        const char* label;       // український ключ перекладу
+        ui::Icon    icon;
+        bool        advanced;    // лише в розширеному режимі
+        bool        media;       // праворуч — монітор, знизу — таймлайн
+        bool        fill;        // сторінка сама заповнює висоту (таблиця), без прокрутки
+    };
+    static const std::vector<PageInfo>& pages();
+    const PageInfo& page_info(Page p) const;
+    bool page_visible(Page p) const;
+    void go_to(Page p);
+
     // ---- секції інтерфейсу ----
-    void draw_menu_bar();
-    void draw_header_bar();                          // значок, демо, кнопки дій
-    void draw_workspace(ImVec2 pos, ImVec2 size);    // чотири панелі з роздільниками
-    void draw_settings_panel(ImVec2 pos, ImVec2 size);
-    void draw_output_footer();                       // вихідний файл і підсумок налаштувань
+    void draw_top_bar();                             // логотип, меню, демо, режим, кнопки дій
+    void draw_menus();
+    void draw_sidebar(ImVec2 pos, ImVec2 size);
+    void draw_content(ImVec2 pos, ImVec2 size);      // сторінка + монітор + таймлайн
+    void draw_page(ImVec2 pos, ImVec2 size);
+    void draw_output_card();                         // вихідний файл і підсумок налаштувань
     void draw_monitor_panel(ImVec2 pos, ImVec2 size);
     void draw_monitor_frame(ImVec2 p0, ImVec2 p1);
     bool encoding_preview_pending() const;           // рендер іде, а кадрів для прев'ю ще немає
@@ -90,12 +115,16 @@ private:
     void handle_shortcuts();                         // I / O / M, Home / End, Ctrl+O
     void open_demo_dialog();
     void set_playhead(double seconds);
-    void draw_tab_video();
-    void draw_tab_audio();
-    void draw_tab_game();
-    void draw_tab_range();
-    void draw_tab_chat();
-    // Розпізнавання мовлення (вкладка «Чат»): стан whisper, запуск, завантаження моделі
+    void draw_page_home();
+    void draw_page_video();
+    void draw_page_audio();
+    void draw_page_game();
+    void draw_page_fragment();
+    void draw_page_chat();
+    void draw_page_settings();
+    void draw_page_log();
+    void apply_ui_theme();                           // тема, акцент, масштаб і щільність із налаштувань
+    // Розпізнавання мовлення (сторінка «Чат і мовлення»): стан whisper, запуск, завантаження моделі
     void draw_speech_controls();
     void draw_model_popup();
     void refresh_whisper_status(bool force = false);
@@ -103,7 +132,7 @@ private:
     bool job_has_fraction_only() const;   // збереження голосів, розпізнавання, завантаження
     void draw_markers_list();
     void draw_timeline();
-    void draw_voice_table();
+    void draw_voice_table(float max_height = 0);
     void draw_checks(const std::vector<render::CheckItem>& checks);
     void draw_log();
     void draw_popups();
@@ -141,17 +170,17 @@ private:
     // Прослуховування голосу гравця (уривок з початку фрагмента, з обробкою як у відео)
     void listen_voice(const voice::SpeakerTrack& sp);
     void poll_voice_clip();
-    // Черга рендерів (вкладка «Черга», gmdr_queue.json)
+    // Черга рендерів (сторінка «Черга», gmdr_queue.json)
     struct QueueEntry {
         render::RenderSettings s;
         double                 tick_interval = 0;   // для показу часу фрагмента
     };
-    void draw_tab_queue();
+    void draw_page_queue();
     void add_to_queue();
     void add_demo_to_queue(const std::string& demo_path);   // ціле демо з поточними налаштуваннями
     void push_queue_entry(QueueEntry q);
-    // Вкладка «Демо» (бібліотека)
-    void draw_tab_library();
+    // Бібліотека демо
+    void draw_page_library();
     std::vector<std::string> library_dirs() const;
     void rescan_library();
     void poll_library();
@@ -244,7 +273,7 @@ private:
     std::string                                     clip_key_;      // чий уривок готується
     std::string                                     playing_key_;   // чий уривок грає
 
-    // Вкладка «Чат»
+    // Сторінка «Чат і мовлення»
     std::string chat_search_;
     bool        chat_show_chat_ = true, chat_show_server_ = true, chat_show_joins_ = true, chat_only_range_ = false;
     int         chat_selected_ = -1;
@@ -262,7 +291,7 @@ private:
     std::vector<render::CheckItem> popup_checks_;
     bool        popup_is_folder_ = false;   // результат — папка (збережені голоси), а не відео
     bool        popup_test_ok_ = false;     // тестовий прогін пройшов — можна одразу почати рендер
-    std::string start_time_buf_, end_time_buf_;   // поля "Точний час" на вкладці "Фрагмент"
+    std::string start_time_buf_, end_time_buf_;   // поля "Точний час" на сторінці "Фрагмент і позначки"
     bool        start_time_active_ = false, end_time_active_ = false;
     bool        open_popup_ = false;
     bool        confirm_overwrite_ = false;
@@ -274,10 +303,13 @@ private:
     bool        open_overwrite_popup_ = false;
     bool        out_editing_ = false, out_focus_ = false;   // вихідний файл: шлях вводять вручну (олівець)
 
-    // Розкладка панелей (частки вікна; «Вікно → Скинути розкладку панелей»)
-    float       split_x_top_ = 0.42f, split_x_bottom_ = 0.42f, split_y_ = 0.56f;
-    int         settings_tab_ = 0;   // Відео, Звук і голос, Гра, Фрагмент
-    int         project_tab_ = 0;    // Голоси, Бібліотека, Чат, Черга, Журнал
+    // Розкладка («Вигляд → Скинути розкладку»): частка ширини сторінки поруч із монітором і
+    // частка висоти над таймлайном; що показано
+    Page        page_ = Page::Home;
+    float       split_x_ = 0.56f, split_y_ = 0.64f;
+    bool        show_monitor_ = true, show_timeline_ = true;
+    float       dpi_ = 1.0f;
+    bool        theme_dirty_ = false;   // тему змінено — застосувати перед наступним кадром
 
     // Допоміжне для віджетів
     std::string custom_codec_;

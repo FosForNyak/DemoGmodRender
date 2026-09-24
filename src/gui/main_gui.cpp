@@ -43,9 +43,10 @@ static int run(const std::vector<std::string>& args) {
     int frames = 0;
     const int shot_after = std::getenv("GMDR_SCREENSHOT_FRAMES") ? std::atoi(std::getenv("GMDR_SCREENSHOT_FRAMES")) : 60;
 
-    const float clear[4] = {0.08f, 0.09f, 0.11f, 1.0f};
+    const float clear[4] = {0.05f, 0.05f, 0.07f, 1.0f};
     while (!app.wants_quit()) {
         if (!platform_begin_frame()) break;
+        app.before_frame();   // тема, змінена в налаштуваннях, — до початку кадру
         ImGui::NewFrame();
         app.frame();
         ImGui::Render();

@@ -1,7 +1,7 @@
 // =============================================================================
-//  app_tab_chat.cpp — вкладка «Чат»: чат і події з демо, пошук, перехід до моменту;
-//  позначки (список на вкладці «Фрагмент») і перегляд демо в грі з позначками;
-//  розпізнані репліки голосового чату (whisper.cpp) — у тому самому списку.
+//  app_page_chat.cpp — сторінка «Чат і мовлення»: чат і події з демо разом із
+//  розпізнаним мовленням (пошук, фільтри, збереження), розпізнавання голосу
+//  (whisper.cpp), позначки і перегляд демо в грі.
 // =============================================================================
 #include "app.hpp"
 
@@ -143,9 +143,9 @@ void App::draw_markers_list() {
         changed = true;
     }
     if (changed) set_markers(markers_);
-    if (pill_button(tr("Позначка на початку фрагмента"), Kind::Secondary, 0, Icon::Marker)) add_marker_at(std::max(0, s_.start_tick), {});
+    if (action_button(tr("Позначка на початку фрагмента"), Kind::Secondary, 0, Icon::Marker)) add_marker_at(std::max(0, s_.start_tick), {});
     ImGui::SameLine();
-    if (checkbox(tr("Розділи у відео з позначок"), &s_.chapters)) mark_dirty();
+    if (toggle(tr("Розділи у відео з позначок"), &s_.chapters)) mark_dirty();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr("Позначки всередині фрагмента стануть розділами MP4/MOV/MKV (плеєри показують їх на шкалі),\n"
                                 "а поруч із відео з'явиться .chapters.txt з таймкодами для опису на YouTube."));
@@ -156,7 +156,7 @@ void App::start_watch(int32_t tick) {
     if (!analysis_ || job_running()) return;
     if (!gmod_) {
         popup_title_ = tr("Не знайдено Garry's Mod");
-        popup_text_ = tr("Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).");
+        popup_text_ = tr("Вкажіть папку гри на сторінці «Гра» (…\\steamapps\\common\\GarrysMod).");
         open_popup_ = true;
         return;
     }
@@ -185,7 +185,7 @@ void App::apply_watch_marks() {
     if (markers_changed) set_markers(std::move(list));
 }
 
-// ============================== Вкладка «Чат» ==============================
+// ========================= Сторінка «Чат і мовлення» =========================
 // ---- Розпізнавання мовлення ----------------------------------------------------------
 void App::refresh_whisper_status(bool force) {
     const double now = ImGui::GetTime();
@@ -226,13 +226,13 @@ void App::draw_speech_controls() {
     const bool has = transcript_ && !transcript_->covered.empty();
     const bool full = has && std::any_of(transcript_->covered.begin(), transcript_->covered.end(),
                                          [](const speech::Coverage& c) { return c.from <= 0 && c.to >= 1e8; });
-    if (pill_button(full ? tr("Розпізнати ще раз") : has ? tr("Розпізнати все демо") : tr("Розпізнати мовлення"), Kind::Secondary))
+    if (action_button(full ? tr("Розпізнати ще раз") : has ? tr("Розпізнати все демо") : tr("Розпізнати мовлення"), Kind::Cta, 0, Icon::Mic))
         start_transcribe(full);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", tr("Перетворити голосовий чат на текст (whisper.cpp, локально, без інтернету).\n"
                                 "Репліки гравців з'являться в цьому списку поруч із чатом, і їх можна шукати.\n"
-                                "Розпізнаються гравці, вибрані на вкладці «Звук і голос»; це займає кілька хвилин\n"
+                                "Розпізнаються гравці, вибрані на сторінці «Звук і голоси»; це займає кілька хвилин\n"
                                 "(на процесорі — приблизно як тривалість самого мовлення)."));
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
@@ -256,17 +256,23 @@ void App::draw_speech_controls() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr("Якщо всі говорять однією мовою, краще вказати її — «визначити» дивиться лише\n"
                                 "на перші 30 секунд мовлення кожного гравця."));
+    // Стан моделі і кнопка — у тому ж рядку, якщо влазять, інакше нижче
+    const char* model_btn = whisper_ok_ ? tr("Інша модель...") : tr("Завантажити модель...");
+    const float status_w = ImGui::CalcTextSize(whisper_ok_ ? whisper_status_.c_str() : tr("Розпізнавання недоступне")).x +
+                           action_width(model_btn, Kind::Ghost, Icon::Download) + ImGui::GetStyle().ItemSpacing.x * 2;
     ImGui::SameLine();
+    if (ImGui::GetContentRegionAvail().x < status_w) ImGui::NewLine();
+    ImGui::AlignTextToFramePadding();
     if (whisper_ok_) {
         ImGui::TextColored(kColDim, "%s", whisper_status_.c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton(tr("Інша модель..."))) open_model_popup_ = true;
+        if (action_button(model_btn, Kind::Ghost)) open_model_popup_ = true;
     } else {
         ImGui::TextColored(kColWarn, "%s", tr("Розпізнавання недоступне"));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", whisper_status_.c_str());
         ImGui::SameLine();
         ImGui::BeginDisabled(job_running());
-        if (ImGui::SmallButton(tr("Завантажити модель..."))) open_model_popup_ = true;
+        if (action_button(model_btn, Kind::Ghost, 0, Icon::Download)) open_model_popup_ = true;
         ImGui::EndDisabled();
     }
     if (transcript_ && !transcript_->lines.empty())
@@ -299,7 +305,7 @@ void App::draw_model_popup() {
     const fs::path dest = speech::models_download_dir() / m.file;
     const bool have = fs::exists(dest, ec);
     ImGui::BeginDisabled(job_running());
-    if (pill_button(have ? tr("Використовувати цю") : trf("Завантажити ({} МБ)", m.size_mb).c_str(), Kind::Cta)) {
+    if (action_button(have ? tr("Використовувати цю") : trf("Завантажити ({} МБ)", m.size_mb).c_str(), Kind::Cta)) {
         if (have) {
             s_.whisper_model = path_to_utf8(dest);
             mark_dirty();
@@ -316,7 +322,7 @@ void App::draw_model_popup() {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (pill_button(tr("Закрити"), Kind::Secondary)) ImGui::CloseCurrentPopup();
+    if (action_button(tr("Закрити"), Kind::Secondary)) ImGui::CloseCurrentPopup();
     if (!whisper_ok_ && whisper_status_.find("whisper-cli") != std::string::npos) {
         ImGui::Spacing();
         ImGui::TextColored(kColWarn, "%s", tr("Ще немає програми whisper-cli:"));
@@ -325,8 +331,9 @@ void App::draw_model_popup() {
     ImGui::EndPopup();
 }
 
-void App::draw_tab_chat() {
+void App::draw_page_chat() {
     const float fs_ = ImGui::GetFontSize();
+    page_header(tr("Чат і мовлення"), tr("Чат і події з демо разом із розпізнаним голосовим чатом: пошук, фрагмент з потрібного моменту, збереження."));
     if (!analysis_) {
         ImGui::TextColored(kColDim, "%s", tr("Спершу відкрийте демо."));
         return;
@@ -334,10 +341,12 @@ void App::draw_tab_chat() {
     const auto& A = *analysis_;
     const double ti = A.tick_interval;
     const size_t n_chat = A.count_events(demo::DemoEventKind::Chat);
+    if (card_begin(tr("Розпізнавання мовлення"), tr("Голосовий чат — текстом, локально (whisper.cpp)"), Icon::Mic, false))
+        draw_speech_controls();
+    card_end();
     ImGui::TextColored(kColDim, tr("Повідомлень чату: %zu, від сервера: %zu, входів: %zu, виходів: %zu"), n_chat,
                        A.count_events(demo::DemoEventKind::Server), A.count_events(demo::DemoEventKind::Join),
                        A.count_events(demo::DemoEventKind::Leave));
-    draw_speech_controls();
     const bool has_speech = transcript_ && !transcript_->lines.empty();
     if (A.events.empty() && !has_speech) {
         ImGui::TextWrapped("%s", tr("У цьому демо не знайдено ні чату, ні подій гравців. Чат є в демо, записаних на сервері "
@@ -409,7 +418,7 @@ void App::draw_tab_chat() {
         return rows;
     };
 
-    if (pill_button(has_speech ? tr("Зберегти чат і розмови в .txt") : tr("Зберегти чат у .txt"), Kind::Secondary)) {
+    if (action_button(has_speech ? tr("Зберегти чат і розмови в .txt") : tr("Зберегти чат у .txt"), Kind::Secondary)) {
         const fs::path demo = path_from_utf8(s_.demo_path);
         auto f = save_file_dialog(tr("Зберегти чат"), {{tr("Текст (*.txt)"), "*.txt"}},
                                   path_to_utf8(demo.parent_path() / (path_to_utf8(demo.stem()) + "_chat.txt")), "txt");
@@ -430,7 +439,7 @@ void App::draw_tab_chat() {
         }
     }
     ImGui::SameLine();
-    if (checkbox(tr("Субтитри з чатом у відео (.srt)"), &s_.chat_srt)) mark_dirty();
+    if (toggle(tr("Субтитри з чатом у відео (.srt)"), &s_.chat_srt)) mark_dirty();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr("Поруч із відео — .srt з повідомленнями чату з фрагмента (кожне видно 7 с).\n"
                                 "Корисно, якщо HUD приховано. Разом із субтитрами «хто говорить» — файл .chat.srt."));

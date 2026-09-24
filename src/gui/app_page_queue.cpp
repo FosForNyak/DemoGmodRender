@@ -1,5 +1,5 @@
 // =============================================================================
-//  app_tab_queue.cpp — вкладка «Черга»: кілька фрагментів чи демо підряд (на ніч),
+//  app_page_queue.cpp — сторінка «Черга»: кілька фрагментів чи демо підряд (на ніч),
 //  гра запускається один раз. Черга зберігається в gmdr_queue.json.
 // =============================================================================
 #include "app.hpp"
@@ -15,6 +15,7 @@
 #include "core/util/i18n.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace gmdr::gui {
@@ -36,7 +37,7 @@ void App::load_queue() {
         q.tick_interval = e["tick_interval"].as_number(0);
         if (!q.s.demo_path.empty()) queue_.push_back(std::move(q));
     }
-    if (!queue_.empty()) log_info("{}", trf("Черга рендерів: {} пункт(ів) з минулого разу — вкладка «Черга»", queue_.size()));
+    if (!queue_.empty()) log_info("{}", trf("Черга рендерів: {} пункт(ів) з минулого разу — сторінка «Черга»", queue_.size()));
 }
 
 void App::save_queue() {
@@ -97,7 +98,7 @@ void App::start_queue() {
     if (queue_.empty() || job_running()) return;
     if (!gmod_) {
         popup_title_ = tr("Не знайдено Garry's Mod");
-        popup_text_ = tr("Вкажіть папку гри на вкладці «Гра» (…\\steamapps\\common\\GarrysMod).");
+        popup_text_ = tr("Вкажіть папку гри на сторінці «Гра» (…\\steamapps\\common\\GarrysMod).");
         open_popup_ = true;
         return;
     }
@@ -124,20 +125,51 @@ void App::finish_queue(const render::QueueJob& q) {
     save_queue();
 }
 
-void App::draw_tab_queue() {
+void App::draw_page_queue() {
     const float fs_ = ImGui::GetFontSize();
+    page_header(tr("Черга"), tr("Кілька рендерів підряд — гра запускається один раз."));
     auto* running = dynamic_cast<render::QueueJob*>(job_.get());
     const bool active = running && running->running();
     const auto results = running ? running->results() : std::vector<render::QueueJob::ItemResult>{};
     if (queue_.empty()) {
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted(tr("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
-                                  "пункту вона не закривається, а одразу вмикає наступне демо."));
-        ImGui::TextColored(kColDim, "%s", tr("Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» "
-                                          "вгорі праворуч. Ціле демо — правим кліком на вкладці «Бібліотека»."));
-        ImGui::PopTextWrapPos();
-        ImGui::Spacing();
-        ImGui::TextColored(kColDim, "%s", tr("Черга порожня."));
+        // Порожня черга: значок, що це таке і як додати
+        const float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::Dummy(ImVec2(0, fs_ * 2));
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float box = std::round(fs_ * 3.4f);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 b0(p.x + std::round((avail - box) * 0.5f), p.y);
+        dl->AddRectFilled(b0, ImVec2(b0.x + box, b0.y + box), kAccentSoft, box * 0.3f);
+        draw_icon(dl, Icon::Queue, ImVec2(b0.x + box * 0.5f, b0.y + box * 0.5f), fs_ * 1.8f, kAccentText);
+        ImGui::Dummy(ImVec2(avail, box + fs_ * 0.6f));
+        auto centered = [&](const char* text, ImU32 col, bool bold) {
+            if (bold) ImGui::PushFont(bold_font(), ImGui::GetStyle().FontSizeBase * 1.2f);
+            const float wrap = std::min(avail, fs_ * 36);
+            const float tw = std::min(wrap, ImGui::CalcTextSize(text, nullptr, false, wrap).x);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - tw) * 0.5f));
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tw);
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            ImGui::TextUnformatted(text);
+            ImGui::PopStyleColor();
+            ImGui::PopTextWrapPos();
+            if (bold) ImGui::PopFont();
+        };
+        centered(tr("Черга порожня"), kText, true);
+        centered(tr("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
+                    "пункту вона не закривається, а одразу вмикає наступне демо."), kTextDim, false);
+        centered(tr("Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» "
+                    "вгорі праворуч. Ціле демо — правим кліком на сторінці «Бібліотека»."), kTextFaint, false);
+        ImGui::Dummy(ImVec2(0, fs_ * 0.5f));
+        const char* add = tr("Додати поточний рендер");
+        const char* lib = tr("Бібліотека");
+        const float bw = action_width(add, Kind::Secondary, Icon::Plus) + action_width(lib, Kind::Ghost, Icon::Library) +
+                         ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - bw) * 0.5f));
+        ImGui::BeginDisabled(!analysis_ || job_running() || s_.manual_mode || s_.output_path.empty());
+        if (action_button(add, Kind::Secondary, 0, Icon::Plus)) add_to_queue();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (action_button(lib, Kind::Ghost, 0, Icon::Library)) go_to(Page::Library);
         return;
     }
     int move_from = -1, move_to = -1, remove = -1;
@@ -212,11 +244,11 @@ void App::draw_tab_queue() {
         queue_.erase(queue_.begin() + remove);
         save_queue();
     }
-    // Зелена кнопка запуску — як у Adobe Media Encoder
+    // Запуск черги — зелена кнопка
     ImGui::BeginDisabled(job_running() || queue_.empty());
-    if (pill_button(trf("Почати чергу ({})", queue_.size()).c_str(), Kind::Positive, 0, Icon::Play)) start_queue();
+    if (action_button(trf("Почати чергу ({})", queue_.size()).c_str(), Kind::Positive, 0, Icon::Play)) start_queue();
     ImGui::SameLine();
-    if (pill_button(tr("Очистити"), Kind::Secondary)) {
+    if (action_button(tr("Очистити"), Kind::Secondary)) {
         queue_.clear();
         save_queue();
     }
