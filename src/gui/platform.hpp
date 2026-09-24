@@ -39,10 +39,11 @@ std::string pick_folder_dialog(const std::string& title, const std::string& init
 void open_path(const std::string& path);              // відкрити файл програмою за замовчуванням
 void show_in_folder(const std::string& path);         // показати файл у провіднику
 std::vector<std::string> ui_font_candidates();        // шрифти з кирилицею
+std::vector<std::string> ui_bold_font_candidates();   // напівжирні — для заголовків і кнопок дій
 std::vector<std::string> ui_symbol_font_candidates(); // резервні шрифти із символами (✓ ✗ ▶)
 std::string clipboard_text_set(const std::string& text);   // скопіювати в буфер обміну
 
-// Для автоматичних тестів: зберегти знімок вікна у PNG (лише Linux-версія).
+// Для автоматичних тестів: зберегти знімок вікна у PPM (змінна GMDR_SCREENSHOT).
 bool platform_screenshot(const std::string& path);
 
 // Програма вже відкрита: передати їй файл з args (подвійний клік на .dem), показати її вікно

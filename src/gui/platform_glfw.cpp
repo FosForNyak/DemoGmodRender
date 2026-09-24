@@ -146,6 +146,11 @@ std::vector<std::string> ui_symbol_font_candidates() {
             "/usr/share/fonts/dejavu/DejaVuSans.ttf"};
 }
 
+std::vector<std::string> ui_bold_font_candidates() {
+    return {"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf", "/usr/share/fonts/noto/NotoSans-SemiBold.ttf"};
+}
+
 std::vector<std::string> ui_font_candidates() {
     return {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf"};

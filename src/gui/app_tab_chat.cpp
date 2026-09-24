@@ -93,10 +93,11 @@ void App::draw_markers_list() {
     if (!analysis_) return;
     const float fs_ = ImGui::GetFontSize();
     const double ti = analysis_->tick_interval;
-    ImGui::SeparatorText(tr("Позначки"));
     if (markers_.empty()) {
-        ImGui::TextColored(kColDim, "%s", tr("Позначок ще немає. Ctrl+клік на шкалі (або правий клік → «Додати позначку»), "
-                                          "F6 під час перегляду в грі чи кнопка нижче."));
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(kColDim, "%s", tr("Позначок ще немає. M — позначка в курсорі таймлайну, Ctrl+клік на шкалі (або правий "
+                                          "клік → «Додати позначку»), F6 під час перегляду в грі чи кнопка нижче."));
+        ImGui::PopTextWrapPos();
     }
     int remove = -1;
     bool changed = false;
@@ -104,34 +105,35 @@ void App::draw_markers_list() {
     if (!list.empty() && ImGui::BeginTable("##markers", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn(tr("Час"), ImGuiTableColumnFlags_WidthFixed, fs_ * 5.5f);
         ImGui::TableSetupColumn(tr("Назва"), ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, fs_ * 9.5f);
-        ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, fs_ * 1.8f);
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight() * 3 + 4);
+        ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
         for (size_t i = 0; i < list.size(); ++i) {
             auto& m = list[i];
             ImGui::PushID(static_cast<int>(i));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            // Час — синім, як «гаряче» значення: клік ставить курсор таймлайну на позначку
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(format_timecode(m.tick * ti).c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(tr("тік %d"), m.tick);
+            ImGui::TextColored(kColAccent, "%s", format_timecode(m.tick * ti).c_str());
+            if (ImGui::IsItemClicked()) set_playhead(m.tick * ti);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip(tr("тік %d — клацніть, щоб поставити курсор"), m.tick);
+            }
             ImGui::TableNextColumn();
             ImGui::SetNextItemWidth(-1);
             if (ImGui::InputText("##t", &m.title, ImGuiInputTextFlags_EnterReturnsTrue) || ImGui::IsItemDeactivatedAfterEdit())
                 changed = true;
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(job_running());
-            if (ImGui::SmallButton(tr("Звідси"))) set_fragment_start(m.tick);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr("Почати фрагмент з цієї позначки"));
-            ImGui::SameLine();
-            if (ImGui::SmallButton(tr("Сюди"))) set_fragment_end(m.tick);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr("Закінчити фрагмент на цій позначці"));
-            ImGui::SameLine();
-            if (ImGui::SmallButton(tr("У грі"))) start_watch(m.tick);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tr("Переглянути демо в грі з цього місця"));
+            if (icon_button("##in", Icon::MarkIn, tr("Почати фрагмент з цієї позначки"))) set_fragment_start(m.tick);
+            ImGui::SameLine(0, 2);
+            if (icon_button("##out", Icon::MarkOut, tr("Закінчити фрагмент на цій позначці"))) set_fragment_end(m.tick);
+            ImGui::SameLine(0, 2);
+            if (icon_button("##watch", Icon::Play, tr("Переглянути демо в грі з цього місця"))) start_watch(m.tick);
             ImGui::EndDisabled();
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton("x")) remove = static_cast<int>(i);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Видалити позначку"));
+            if (icon_button("##del", Icon::Close, tr("Видалити позначку"), false, ImGui::GetFrameHeight())) remove = static_cast<int>(i);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -141,9 +143,9 @@ void App::draw_markers_list() {
         changed = true;
     }
     if (changed) set_markers(markers_);
-    if (ImGui::Button(tr("Позначка на початку фрагмента"))) add_marker_at(std::max(0, s_.start_tick), {});
+    if (pill_button(tr("Позначка на початку фрагмента"), Kind::Secondary, 0, Icon::Marker)) add_marker_at(std::max(0, s_.start_tick), {});
     ImGui::SameLine();
-    if (ImGui::Checkbox(tr("Розділи у відео з позначок"), &s_.chapters)) mark_dirty();
+    if (checkbox(tr("Розділи у відео з позначок"), &s_.chapters)) mark_dirty();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr("Позначки всередині фрагмента стануть розділами MP4/MOV/MKV (плеєри показують їх на шкалі),\n"
                                 "а поруч із відео з'явиться .chapters.txt з таймкодами для опису на YouTube."));
@@ -178,7 +180,7 @@ void App::apply_watch_marks() {
             render::add_marker(list, {m.tick, trf("Позначка {}", list.size() + 1)});
             markers_changed = true;
         }
-        focus_timeline(m.tick * analysis_->tick_interval);
+        set_playhead(m.tick * analysis_->tick_interval);
     }
     if (markers_changed) set_markers(std::move(list));
 }
@@ -224,7 +226,7 @@ void App::draw_speech_controls() {
     const bool has = transcript_ && !transcript_->covered.empty();
     const bool full = has && std::any_of(transcript_->covered.begin(), transcript_->covered.end(),
                                          [](const speech::Coverage& c) { return c.from <= 0 && c.to >= 1e8; });
-    if (ImGui::Button(full ? tr("Розпізнати ще раз") : has ? tr("Розпізнати все демо") : tr("Розпізнати мовлення")))
+    if (pill_button(full ? tr("Розпізнати ще раз") : has ? tr("Розпізнати все демо") : tr("Розпізнати мовлення"), Kind::Secondary))
         start_transcribe(full);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -233,6 +235,7 @@ void App::draw_speech_controls() {
                                 "Розпізнаються гравці, вибрані на вкладці «Звук і голос»; це займає кілька хвилин\n"
                                 "(на процесорі — приблизно як тривалість самого мовлення)."));
     ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(kColDim, "%s", tr("Мова:"));
     ImGui::SameLine();
     static const struct { const char* code; const char* label; } kLangs[] = {
@@ -242,7 +245,7 @@ void App::draw_speech_controls() {
     for (const auto& l : kLangs)
         if (s_.whisper_language == l.code) cur = l.label;
     ImGui::SetNextItemWidth(fs_ * 7.5f);
-    if (ImGui::BeginCombo("##wlang", cur)) {
+    if (begin_combo("##wlang", cur)) {
         for (const auto& l : kLangs)
             if (ImGui::Selectable(l.label, s_.whisper_language == l.code)) {
                 s_.whisper_language = l.code;
@@ -273,7 +276,6 @@ void App::draw_speech_controls() {
 }
 
 void App::draw_model_popup() {
-    const float fs_ = ImGui::GetFontSize();
     if (open_model_popup_) {
         ImGui::OpenPopup(tr("Модель розпізнавання мовлення"));
         open_model_popup_ = false;
@@ -289,7 +291,7 @@ void App::draw_model_popup() {
         const auto& m = models[static_cast<size_t>(i)];
         std::error_code ec;
         const bool have = fs::exists(speech::models_download_dir() / m.file, ec);
-        ImGui::RadioButton(trf("{} — {} МБ{}", m.label, m.size_mb, have ? tr(" (є)") : "").c_str(), &model_choice_, i);
+        if (radio(trf("{} — {} МБ{}##m{}", m.label, m.size_mb, have ? tr(" (є)") : "", i).c_str(), model_choice_ == i)) model_choice_ = i;
     }
     ImGui::Spacing();
     const auto& m = models[static_cast<size_t>(model_choice_)];
@@ -297,8 +299,7 @@ void App::draw_model_popup() {
     const fs::path dest = speech::models_download_dir() / m.file;
     const bool have = fs::exists(dest, ec);
     ImGui::BeginDisabled(job_running());
-    if (ImGui::Button(have ? tr("Використовувати цю") : trf("Завантажити ({} МБ)", m.size_mb).c_str(),
-                      ImVec2(fs_ * 12, 0))) {
+    if (pill_button(have ? tr("Використовувати цю") : trf("Завантажити ({} МБ)", m.size_mb).c_str(), Kind::Cta)) {
         if (have) {
             s_.whisper_model = path_to_utf8(dest);
             mark_dirty();
@@ -315,7 +316,7 @@ void App::draw_model_popup() {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button(tr("Закрити"), ImVec2(fs_ * 7, 0))) ImGui::CloseCurrentPopup();
+    if (pill_button(tr("Закрити"), Kind::Secondary)) ImGui::CloseCurrentPopup();
     if (!whisper_ok_ && whisper_status_.find("whisper-cli") != std::string::npos) {
         ImGui::Spacing();
         ImGui::TextColored(kColWarn, "%s", tr("Ще немає програми whisper-cli:"));
@@ -345,20 +346,19 @@ void App::draw_tab_chat() {
         return;
     }
     // ---- Фільтри ----
-    ImGui::SetNextItemWidth(fs_ * 16);
-    ImGui::InputTextWithHint("##chatsearch", tr("Пошук (текст або ім'я)"), &chat_search_);
+    search_input("##chatsearch", tr("Пошук (текст або ім'я)"), &chat_search_, fs_ * 14);
     same_line_if_fits(tr("Чат"));
-    ImGui::Checkbox(tr("Чат"), &chat_show_chat_);
+    checkbox(tr("Чат"), &chat_show_chat_);
     if (has_speech) {
         same_line_if_fits(tr("Голос"));
-        ImGui::Checkbox(tr("Голос"), &chat_show_speech_);
+        checkbox(tr("Голос"), &chat_show_speech_);
     }
     same_line_if_fits(tr("Сервер"));
-    ImGui::Checkbox(tr("Сервер"), &chat_show_server_);
+    checkbox(tr("Сервер"), &chat_show_server_);
     same_line_if_fits(tr("Входи й виходи"));
-    ImGui::Checkbox(tr("Входи й виходи"), &chat_show_joins_);
+    checkbox(tr("Входи й виходи"), &chat_show_joins_);
     same_line_if_fits(tr("Лише у фрагменті"));
-    ImGui::Checkbox(tr("Лише у фрагменті"), &chat_only_range_);
+    checkbox(tr("Лише у фрагменті"), &chat_only_range_);
 
     // Рядки: події демо і (якщо є) розпізнані репліки — разом, за часом
     constexpr int kSpeechBase = 1000000000;   // номери рядків-реплік
@@ -409,7 +409,7 @@ void App::draw_tab_chat() {
         return rows;
     };
 
-    if (ImGui::Button(has_speech ? tr("Зберегти чат і розмови в .txt") : tr("Зберегти чат у .txt"))) {
+    if (pill_button(has_speech ? tr("Зберегти чат і розмови в .txt") : tr("Зберегти чат у .txt"), Kind::Secondary)) {
         const fs::path demo = path_from_utf8(s_.demo_path);
         auto f = save_file_dialog(tr("Зберегти чат"), {{tr("Текст (*.txt)"), "*.txt"}},
                                   path_to_utf8(demo.parent_path() / (path_to_utf8(demo.stem()) + "_chat.txt")), "txt");
@@ -430,7 +430,7 @@ void App::draw_tab_chat() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Checkbox(tr("Субтитри з чатом у відео (.srt)"), &s_.chat_srt)) mark_dirty();
+    if (checkbox(tr("Субтитри з чатом у відео (.srt)"), &s_.chat_srt)) mark_dirty();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", tr("Поруч із відео — .srt з повідомленнями чату з фрагмента (кожне видно 7 с).\n"
                                 "Корисно, якщо HUD приховано. Разом із субтитрами «хто говорить» — файл .chat.srt."));
@@ -466,7 +466,7 @@ void App::draw_tab_chat() {
             if (ImGui::Selectable(ts.substr(0, ts.find('.')).c_str(), selected,
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 chat_selected_ = row.id;
-                focus_timeline(t);
+                set_playhead(t);
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !job_running())
                     set_fragment_start(tick - static_cast<int32_t>(3.0 / ti));
             }

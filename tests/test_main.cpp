@@ -1673,7 +1673,7 @@ static void test_i18n() {
     CHECK(trf("Знайдено: {}", "C:/x") == "Found: C:/x");
     CHECK(std::string(tr("Огляд...##mic")) == "Browse...##mic");
     CHECK(trf("Черга ({})###queue", 3) == "Queue (3)###queue");
-    CHECK(tr(std::string("Прев'ю")) == "Preview");
+    CHECK(tr(std::string("Програма")) == "Program");
     // Немає перекладу — лишається як є (імена гравців, шляхи тощо)
     CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
     CHECK(std::string(tr("")).empty());

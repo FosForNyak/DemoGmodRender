@@ -129,24 +129,26 @@ void App::draw_tab_queue() {
     auto* running = dynamic_cast<render::QueueJob*>(job_.get());
     const bool active = running && running->running();
     const auto results = running ? running->results() : std::vector<render::QueueJob::ItemResult>{};
-    ImGui::TextWrapped("%s", tr("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
-                             "пункту вона не закривається, а одразу вмикає наступне демо."));
-    ImGui::TextColored(kColDim, "%s", tr("Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» внизу. "
-                                      "Ціле демо — правим кліком на вкладці «Демо»."));
-    ImGui::Spacing();
     if (queue_.empty()) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextUnformatted(tr("Кілька фрагментів чи демо підряд — наприклад, на ніч. Гра запускається один раз: після кожного "
+                                  "пункту вона не закривається, а одразу вмикає наступне демо."));
+        ImGui::TextColored(kColDim, "%s", tr("Додати: налаштуйте демо, фрагмент і файл, як для звичайного рендеру, і натисніть «До черги» "
+                                          "вгорі праворуч. Ціле демо — правим кліком на вкладці «Бібліотека»."));
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
         ImGui::TextColored(kColDim, "%s", tr("Черга порожня."));
         return;
     }
     int move_from = -1, move_to = -1, remove = -1;
     if (ImGui::BeginTable("##queue", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY,
                           ImVec2(0, std::max(ImGui::GetFrameHeightWithSpacing() * 4,
-                                             ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.2f)))) {
+                                             ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 1.4f)))) {
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, fs_ * 1.6f);
         ImGui::TableSetupColumn(tr("Демо і фрагмент"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn(tr("Файл"), ImGuiTableColumnFlags_WidthStretch, 1.3f);
         ImGui::TableSetupColumn(tr("Стан"), ImGuiTableColumnFlags_WidthFixed, fs_ * 6.5f);
-        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, fs_ * 5.2f);
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight() * 3 + 4);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         for (size_t i = 0; i < queue_.size(); ++i) {
@@ -154,8 +156,10 @@ void App::draw_tab_queue() {
             ImGui::PushID(static_cast<int>(i));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("%zu", i + 1);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(kColDim, "%zu", i + 1);
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             std::string range = tr("усе демо");
             if ((q.s.start_tick > 0 || q.s.end_tick > 0) && q.tick_interval > 0)
                 range = format_duration(std::max(0, q.s.start_tick) * q.tick_interval) + " – " +
@@ -167,9 +171,11 @@ void App::draw_tab_queue() {
                 ImGui::SetTooltip("%s\n%dx%d, %s fps, %s", q.s.demo_path.c_str(), q.s.width, q.s.height, q.s.fps.c_str(),
                                   q.s.video_codec.c_str());
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(path_to_utf8(path_from_utf8(q.s.output_path).filename()).c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", q.s.output_path.c_str());
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             if (running && i < results.size()) {
                 const auto& r = results[i];
                 if (active && static_cast<int>(i) == running->current_index()) ImGui::TextColored(kColAccent, "%s", tr("рендер..."));
@@ -185,15 +191,14 @@ void App::draw_tab_queue() {
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(active);
             ImGui::BeginDisabled(i == 0);
-            if (ImGui::SmallButton("↑")) move_from = static_cast<int>(i), move_to = static_cast<int>(i) - 1;
+            if (icon_button("##up", Icon::ChevronUp, tr("Вище"))) move_from = static_cast<int>(i), move_to = static_cast<int>(i) - 1;
             ImGui::EndDisabled();
-            ImGui::SameLine();
+            ImGui::SameLine(0, 2);
             ImGui::BeginDisabled(i + 1 == queue_.size());
-            if (ImGui::SmallButton("↓")) move_from = static_cast<int>(i), move_to = static_cast<int>(i) + 1;
+            if (icon_button("##down", Icon::ChevronDown, tr("Нижче"))) move_from = static_cast<int>(i), move_to = static_cast<int>(i) + 1;
             ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::SmallButton("✕")) remove = static_cast<int>(i);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Прибрати з черги"));
+            ImGui::SameLine(0, 2);
+            if (icon_button("##remove", Icon::Close, tr("Прибрати з черги"))) remove = static_cast<int>(i);
             ImGui::EndDisabled();
             ImGui::PopID();
         }
@@ -207,19 +212,18 @@ void App::draw_tab_queue() {
         queue_.erase(queue_.begin() + remove);
         save_queue();
     }
+    // Зелена кнопка запуску — як у Adobe Media Encoder
     ImGui::BeginDisabled(job_running() || queue_.empty());
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.30f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.66f, 0.36f, 1.0f));
-    if (ImGui::Button(trf("Почати чергу ({})", queue_.size()).c_str(), ImVec2(fs_ * 11, 0))) start_queue();
-    ImGui::PopStyleColor(2);
+    if (pill_button(trf("Почати чергу ({})", queue_.size()).c_str(), Kind::Positive, 0, Icon::Play)) start_queue();
     ImGui::SameLine();
-    if (ImGui::Button(tr("Очистити"))) {
+    if (pill_button(tr("Очистити"), Kind::Secondary)) {
         queue_.clear();
         save_queue();
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextColored(kColDim, "%s", tr("  Потім:"));
+    ImGui::SameLine(0, fs_);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kColDim, "%s", tr("Потім:"));
     ImGui::SameLine();
     draw_after_done_combo();
     ImGui::SameLine();

@@ -1,50 +1,108 @@
 // =============================================================================
-//  app_ui.hpp — спільні дрібниці інтерфейсу (кольори, підписи, списки кодеків і
-//  форматів) для всіх файлів вікна: app.cpp, app_tab_*.cpp, app_panels.cpp.
+//  app_ui.hpp — спільні дрібниці інтерфейсу для всіх файлів вікна (app.cpp,
+//  app_tab_*.cpp, app_panels.cpp): палітра і віджети в стилі Adobe (темна тема
+//  Spectrum, як у Premiere Pro і Media Encoder), списки кодеків і форматів.
+//  Віджети реалізовано в ui_widgets.cpp.
 // =============================================================================
 #pragma once
 
 #include "imgui.h"
 
 #include <string>
+#include <vector>
 
 namespace gmdr::gui::ui {
 
-// ---- Кольори ----
-inline const ImVec4 kColWarn(1.00f, 0.80f, 0.30f, 1.0f);
-inline const ImVec4 kColErr(1.00f, 0.42f, 0.42f, 1.0f);
-inline const ImVec4 kColDim(0.60f, 0.62f, 0.66f, 1.0f);
-inline const ImVec4 kColOk(0.45f, 0.85f, 0.50f, 1.0f);
-inline const ImVec4 kColAccent(0.35f, 0.65f, 1.00f, 1.0f);
+// ---- Кольори тексту (ImVec4 — для TextColored) ----
+inline const ImVec4 kColWarn(0.95f, 0.66f, 0.26f, 1.0f);
+inline const ImVec4 kColErr(0.97f, 0.43f, 0.45f, 1.0f);
+inline const ImVec4 kColDim(0.58f, 0.58f, 0.58f, 1.0f);
+inline const ImVec4 kColOk(0.40f, 0.78f, 0.53f, 1.0f);
+inline const ImVec4 kColAccent(0.29f, 0.61f, 0.96f, 1.0f);   // «гарячий» синій Adobe
 
-// Підказка "(?)" праворуч від попереднього віджета.
-inline void help_marker(const char* text) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::BeginItemTooltip()) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
-        ImGui::TextUnformatted(text);
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
-}
+// ---- Палітра панелей (ImU32 — для малювання) ----
+inline constexpr ImU32 kGutter = IM_COL32(16, 16, 16, 255);       // проміжки між панелями
+inline constexpr ImU32 kPanel = IM_COL32(35, 35, 35, 255);        // тло панелі
+inline constexpr ImU32 kPanelLine = IM_COL32(52, 52, 52, 255);    // лінії всередині панелі
+inline constexpr ImU32 kField = IM_COL32(27, 27, 27, 255);        // поля, доріжки таймлайну
+inline constexpr ImU32 kMonitor = IM_COL32(8, 8, 8, 255);         // тло монітора (кадр)
+inline constexpr ImU32 kText = IM_COL32(226, 226, 226, 255);
+inline constexpr ImU32 kTextDim = IM_COL32(148, 148, 148, 255);
+inline constexpr ImU32 kBlue = IM_COL32(38, 128, 235, 255);       // акцент (кнопка дії, курсор)
+inline constexpr ImU32 kBlueHover = IM_COL32(55, 142, 240, 255);
+inline constexpr ImU32 kBlueText = IM_COL32(75, 156, 245, 255);   // «гарячі» значення, таймкод
+inline constexpr ImU32 kGreen = IM_COL32(45, 157, 120, 255);      // запуск черги (як у Media Encoder)
+inline constexpr ImU32 kRed = IM_COL32(215, 58, 73, 255);
 
-// Підпис ліворуч від віджета фіксованої ширини (охайніша "форма").
-inline void label(const char* text, float width = 0) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(text);
-    ImGui::SameLine(width > 0 ? width : ImGui::GetFontSize() * 11.0f);
-}
+// ---- Шрифти (задає App::init) ----
+void   set_fonts(ImFont* regular, ImFont* bold);
+ImFont* bold_font();
+// Тема Adobe для всього вікна: кольори, відступи, заокруглення.
+void apply_theme(float dpi);
 
+// ---- Іконки (малюються лініями — однаково чіткі на будь-якому DPI) ----
+enum class Icon {
+    None, Play, Stop, Record, Menu, ChevronDown, ChevronRight, ChevronUp, Folder, Plus, Close, Search,
+    MarkIn, MarkOut, GoToIn, GoToOut, Marker, Speaker, Headphones, Eye, Check, Warning, Info, Film, Queue, Refresh, Pencil,
+};
+void draw_icon(ImDrawList* dl, Icon icon, ImVec2 center, float size, ImU32 col);
+
+// Кнопка-іконка без рамки (підсвічується під курсором). active — увімкнена (синя).
+bool icon_button(const char* id, Icon icon, const char* tooltip = nullptr, bool active = false, float size = 0);
+// Кнопка з літерою (M/S на доріжках таймлайну): увімкнена — кольоровий квадрат.
+bool letter_toggle(const char* id, const char* letter, bool on, ImU32 on_col, const char* tooltip);
+
+// Кнопки-«пігулки» Spectrum: Cta — головна дія (синя), Secondary — контурна, Negative — червона,
+// Positive — зелена (запуск черги).
+enum class Kind { Cta, Secondary, Negative, Positive };
+bool pill_button(const char* label, Kind kind, float width = 0, Icon icon = Icon::None);
+float pill_width(const char* label, Kind kind, Icon icon = Icon::None);   // ширина такої кнопки
+
+// Секція з трикутником-розкривачкою (як «fx» в Effect Controls). Повертає true, якщо розкрита.
+bool section(const char* label, bool default_open = true);
+
+// Підпис ліворуч від віджета фіксованої ширини (охайніша «форма»).
+void label(const char* text, float width = 0);
+// Підказка-іконка «?» праворуч від попереднього віджета.
+void help_marker(const char* text);
 // SameLine перед галочкою з підписом next_label — або новий рядок, якщо вона не влазить
 // (англійські підписи бувають довшими за українські).
-inline void same_line_if_fits(const char* next_label) {
-    const float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
-                    ImGui::CalcTextSize(next_label, nullptr, true).x;
-    ImGui::SameLine();
-    if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
-}
+void same_line_if_fits(const char* next_label);
 
+// Галочка й перемикач у стилі Spectrum (увімкнені — сині).
+bool checkbox(const char* label, bool* v);
+bool radio(const char* label, bool active);
+// Випадний список: як ImGui::BeginCombo, але стрілка без окремої «кнопки».
+bool begin_combo(const char* id, const char* preview, ImGuiComboFlags flags = 0);
+
+// «Гаряче» значення Adobe: синій текст, тягніть мишею вліво-вправо, подвійний клік — ввести число.
+bool hot_float(const char* id, float* v, float speed, float min, float max, const char* fmt);
+bool hot_int(const char* id, int* v, float speed, int min, int max, const char* fmt);
+// Повзунок Spectrum: тонка доріжка з круглою ручкою і «гарячим» значенням праворуч.
+bool slider_float(const char* id, float* v, float min, float max, const char* fmt, float width);
+bool slider_int(const char* id, int* v, int min, int max, const char* fmt, float width);
+
+// Тонка смуга прогресу (fraction < 0 — невизначений, «біжить»).
+void meter(float fraction, ImVec2 size, ImU32 col = kBlue);
+// Поле пошуку з лупою.
+bool search_input(const char* id, const char* hint, std::string* text, float width);
+
+// ---- Панелі (замість вікон ImGui: розташування задає App::frame) ----
+// Панель із вкладками в заголовку: активна вкладка — біла з синьою рискою, панель у фокусі —
+// з синьою рамкою. menu_id — меню «≡» праворуч (відкрити: begin_panel_menu(menu_id)).
+// footer_h — висота нижньої смуги (малюється після panel_footer()). Завжди закривати end_panel().
+void begin_panel(const char* id, ImVec2 pos, ImVec2 size, const std::vector<std::string>& tabs, int* current,
+                 const char* menu_id = nullptr, float footer_h = 0, ImGuiWindowFlags content_flags = 0);
+void panel_footer();
+void end_panel();
+bool begin_panel_menu(const char* menu_id);   // true — меню відкрите (закрити ImGui::EndPopup())
+// Роздільник між панелями: перетягування змінює *value (у пікселях).
+void splitter(const char* id, bool vertical, ImVec2 pos, ImVec2 size, float* value, float min_v, float max_v);
+
+// Таймкод як у Premiere: 00:01:23:15 (кадри — за частотою fps).
+std::string timecode(double seconds, double fps);
+
+// ---- Дані для списків ----
 struct Resolution { const char* label; int w, h; };
 inline constexpr Resolution kResolutions[] = {
     {"854 × 480 (480p)", 854, 480},        {"1280 × 720 (HD)", 1280, 720},       {"1600 × 900", 1600, 900},

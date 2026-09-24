@@ -1,14 +1,19 @@
 // =============================================================================
 //  app.hpp — головне вікно програми (Dear ImGui).
 //
+//  Вікно зібране з панелей у стилі Adobe Premiere Pro: зверху ліворуч — налаштування
+//  експорту, праворуч — монітор програми, знизу ліворуч — голоси, бібліотека, чат,
+//  черга й журнал, праворуч — таймлайн; межі між панелями можна тягати.
+//
 //  Реалізація розкладена по файлах за частинами вікна:
-//    app.cpp            — запуск, дії (відкрити демо, рендер...), меню, попапи
+//    app.cpp            — запуск, дії (відкрити демо, рендер...), розкладка, меню, попапи
 //    app_tab_video.cpp  — вкладка «Відео» (кодек, якість, пресети)
 //    app_tab_audio.cpp  — вкладка «Звук і голос»
 //    app_tab_game.cpp   — вкладка «Гра»
-//    app_tab_range.cpp  — вкладка «Фрагмент» і часова шкала голосів
+//    app_tab_range.cpp  — вкладка «Фрагмент» і таймлайн
 //    app_tab_chat.cpp   — вкладка «Чат», позначки, перегляд демо в грі
-//    app_panels.cpp     — інформація про демо, голоси, прев'ю, прогрес, журнал
+//    app_panels.cpp     — заголовок, монітор, голоси, рядок стану, журнал
+//    ui_widgets.cpp     — віджети й тема в стилі Adobe
 // =============================================================================
 #pragma once
 
@@ -34,6 +39,7 @@
 #include "core/util/log.hpp"
 #include "core/util/power.hpp"
 #include "core/util/update_check.hpp"
+#include "imgui.h"
 #include "voice_player.hpp"
 
 namespace gmdr::gui {
@@ -70,8 +76,20 @@ private:
 
     // ---- секції інтерфейсу ----
     void draw_menu_bar();
-    void draw_demo_bar();
-    void draw_settings_tabs();
+    void draw_header_bar();                          // значок, демо, кнопки дій
+    void draw_workspace(ImVec2 pos, ImVec2 size);    // чотири панелі з роздільниками
+    void draw_settings_panel(ImVec2 pos, ImVec2 size);
+    void draw_output_footer();                       // вихідний файл і підсумок налаштувань
+    void draw_monitor_panel(ImVec2 pos, ImVec2 size);
+    void draw_monitor_frame(ImVec2 p0, ImVec2 p1);
+    bool encoding_preview_pending() const;           // рендер іде, а кадрів для прев'ю ще немає
+    void draw_transport();
+    void draw_project_panel(ImVec2 pos, ImVec2 size);
+    void draw_timeline_panel(ImVec2 pos, ImVec2 size);
+    void draw_status_bar(ImVec2 pos, ImVec2 size);
+    void handle_shortcuts();                         // I / O / M, Home / End, Ctrl+O
+    void open_demo_dialog();
+    void set_playhead(double seconds);
     void draw_tab_video();
     void draw_tab_audio();
     void draw_tab_game();
@@ -84,13 +102,9 @@ private:
     void start_transcribe(bool again);
     bool job_has_fraction_only() const;   // збереження голосів, розпізнавання, завантаження
     void draw_markers_list();
-    void draw_timeline(float height);
-    void draw_info_panel();
+    void draw_timeline();
     void draw_voice_table();
-    void draw_preview();
     void draw_checks(const std::vector<render::CheckItem>& checks);
-    void draw_output_bar();
-    void draw_progress();
     void draw_log();
     void draw_popups();
 
@@ -207,6 +221,8 @@ private:
     bool                                            tl_selecting_ = false;
     float                                           tl_sel_from_ = 0;
     float                                           tl_ctx_time_ = 0;   // час під курсором для контекстного меню
+    float                                           playhead_t_ = 0;    // синій курсор таймлайну, с
+    int                                             tl_nav_drag_ = 0;   // смуга масштабу: 1 — зсув, 2/3 — лівий/правий край
     std::vector<render::Marker>                     markers_;
 
     std::vector<QueueEntry>                         queue_;
@@ -255,7 +271,13 @@ private:
     void        refresh_resume_offer();
     bool        show_about_ = false;
     bool        show_help_ = false;
-    std::string pending_encode_dir_;
+    bool        open_overwrite_popup_ = false;
+    bool        out_editing_ = false, out_focus_ = false;   // вихідний файл: шлях вводять вручну (олівець)
+
+    // Розкладка панелей (частки вікна; «Вікно → Скинути розкладку панелей»)
+    float       split_x_top_ = 0.42f, split_x_bottom_ = 0.42f, split_y_ = 0.56f;
+    int         settings_tab_ = 0;   // Відео, Звук і голос, Гра, Фрагмент
+    int         project_tab_ = 0;    // Голоси, Бібліотека, Чат, Черга, Журнал
 
     // Допоміжне для віджетів
     std::string custom_codec_;

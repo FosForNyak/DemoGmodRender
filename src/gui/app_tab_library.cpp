@@ -1,5 +1,5 @@
 // =============================================================================
-//  app_tab_library.cpp — вкладка «Демо»: усі демо з теки гри і ваших тек.
+//  app_tab_library.cpp — вкладка «Бібліотека»: усі демо з теки гри і ваших тек.
 //  Пошук за назвою, картою, сервером і гравцем; подвійний клік — відкрити;
 //  правий клік — відкрити, додати ціле демо до черги, показати в папці.
 // =============================================================================
@@ -61,14 +61,16 @@ void App::draw_tab_library() {
     poll_library();
 
     // ---- Панель: пошук, оновити, додати теку ----
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fs_ * 17);
-    ImGui::InputTextWithHint("##libsearch", tr("пошук: назва, карта, сервер, гравець"), &library_search_);
+    const char* add_label = tr("Додати теку...");
+    const float right_w = ImGui::GetFrameHeight() + pill_width(add_label, Kind::Secondary, Icon::Plus) + ImGui::GetStyle().ItemSpacing.x * 2;
+    search_input("##libsearch", tr("пошук: назва, карта, сервер, гравець"), &library_search_,
+                 std::max(fs_ * 8, ImGui::GetContentRegionAvail().x - right_w));
     ImGui::SameLine();
     ImGui::BeginDisabled(library_future_.valid());
-    if (ImGui::Button(tr("Оновити"))) rescan_library();
+    if (icon_button("##rescan", Icon::Refresh, tr("Оновити"))) rescan_library();
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button(tr("Додати теку..."))) {
+    if (pill_button(add_label, Kind::Secondary, 0, Icon::Plus)) {
         const std::string d = pick_folder_dialog(tr("Тека з демо (разом із підтеками)"));
         if (!d.empty()) {
             s_.library_dirs += (s_.library_dirs.empty() ? "" : ";") + d;
@@ -87,7 +89,7 @@ void App::draw_tab_library() {
     // ---- Таблиця ----
     const ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY |
                                ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp;
-    const float table_h = std::max(fs_ * 8, ImGui::GetContentRegionAvail().y - fs_ * 3.2f);
+    const float table_h = std::max(fs_ * 6, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - 2);
     if (ImGui::BeginTable("##library", 5, tf, ImVec2(0, table_h))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn(tr("Демо"), ImGuiTableColumnFlags_WidthStretch, 3.0f);

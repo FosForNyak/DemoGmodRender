@@ -26,6 +26,8 @@
 #include <shellapi.h>
 #include <shobjidl.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -284,6 +286,7 @@ bool platform_init(const std::string& title, int width, int height, const Platfo
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     ImGui_ImplWin32_EnableDpiAwareness();
     g_dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
+    if (const char* s = std::getenv("GMDR_UI_SCALE"); s && std::atof(s) > 0.1) g_dpi = static_cast<float>(std::atof(s));   // для перевірки інтерфейсу
     g_wc = {sizeof(g_wc), CS_CLASSDC, wnd_proc, 0, 0, GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr,
             L"GModDemoRenderWnd", nullptr};
     g_wc.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
@@ -399,6 +402,13 @@ std::vector<std::string> ui_font_candidates() {
     return {w + "\\Fonts\\segoeui.ttf", w + "\\Fonts\\tahoma.ttf", w + "\\Fonts\\arial.ttf"};
 }
 
+std::vector<std::string> ui_bold_font_candidates() {
+    wchar_t windir[MAX_PATH] = L"C:\\Windows";
+    GetWindowsDirectoryW(windir, MAX_PATH);
+    const std::string w = wide_to_utf8(windir);
+    return {w + "\\Fonts\\seguisb.ttf", w + "\\Fonts\\segoeuib.ttf", w + "\\Fonts\\tahomabd.ttf", w + "\\Fonts\\arialbd.ttf"};
+}
+
 std::vector<std::string> ui_symbol_font_candidates() {
     wchar_t windir[MAX_PATH] = L"C:\\Windows";
     GetWindowsDirectoryW(windir, MAX_PATH);
@@ -411,7 +421,46 @@ std::string clipboard_text_set(const std::string& text) {
     return text;
 }
 
-bool platform_screenshot(const std::string&) { return false; }
+bool platform_screenshot(const std::string& path) {
+    if (!g_swapchain || !g_rtv || !ImGui::GetDrawData()) return false;
+    // Кадр уже показано (Present, задній буфер після нього невизначений) — малюємо його ще раз і копіюємо
+    const float clear[4] = {0, 0, 0, 1};
+    g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
+    g_context->ClearRenderTargetView(g_rtv, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    ID3D11Texture2D* back = nullptr;
+    if (FAILED(g_swapchain->GetBuffer(0, IID_PPV_ARGS(&back)))) return false;
+    D3D11_TEXTURE2D_DESC d{};
+    back->GetDesc(&d);
+    d.Usage = D3D11_USAGE_STAGING;
+    d.BindFlags = 0;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    d.MiscFlags = 0;
+    ID3D11Texture2D* staging = nullptr;
+    const bool ok = SUCCEEDED(g_device->CreateTexture2D(&d, nullptr, &staging));
+    if (ok) g_context->CopyResource(staging, back);
+    back->Release();
+    if (!ok) return false;
+    D3D11_MAPPED_SUBRESOURCE m{};
+    bool written = false;
+    if (SUCCEEDED(g_context->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
+        // PPM (P6), як і в Linux-версії
+        std::FILE* f = _wfopen(utf8_to_wide(path).c_str(), L"wb");
+        if (f) {
+            std::fprintf(f, "P6\n%u %u\n255\n", d.Width, d.Height);
+            std::vector<uint8_t> row(static_cast<size_t>(d.Width) * 3);
+            for (UINT y = 0; y < d.Height; ++y) {
+                const uint8_t* src = static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch;
+                for (UINT x = 0; x < d.Width; ++x) std::memcpy(&row[x * 3], src + x * 4, 3);
+                std::fwrite(row.data(), 1, row.size(), f);
+            }
+            written = std::fclose(f) == 0;
+        }
+        g_context->Unmap(staging, 0);
+    }
+    staging->Release();
+    return written;
+}
 
 uint64_t platform_update_texture(uint64_t id, int w, int h, const uint8_t* rgba) {
     if (!g_device || w <= 0 || h <= 0) return 0;
