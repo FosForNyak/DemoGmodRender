@@ -1046,8 +1046,11 @@ bool RenderJob::prepare(std::string* error) {
         std::string rerr;
         if (fs::exists(rtx_backup_, ec))
             log_info("{}", trf("rtx.conf уже налаштовано для рендеру попереднім пунктом черги"));
-        else if (game::apply_rtx_render_profile(*gmod_, rtx_backup_, &rerr))
+        else if (game::apply_rtx_render_profile(*gmod_, rtx_backup_, &rerr)) {
             log_info("{}", trf("rtx.conf: на час рендеру — повна роздільна здатність (DLAA), без генерації кадрів і заставки"));
+            log_info("{}", trf("RTX: шейдери Remix компілюються до кадру, а не у фоні — кадр чекає на них, а не виходить "
+                               "чорним (перша компіляція без кешу може тривати кілька хвилин)"));
+        }
         else
             log_warn("{}", trf("Не вдалося змінити rtx.conf ({}) — Remix рендеритиме з вашими налаштуваннями", rerr));
     }
@@ -1128,6 +1131,8 @@ bool RenderJob::write_game_job(int32_t start_tick, std::string* error) {
         const int32_t seek = job.start_tick - ticks(s_.rtx ? 10.0 : 5.0);
         if (seek > ticks(30.0)) job.seek_tick = seek;
     }
+    // RTX: перший кадр з трасуванням чекає, поки Remix скомпілює шейдери (без кешу — хвилини)
+    if (s_.rtx) job.load_timeout = 1800;
     job.quit_when_done = keep_game_ ? false : s_.quit_game_when_done;
     job.wait_next = keep_game_;
     job.menu_delay = s_.menu_delay;
@@ -1692,6 +1697,9 @@ void RenderJob::run() {
         return e ? std::max(1, std::atoi(e)) : s_.rtx ? 90 : 30;
     }());
     int restarts = 0;
+    double cpu_sample = -1;            // процесорний час гри на момент останнього заміру (сторож)
+    auto cpu_sample_t = Clock::now();
+    bool game_busy = false, busy_logged = false;
     ResumeRecord resume_rec;           // запис для дописування після збою (id порожній — не пишемо)
     auto last_resume_save = Clock::now() - std::chrono::seconds(60);
     // Час демо першого кадру відео: тік, з якого гра почала запис, а в частині паралельного
@@ -1749,6 +1757,7 @@ void RenderJob::run() {
         apply_process_tweaks(*proc);
         t_launch = Clock::now();
         last_frame_t = Clock::now();
+        cpu_sample = -1;
         st.reset();
         recording_seen = false;
         recording_since = {};
@@ -1789,6 +1798,7 @@ void RenderJob::run() {
         apply_process_tweaks(*proc);
         t_launch = Clock::now();
         last_frame_t = Clock::now();
+        cpu_sample = -1;
         st.reset();
         producer_done = false;
         recording_seen = false;
@@ -1939,7 +1949,21 @@ void RenderJob::run() {
                 break;
             }
             if (pipe_of() && !cancel_ && !kill_) {
-                const std::string why = tr("Гра не записала в канал жодного кадру.");
+                // Що сказала гра: рядки консолі про запис кадрів (GMod не дозволяє писати поза своїми
+                // папками — «Attempt to open dangerous file path»; цей захист програма не обходить)
+                bool blocked = false;
+                for (const auto& l : game::console_log_tail(*gmod_, 400)) {
+                    const std::string low = to_lower(l);
+                    if (low.find("dangerous") == std::string::npos && low.find("movie") == std::string::npos &&
+                        low.find("snapshot") == std::string::npos && low.find("pipe") == std::string::npos &&
+                        low.find("couldn't") == std::string::npos && low.find(to_lower(movie_prefix())) == std::string::npos)
+                        continue;
+                    blocked = blocked || low.find("dangerous") != std::string::npos;
+                    log_warn("{}", trf("Консоль гри: {}", l));
+                }
+                const std::string why = blocked ? tr("GMod не дозволяє startmovie писати поза папками гри (захист «dangerous file path»), "
+                                                     "тож канал недоступний — програма цей захист не обходить.")
+                                                : tr("Гра не записала в канал жодного кадру.");
                 if (!pipe_strict_ && fall_back_to_files(why)) continue;
                 fatal(why + (pipe_strict_ ? tr(" Вибрано лише канал (--frame-transport pipe), тож на файли рендер не переходить.") : ""));
                 return;
@@ -2150,6 +2174,23 @@ void RenderJob::run() {
         // ---- Сторож: гра перестала віддавати кадри ----
         if (proc->suspended() || !recording_seen || producer_done) last_frame_t = Clock::now();
         const auto silent = Clock::now() - last_frame_t;
+        // Кадрів немає, але гра витрачає процесорний час — вона зайнята, а не зависла: з RTX Remix
+        // компілює шейдери (кадр чекає на них), або кадр просто дуже важкий. Сторож тоді чекає — до межі.
+        if (Clock::now() - cpu_sample_t > std::chrono::seconds(2)) {
+            const double c = proc->suspended() ? -1 : proc->cpu_seconds();
+            const double dt = std::chrono::duration<double>(Clock::now() - cpu_sample_t).count();
+            game_busy = cpu_sample >= 0 && c >= 0 && (c - cpu_sample) / dt >= 0.25;   // ≥ чверті ядра
+            cpu_sample = c;
+            cpu_sample_t = Clock::now();
+        }
+        const bool busy_wait = game_busy && silent < (s_.rtx ? std::chrono::minutes(20) : std::chrono::minutes(5));
+        if (busy_wait && silent > std::chrono::seconds(15) && !busy_logged) {
+            busy_logged = true;
+            log_info("{}", trf("Гра вже {} с не віддає кадрів, але працює{} — чекаю",
+                               std::chrono::duration_cast<std::chrono::seconds>(silent).count(),
+                               s_.rtx ? tr(" (Remix компілює шейдери?)") : ""));
+        }
+        if (silent < std::chrono::seconds(2)) busy_logged = false;   // кадри пішли знову
         if (!window_fallback && effective_mode == game::WindowMode::Offscreen && silent > std::chrono::seconds(20)) {
             window_fallback = true;
             effective_mode = game::WindowMode::Behind;
@@ -2158,6 +2199,8 @@ void RenderJob::run() {
                      "Якщо так буде щоразу, виберіть на сторінці «Гра» режим «позаду інших вікон»."));
             proc->show_window_front();
             proc->place_window(game::WindowMode::Behind);
+        } else if (busy_wait) {
+            // зайнята — не чіпаємо
         } else if (silent > watchdog && can_restart()) {
             if (restart_game(trf("Гра вже {} с не віддає нових кадрів (зависла?).",
                                          std::chrono::duration_cast<std::chrono::seconds>(silent).count())))

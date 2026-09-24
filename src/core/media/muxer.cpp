@@ -116,6 +116,13 @@ bool Muxer::write_packet(int stream_index, AVPacket* pkt, AVRational enc_tb) {
     AVStream* st = fmt_ctx_->streams[stream_index];
     av_packet_rescale_ts(pkt, enc_tb, st->time_base);
     pkt->stream_index = stream_index;
+    if (last_dts_.size() <= static_cast<size_t>(stream_index)) last_dts_.resize(static_cast<size_t>(stream_index) + 1, AV_NOPTS_VALUE);
+    int64_t& last = last_dts_[static_cast<size_t>(stream_index)];
+    // Пакет без даних (FLAC наприкінці віддає так оновлений заголовок STREAMINFO) з часом, що не йде
+    // вперед: у грубій шкалі часу (AVI рахує звук блоками по 4608 семплів) він потрапляє на той самий
+    // dts, що й останній кадр, і муксер відмовляє. Даних у ньому немає — пропускаємо.
+    if (pkt->size == 0 && pkt->dts != AV_NOPTS_VALUE && last != AV_NOPTS_VALUE && pkt->dts <= last) return true;
+    if (pkt->dts != AV_NOPTS_VALUE) last = pkt->dts;
     const int r = av_interleaved_write_frame(fmt_ctx_, pkt);
     if (r < 0) {
         error_ = tr("помилка запису у файл: ") + av_error_string(r);

@@ -718,6 +718,11 @@ void EncodeSession::game_audio_new_segment(const std::filesystem::path& wav, dou
 
 bool EncodeSession::finish(std::string* error) {
     if (!started_ || finished_) return true;
+    // Кодер повертає false, коли муксер не прийняв пакет, — причина тоді в самому муксері
+    auto muxer_failed = [&] {
+        if (error && error->empty()) *error = muxer_.last_error();
+        return false;
+    };
     // Незавершена група motion blur
     if (blender_) {
         if (auto last = blender_->flush()) {
@@ -729,7 +734,7 @@ bool EncodeSession::finish(std::string* error) {
     if (!copy_mode() &&
         !video_.flush([&](AVPacket* p) { return muxer_.write_packet(video_stream_, p, video_.context()->time_base); },
                       error))
-        return false;
+        return muxer_failed();
     for (auto& e : extras_) {
         std::string xerr;
         if (e->ok && e->cfg.video_parts.empty() && !e->video.flush([&](AVPacket* p) {
@@ -742,12 +747,12 @@ bool EncodeSession::finish(std::string* error) {
         if (mixer_) {
             mixer_->set_finished();
             const int64_t total = static_cast<int64_t>(std::llround(video_seconds() * kMixRate));
-            if (!produce_audio(total, error, true)) return false;
+            if (!produce_audio(total, error, true)) return muxer_failed();
             for (size_t i = 0; i < audio_encoders_.size(); ++i) {
                 const int stream = audio_streams_[i];
                 const AVRational tb = audio_encoders_[i]->context()->time_base;
                 if (!audio_encoders_[i]->flush([&](AVPacket* p) { return muxer_.write_packet(stream, p, tb); }, error))
-                    return false;
+                    return muxer_failed();
             }
             if (side_wav_) side_wav_->close(error);
             for (auto& w : stem_wavs_)

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <thread>
@@ -252,6 +253,13 @@ void GameProcess::set_high_priority(bool high) {
     if (handle_) SetPriorityClass(static_cast<HANDLE>(handle_), high ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
 }
 
+double GameProcess::cpu_seconds() {
+    FILETIME created, exited, kernel, user;
+    if (!handle_ || !GetProcessTimes(static_cast<HANDLE>(handle_), &created, &exited, &kernel, &user)) return -1;
+    auto ticks = [](const FILETIME& f) { return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+    return static_cast<double>(ticks(kernel) + ticks(user)) / 1e7;   // одиниці по 100 нс
+}
+
 
 bool GameProcess::disable_background_throttling() {
     if (!handle_) return false;
@@ -455,6 +463,20 @@ bool GameProcess::running() {
 std::optional<int> GameProcess::exit_code() {
     if (running()) return std::nullopt;
     return exit_code_;
+}
+
+double GameProcess::cpu_seconds() {
+    // /proc/<pid>/stat: після "(ім'я)" поля 14 і 15 — utime і stime у тактах
+    FILE* f = std::fopen(std::format("/proc/{}/stat", pid_).c_str(), "r");
+    if (!f) return -1;
+    char buf[1024] = {};
+    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    const char* p = std::strrchr(buf, ')');
+    if (!n || !p) return -1;
+    unsigned long long utime = 0, stime = 0;
+    if (std::sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &utime, &stime) != 2) return -1;
+    return static_cast<double>(utime + stime) / static_cast<double>(sysconf(_SC_CLK_TCK));
 }
 
 bool GameProcess::suspend() {

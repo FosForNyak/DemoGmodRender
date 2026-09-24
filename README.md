@@ -52,13 +52,16 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
   ProRes master. After the render you can also get a thumbnail, a GIF and an animated WebP.
 - **Parallel rendering.** Two to four game instances render parts of the fragment at the same
   time. The parts are joined without re-encoding, frame-exact.
-- **No frame files on disk.** Frames go from the game's own `startmovie` straight into the
-  encoder through Windows named pipes, so a long 4K render does not write hundreds of gigabytes
-  of TGA files to the disk and read them back.
+- **Frames through a pipe where the game allows it.** The program offers `startmovie` a Windows
+  named pipe instead of a file, so frames could go straight into the encoder with no TGA files on
+  disk. In tests with the current GMod (regular and RTX) the game did not write into it — most
+  likely its own path protection ("Attempt to open dangerous file path"), which the program does
+  not bypass — so it switches to files by itself and shows the game's console lines in the log.
 - **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
   page switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
-  the render the program sets Remix to video-friendly settings (DLAA, no frame generation) and
-  restores your config afterwards.
+  the render the program sets Remix to video-friendly settings (DLAA, no frame generation, shaders
+  compiled before the frame instead of in the background, so no black frames) and restores your
+  config afterwards.
 
 **Audio and voice**
 
@@ -353,10 +356,15 @@ ZIP. You can look inside before sending it.
 - **Low disk space.** Below 1 GiB free the game pauses until space is freed. Frames going
   through pipes take no disk space; if they go through files (Game page → **Frame transfer**,
   Advanced mode), lower **Frame queue on disk** or switch the frame format to JPEG.
-- **"The game did not write a single frame into the pipe".** This game build handles the
-  `startmovie` name differently. The render restarts the game with files by itself, and later
-  renders with this game use files right away. The pipe is tried again after the game updates
-  (or in 30 days), or right away with `gmdr-cli render ... --frame-transport pipe`.
+- **"The game did not write a single frame into the pipe" / "GMod does not let startmovie write
+  outside the game folders".** The game refused the pipe name (the log shows the lines of the
+  game console about it). The render restarts the game with files by itself, and later renders
+  with this game use files right away. The pipe is tried again after the game updates (or in 30
+  days), or right away with `gmdr-cli render ... --frame-transport pipe`.
+- **RTX: the start of the video is black, or the game freezes at the start.** Remix compiles
+  its shaders the first time (without a cache it can take minutes). During the render the program
+  makes Remix compile them before drawing the frame, so frames are not black; while the game is
+  busy compiling (it keeps using the CPU), the program waits instead of restarting it.
 - **The program crashed.** A `gmdr_crash_<date>.dmp` appears next to it. Please attach it
   together with `gmdr_log.txt` to your bug report.
 

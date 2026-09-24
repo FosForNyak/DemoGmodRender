@@ -13,12 +13,15 @@
 //     (стан "waiting"); кожен запуск дописується в garrysmod/fake_launches.txt
 //   * FAKE_CRASH_AT=N / FAKE_HANG_AT=N — на N-му кадрі запису "впасти" (кадр недописаний)
 //     чи "зависнути"; лише один раз (далі є garrysmod/fake_crashed.txt), з FAKE_CRASH_REPEAT=1 — щоразу
+//   * FAKE_BUSY_AT=N — на N-му кадрі запису FAKE_BUSY_SECONDS с (типово 8) не віддавати кадрів, але
+//     навантажувати процесор — як RTX Remix, що компілює шейдери (гра зайнята, а не зависла)
 //   * FAKE_DEMO_CLOCK=1 — спалахи й біпи на цілих секундах ЧАСУ ДЕМО, а не від початку
 //     запису (так видно, що після перезапуску гри відео продовжилось без зсуву)
 //   * кадри в канали (frames/frame_pipe.hpp): назва фільму \\?\pipe\... (Windows) — кадри й звук
 //     ідуть у канали, звук — шматками, щоразу відкриваючи "файл" заново, як WaveAppendTmpFile
 //     у рушії; на Linux кадри — у FIFO, які створила програма (звичайний запис файлу)
-//   * FAKE_NO_PIPES=1 — рушій, що не вміє писати в канал: такі кадри й звук мовчки не пишуться
+//   * FAKE_NO_PIPES=1 — рушій, що не пише в канал, як GMod: у консолі «Attempt to open dangerous
+//     file path!», а кадри й звук не пишуться
 // =============================================================================
 #include "core/audio/wav.hpp"
 #include "core/demo/demo_file.hpp"
@@ -277,6 +280,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
     // FAKE_STRIP_DIR=1 — імітувати рушій, що ігнорує папку в назві фільму (пише в garrysmod/)
     const bool strip = std::getenv("FAKE_STRIP_DIR") != nullptr;
     const bool no_pipes = std::getenv("FAKE_NO_PIPES") != nullptr;
+    bool pipe_refused = false;
     // Назва в просторі каналів Windows — абсолютна, рушій бере її як є
     const bool win_pipe = frames::is_windows_pipe_name(movie);
     const fs::path movie_path = strip ? gm / fs::path(movie).filename() : win_pipe ? fs::path(movie) : gm / movie;
@@ -299,7 +303,7 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         const char* e = std::getenv(n);
         return e ? std::atoi(e) : -1;
     };
-    const int crash_at = env_int("FAKE_CRASH_AT"), hang_at = env_int("FAKE_HANG_AT");
+    const int crash_at = env_int("FAKE_CRASH_AT"), hang_at = env_int("FAKE_HANG_AT"), busy_at = env_int("FAKE_BUSY_AT");
     const fs::path crashed_mark = gm / "fake_crashed.txt";
     const bool may_fail = (crash_at >= 0 || hang_at >= 0) && (std::getenv("FAKE_CRASH_REPEAT") || !fs::exists(crashed_mark));
     const double clock0 = std::getenv("FAKE_DEMO_CLOCK") ? start_tick * ti : 0.0;   // час демо першого кадру
@@ -324,7 +328,20 @@ static int run_job(const fs::path& gm, const json::Value& jobv, int w, int h, do
         }
         const std::string name = std::format("{}{:04d}.{}", movie_path.string(), frame, jpeg ? "jpg" : "tga");
         auto bytes = jpeg ? encode_jpeg(img, 90) : frames::encode_tga(img, true, false);
+        if (frame == busy_at && busy_at >= 0) {
+            const int secs = std::max(1, env_int("FAKE_BUSY_SECONDS") > 0 ? env_int("FAKE_BUSY_SECONDS") : 8);
+            con << "FakeGMod: компілюю шейдери " << secs << " с\n";
+            con.flush();
+            volatile double x = 0;
+            for (const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(secs); std::chrono::steady_clock::now() < until;)
+                for (int i = 0; i < 100000; ++i) x = x + std::sqrt(static_cast<double>(i));
+        }
         const bool skip_frame = no_pipes && is_pipe_target(name);   // рушій не вміє писати в канал
+        if (skip_frame && !pipe_refused) {
+            pipe_refused = true;
+            con << "Attempt to open dangerous file path! Blocking: '" << name << "'\n";
+            con.flush();
+        }
         if (may_fail && (frame == crash_at || frame == hang_at)) {
             std::ofstream(crashed_mark) << frame;
             if (frame == crash_at) {

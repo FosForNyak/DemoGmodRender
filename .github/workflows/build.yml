@@ -68,6 +68,11 @@ jobs:
             & third_party\ffmpeg\bin\ffprobe.exe -v error -show_entries stream=codec_name,nb_frames,duration -of compact $out
             if (-not (Test-Path ($out -replace '\.mp4$', '.srt'))) { throw "немає субтитрів" }
           }
+          # AVI з FLAC: кодер наприкінці віддає порожній пакет з новим заголовком — муксер не має падати
+          $avi = "$PWD\build\out_flac.avi"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $avi --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 60 --codec libx264 --acodec flac --menu-delay 1 --start 1 --end 4
+          if ($LASTEXITCODE -ne 0) { throw "AVI з FLAC не вдався" }
           # Той самий рендер файлами на диску — кадри й звук мають збігтися з каналом
           $files = "$PWD\build\out_tga_files.mp4"
           & build\gmdr-cli.exe render build\td\test24.dem -o $files --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
@@ -87,7 +92,7 @@ jobs:
           $rc2 = $LASTEXITCODE
           Remove-Item Env:FAKE_NO_PIPES
           Remove-Item "$PWD\build\frame_transport.json" -ErrorAction SilentlyContinue
-          if ($rc -ne 0 -or $log -notmatch "не записала в канал жодного кадру") { $log; throw "перехід з каналу на файли не спрацював" }
+          if ($rc -ne 0 -or $log -notmatch "dangerous file path") { $log; throw "перехід з каналу на файли не спрацював (або не видно причини з консолі гри)" }
           $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $nopipe)
           if ([math]::Abs($d - 4) -gt 0.1) { throw "після переходу на файли: очікувалось 4 с відео, а не $d" }
           if ($rc2 -ne 0 -or $log2 -notmatch "канал уже не спрацював") { $log2; throw "невдачу каналу не запам'ятано" }
@@ -167,6 +172,17 @@ jobs:
             $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $out)
             if ([math]::Abs($d - 6) -gt 0.1) { throw "після збою ($m): очікувалось 6 с відео, а не $d" }
           }
+          # Гра 8 с не віддає кадрів, але вантажить процесор (як Remix, що компілює шейдери): сторож (3 с)
+          # не вважає її завислою і не перезапускає
+          $env:FAKE_BUSY_AT = "40"
+          $out = "$PWD\build\out_BUSY.mp4"
+          $log = & build\gmdr-cli.exe render build\td\test24.dem -o $out --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --end 7 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Remove-Item Env:FAKE_BUSY_AT
+          if ($rc -ne 0 -or $log -match "зависла") { $log; throw "зайнята гра: сторож перезапустив її" }
+          $d = [double](& third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 $out)
+          if ([math]::Abs($d - 6) -gt 0.1) { throw "зайнята гра: очікувалось 6 с відео, а не $d" }
           # Паралельний рендер: дві й три копії гри рендерять свої частини одночасно — склеєне відео має
           # збігатися зі звичайним кадр у кадр (спалахи й біпи на тих самих місцях); з додатковою версією
           # і зі збоєм гри в одній із частин

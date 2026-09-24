@@ -53,6 +53,7 @@ private:
     bool                      fragmented_ = false;
     std::string               path_;
     std::string               error_;
+    std::vector<int64_t>      last_dts_;   // останній записаний dts кожного потоку (у його time_base)
     mutable std::mutex        mutex_;
 };
 

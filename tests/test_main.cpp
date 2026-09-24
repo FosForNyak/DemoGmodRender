@@ -2426,6 +2426,7 @@ static void test_rtx_profile() {
     CHECK(game::apply_rtx_render_profile(*g, backup, &err));
     auto conf = read_file_text(root / "rtx.conf");
     CHECK(conf && conf->find("rtx.qualityDLSS = 5") != std::string::npos);
+    CHECK(conf && conf->find("rtx.shader.enableAsyncCompilation = False") != std::string::npos);   // без чорних кадрів
     CHECK(game::restore_rtx_profile(*g, backup));
     CHECK(!fs::exists(root / "rtx.conf") && !fs::exists(backup));
 

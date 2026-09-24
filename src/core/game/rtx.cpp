@@ -42,6 +42,10 @@ const std::map<std::string, std::string> kProfile = {
     {"rtx.frameGenerationType", "0"},
     // Заставка "Alt+X — меню Remix" не повинна потрапити у відео
     {"rtx.hideSplashMessage", "True"},
+    // Шейдери — синхронно: типово Remix компілює їх у фоні й доти нічого не малює, і в запис ішли
+    // чорні кадри (компіляція починалась разом із першими кадрами демо). Синхронно кадр просто
+    // чекає, поки шейдери будуть готові, — з фіксованим кроком часу це не зсуває ні кадрів, ні звуку
+    {"rtx.shader.enableAsyncCompilation", "False"},
 };
 constexpr const char* kProfileMarker = "# GMod Demo Render";
 } // namespace
