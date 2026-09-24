@@ -72,16 +72,19 @@ file(GLOB_RECURSE GMDR_CORE_SOURCES CONFIGURE_DEPENDS
 add_library(gmdr_core STATIC ${GMDR_CORE_SOURCES})
 target_include_directories(gmdr_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 
-# Lua-драйвер вбудовується в програму як масив байтів (щоб .exe був самодостатнім).
-# Масив, а не рядковий літерал: у MSVC літерал не може бути довшим за ~16 КБ.
+# Lua-драйвер і помічник синтезу мовлення вбудовуються в програму як масиви байтів (щоб .exe
+# був самодостатнім). Масив, а не рядковий літерал: у MSVC літерал не може бути довшим за ~16 КБ.
+function(gmdr_embed_text src inc_name)
+    file(READ "${src}" _hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
+    string(REPLACE "0x0a," "0x0a,\n" _bytes "${_bytes}")   # рядок файлу = рядок масиву
+    file(WRITE "${CMAKE_BINARY_DIR}/generated/${inc_name}.tmp" "${_bytes}0x00\n")
+    configure_file("${CMAKE_BINARY_DIR}/generated/${inc_name}.tmp" "${CMAKE_BINARY_DIR}/generated/${inc_name}" COPYONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${src}")
+endfunction()
 set(GMDR_DRIVER_LUA "${CMAKE_SOURCE_DIR}/src/core/game/gmdr_driver.lua")
-file(READ "${GMDR_DRIVER_LUA}" _gmdr_lua_hex HEX)
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _gmdr_lua_bytes "${_gmdr_lua_hex}")
-string(REPLACE "0x0a," "0x0a,\n" _gmdr_lua_bytes "${_gmdr_lua_bytes}")   # рядок Lua = рядок масиву
-file(WRITE "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp" "${_gmdr_lua_bytes}0x00\n")
-configure_file("${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc.tmp"
-               "${CMAKE_BINARY_DIR}/generated/gmdr_driver_lua.inc" COPYONLY)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GMDR_DRIVER_LUA}")
+gmdr_embed_text("${GMDR_DRIVER_LUA}" gmdr_driver_lua.inc)
+gmdr_embed_text("${CMAKE_SOURCE_DIR}/src/core/dub/gmdr_voice.py" gmdr_voice_py.inc)
 target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated"
                            "${CMAKE_SOURCE_DIR}/third_party/imgui")   # stb_truetype для підписів на кадрі
 target_link_libraries(gmdr_core PUBLIC

@@ -15,6 +15,7 @@
 #include "encode_session.hpp"
 #include "markers.hpp"
 #include "subtitles.hpp"
+#include "dubbing.hpp"
 #include "edit_package.hpp"
 #include "versions.hpp"
 #include "../util/i18n.hpp"
@@ -122,6 +123,17 @@ void Job::set_stage(const std::string& stage, double fraction) {
         if (fraction >= 0) progress_.fraction = fraction;
     }
     log_info("== {} ==", stage);
+}
+
+void Job::report_progress(const std::string& stage, double fraction) {
+    bool changed;
+    {
+        std::lock_guard lock(mutex_);
+        changed = progress_.stage != stage;
+        progress_.stage = stage;
+        if (fraction >= 0) progress_.fraction = fraction;
+    }
+    if (changed) log_info("== {} ==", stage);
 }
 
 void Job::fail(const std::string& message) {
@@ -862,6 +874,7 @@ void TranscribeJob::run() {
         transcript_ = ts;
     }
     log_info("{}", trf("Розшифровка: {} реплік — {}", ts->lines.size(), path_to_utf8(speech::transcript_path(s_.demo_path))));
+    collect_voice_samples(sel, speakers, *ts);
     succeed(path_to_utf8(speech::transcript_path(s_.demo_path)));
 }
 
@@ -1255,7 +1268,10 @@ void RenderJob::run() {
         const fs::path out = path_from_utf8(s_.output_path);
         es.stems_dir = path_to_utf8(out.parent_path() / path_from_utf8(path_to_utf8(out.stem()) + "_монтаж"));
     }
-    else if (!trim(s_.extra_versions).empty()) log_info("{}", trf("Тестовий прогін: додаткові версії не кодуються"));
+    if (test_run_ && !trim(s_.extra_versions).empty()) log_info("{}", trf("Тестовий прогін: додаткові версії не кодуються"));
+    // Озвучення перекладу кладеться на звук гри без голосів: окремі WAV джерел — у тимчасову теку
+    if (es.stems_dir.empty() && !test_run_ && !part_ && dub_needs_stems(s_) && s_.output_path.find('%') == std::string::npos)
+        es.stems_dir = path_to_utf8(dub_work_dir(s_) / "stems");
     update([&](Progress& p) {
         p.range_start = range_start;
         p.range_end = range_end;
@@ -1263,9 +1279,12 @@ void RenderJob::run() {
         p.expected_seconds = expected_seconds;
     });
 
-    // Текст розмов у субтитрах: розпізнати мовлення фрагмента до запуску гри (якщо ще ні)
+    // Текст розмов у субтитрах і переклад: розпізнати мовлення фрагмента до запуску гри (якщо ще ні)
     std::optional<speech::Transcript> transcript;
-    if (s_.speech_subtitles && s_.subtitles_srt && !test_run_ && !speakers.empty()) {
+    const bool want_transcript = (s_.speech_subtitles && s_.subtitles_srt) || translation_requested(s_);
+    if (translation_requested(s_) && !test_run_ && speakers.empty())
+        log_warn("{}", trf("Переклад пропущено: у відео немає голосів гравців"));
+    if (want_transcript && !test_run_ && !part_ && !speakers.empty()) {
         set_stage(tr("Розпізнавання мовлення"), 0);
         transcript = ensure_transcript(s_, speakers, range_start * static_cast<double>(A.tick_interval) - 1,
                                        range_end * static_cast<double>(A.tick_interval) + 1,
@@ -1275,7 +1294,11 @@ void RenderJob::run() {
             update([](Progress& p) { p.stage = tr("Скасовано"); });
             return;
         }
-        if (!transcript) log_warn("{}", trf("Мовлення не розпізнано ({}) — у субтитрах будуть лише імена", err));
+        if (!transcript) {
+            if (s_.speech_subtitles && s_.subtitles_srt)
+                log_warn("{}", trf("Мовлення не розпізнано ({}) — у субтитрах будуть лише імена", err));
+            if (translation_requested(s_)) log_warn("{}", trf("Переклад пропущено: мовлення не розпізнано ({})", err));
+        }
     }
 
     // ---- Дописування рендеру, урваного збоєм програми чи ПК ----
@@ -1895,7 +1918,7 @@ void RenderJob::run() {
                 if (s_.subtitles_srt && !speakers.empty()) {
                     // Субтитри пишемо одразу: відрізок і голоси вже відомі
                     write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, expected_seconds,
-                                            transcript ? &*transcript : nullptr);
+                                            s_.speech_subtitles && transcript ? &*transcript : nullptr);
                 }
                 if (s_.speaker_overlay && !speakers.empty())
                     session.set_overlay(make_overlay(s_, speakers, spec.voice_origin_sample, expected_seconds, img.width,
@@ -2224,11 +2247,12 @@ void RenderJob::run() {
                     : std::vector<Chapter>{};
     finalize_output(s_, fragmented, frames_done, secs, chapters);
     if (!test_run_) make_after_render(s_, extras_done);
-    if (!es.stems_dir.empty())
+    if (s_.edit_package && !es.stems_dir.empty())
         write_edit_project(s_, es, frames_done, stems,
                            chapters_for_range(parse_markers(s_.markers), video_start_tick,
                                               video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti));
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
+    if (frames_done > 0) translate_after_render(stems, speakers, transcript ? &*transcript : nullptr, video_t0, secs, es.audio);
     if (s_.rtx) {
         // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
         const auto eff = game::read_remix_effective_options(*gmod_);
@@ -2289,6 +2313,35 @@ void RenderJob::run() {
         log_info("{}", trf("Тестовий прогін: {}", head));
     }
     succeed(s_.output_path);
+}
+
+// ======================= Переклад і озвучення після рендеру =========================
+void RenderJob::translate_after_render(const std::vector<EncodeSession::StemFile>& stems,
+                                       const std::vector<const voice::SpeakerTrack*>& speakers,
+                                       const speech::Transcript* transcript, double t0, double seconds,
+                                       const media::AudioEncoderSettings& audio) {
+    // Тимчасові окремі WAV для озвучення прибираються за будь-якого результату
+    struct TempGuard {
+        const RenderSettings& s;
+        ~TempGuard() {
+            std::error_code ec;
+            if (!s.keep_temp_files) fs::remove_all(dub_work_dir(s), ec);
+        }
+    } temp_guard{s_};
+    if (test_run_ || part_ || seconds <= 0) return;
+    if (transcript) collect_voice_samples(s_, speakers, *transcript);
+    if (!translation_requested(s_) || !transcript || cancel_) return;
+    DubSource src;
+    src.lines = transcript->lines;
+    for (const auto& x : subtitle_sources(s_, speakers)) src.keys.push_back(x.track->key);
+    src.speakers = speakers;
+    src.origin = t0;
+    src.duration = seconds;
+    src.stems = stems;
+    src.main_audio = audio;
+    const auto made = make_translations(s_, src, [&](const std::string& what, double f) { report_progress(tr("Переклад і озвучення: ") + what, f); },
+                                        &cancel_);
+    if (!made.empty()) log_info("{}", trf("Переклад і озвучення: файлів — {}", made.size()));
 }
 
 // ========================== Паралельний рендер ==============================
@@ -2602,12 +2655,13 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     const int32_t start_tick = static_cast<int32_t>(std::llround(t0 / static_cast<double>(A.tick_interval)));
     const int32_t end_tick = start_tick + static_cast<int32_t>(std::llround(secs / in.vti));
     if (s_.subtitles_srt && !in.speakers.empty())
-        write_speaker_subtitles(s_, in.speakers, spec.voice_origin_sample, secs, in.transcript);
+        write_speaker_subtitles(s_, in.speakers, spec.voice_origin_sample, secs, s_.speech_subtitles ? in.transcript : nullptr);
     const auto markers = chapters_for_range(parse_markers(s_.markers), start_tick, end_tick, in.vti);
     finalize_output(s_, false, frames_done, secs, s_.chapters ? markers : std::vector<Chapter>{});
     make_after_render(s_, extras_done);
-    if (!fes.stems_dir.empty()) write_edit_project(s_, fes, frames_done, stems, markers);
+    if (s_.edit_package && !fes.stems_dir.empty()) write_edit_project(s_, fes, frames_done, stems, markers);
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, start_tick, secs);
+    if (frames_done > 0) translate_after_render(stems, in.speakers, in.transcript, t0, secs, fes.audio);
     const auto t_end = Clock::now();
     log_info("{}", trf("Готово! {} — {} кадрів, {}, {}", s_.output_path, frames_done, format_duration(secs),
                        format_bytes(file_size_or_zero(out))));

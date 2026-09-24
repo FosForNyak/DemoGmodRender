@@ -23,7 +23,13 @@
 #include "core/game/lua_driver.hpp"
 #include "core/game/process.hpp"
 #include "core/game/rtx.hpp"
+#include "core/dub/dub_mix.hpp"
+#include "core/dub/tts.hpp"
+#include "core/dub/voice_library.hpp"
+#include "core/render/dubbing.hpp"
 #include "core/render/jobs.hpp"
+#include "core/translate/translate.hpp"
+#include "core/util/secret.hpp"
 #include "core/render/markers.hpp"
 #include "core/render/subtitles.hpp"
 #include "core/render/versions.hpp"
@@ -1685,6 +1691,207 @@ static void test_i18n() {
     CHECK(sys == "uk" || sys == "en");
 }
 
+// Переклад і озвучення: запити сервісів, розстановка фраз, мікс, мукс доріжок, ключі
+static void test_translate_dub() {
+    std::printf("[translate & dub]\n");
+    namespace fs = std::filesystem;
+    // ---- Мови й сервіси ----
+    CHECK(translate::find_language("pt") && std::string(translate::find_language("pt")->code) == "pt-BR");
+    CHECK(translate::base_code("pt-BR") == "pt");
+    CHECK(!translate::supports("deepl", "be") && translate::supports("google", "be") && translate::supports("openai", "eo"));
+    CHECK(dub::engine_supports("omnivoice", "", "lt") && !dub::engine_supports("elevenlabs", "eleven_multilingual_v2", "lt"));
+    CHECK(dub::engine_supports("elevenlabs", "eleven_v3", "lt") && !dub::engine_supports("elevenlabs", "eleven_v3", "eo"));
+    CHECK(dub::engine_language("pt-BR") == "pt" && dub::engine_language("zh") == "zh");
+    {
+        translate::Config c{"deepl", "abc:fx", "", ""};
+        const auto r = translate::build_request(c, {"Привіт"}, "uk", "de");
+        CHECK(r.url == "https://api-free.deepl.com/v2/translate");
+        CHECK(r.body.find("\"target_lang\":\"DE\"") != std::string::npos && r.body.find("\"source_lang\":\"UK\"") != std::string::npos);
+        c.key = "paid";
+        CHECK(translate::build_request(c, {"x"}, "auto", "en").url == "https://api.deepl.com/v2/translate");
+        const auto p = translate::parse_response(c, R"({"translations":[{"text":"Hallo"}]})", 1, nullptr);
+        CHECK(p && p->size() == 1 && (*p)[0] == "Hallo");
+        CHECK(!translate::parse_response(c, R"({"translations":[]})", 1, nullptr));
+    }
+    {
+        translate::Config c{"google", "k", "", ""};
+        const auto r = translate::build_request(c, {"a", "b"}, "auto", "zh");
+        CHECK(r.url.find("/language/translate/v2?key=k") != std::string::npos && r.body.find("\"target\":\"zh-CN\"") != std::string::npos);
+        const auto p = translate::parse_response(c, R"({"data":{"translations":[{"translatedText":"1"},{"translatedText":"2"}]}})", 2, nullptr);
+        CHECK(p && (*p)[1] == "2");
+    }
+    {
+        translate::Config c{"libre", "", "http://host:5000/", ""};
+        CHECK(translate::build_request(c, {"a"}, "uk", "en").url == "http://host:5000/translate");
+        const auto p = translate::parse_response(c, R"({"translatedText":["x","y"]})", 2, nullptr);
+        CHECK(p && (*p)[0] == "x");
+    }
+    {
+        translate::Config c{"openai", "", "", "qwen2.5:7b"};
+        const auto r = translate::build_request(c, {"Привіт", "Бувай"}, "uk", "de");
+        CHECK(r.url == "http://localhost:11434/v1/chat/completions" && r.body.find("qwen2.5:7b") != std::string::npos);
+        // Модель загорнула відповідь у ```json ...```
+        const auto p = translate::parse_response(
+            c, R"({"choices":[{"message":{"content":"```json\n[\"Hallo\", \"Tschüss\"]\n```"}}]})", 2, nullptr);
+        CHECK(p && p->size() == 2 && (*p)[1] == "Tschüss");
+        std::string err;
+        CHECK(!translate::parse_response(c, R"({"choices":[{"message":{"content":"[\"one\"]"}}]})", 2, &err) && !err.empty());
+    }
+    {
+        std::string err;
+        const auto r = translate::translate({"fake", "", "", ""}, {"a", "", "a", " b "}, "uk", "de", {}, nullptr, &err);
+        CHECK(r && r->size() == 4 && (*r)[0] == "[de] a" && (*r)[1].empty() && (*r)[2] == "[de] a" && (*r)[3] == "[de] b");
+        CHECK(!translate::translate({"deepl", "", "", ""}, {"a"}, "uk", "de", {}, nullptr, &err) && !err.empty());   // без ключа
+        CHECK(!translate::translate({"openai", "", "", ""}, {"a"}, "uk", "de", {}, nullptr, &err));                    // без моделі
+    }
+    // ---- Ключі: шифрування і звіт ----
+    {
+        const std::string sec = protect_secret("sk-TEST-123");
+#ifdef _WIN32
+        CHECK(sec.rfind("dpapi:", 0) == 0 && sec.find("sk-TEST") == std::string::npos);   // DPAPI: не видно відкритим текстом
+#endif
+        CHECK(unprotect_secret(sec) == "sk-TEST-123");
+        CHECK(unprotect_secret("") .empty() && protect_secret("").empty());
+        CHECK(base64_decode(base64_encode(std::string("\x00\xff\x10z", 4))) == std::string("\x00\xff\x10z", 4));
+        render::RenderSettings s;
+        s.deepl_key = sec;
+        s.output_path = "x.mp4";
+        const std::string red = render::redact_secrets_json(s.to_json().dump());
+        CHECK(red.find(sec) == std::string::npos && red.find("(removed)") != std::string::npos && red.find("x.mp4") != std::string::npos);
+        CHECK(render::is_secret_field("elevenlabs_key") && !render::is_secret_field("key") && !render::is_secret_field("ui_page"));
+        CHECK(render::translator_config(s).key == "sk-TEST-123" && render::translator_config(s).provider == "deepl");
+    }
+    // ---- Налаштування озвучення і шаблони ----
+    {
+        render::RenderSettings s;
+        s.dub_languages = "de, xx ,DE,en,pt";
+        CHECK((render::dub_language_list(s) == std::vector<std::string>{"de", "en", "pt-BR"}));
+        CHECK(!render::translation_requested(s));
+        s.dub = true;
+        CHECK(render::translation_requested(s) && render::dub_needs_stems(s));
+        s.dub_outputs = "videos, audio";
+        CHECK(render::dub_output(s, "audio") && !render::dub_output(s, "tracks"));
+        render::apply_template(s, *render::find_template("youtube"));
+        CHECK(s.dub_outputs == "audio" && s.dub_audio_format == "mp3" && s.translate_subtitles && s.loudness_target == -14);
+        CHECK(render::find_template("shorts") && !render::find_template("nope"));
+        s.tts_clone = true;
+        CHECK(!render::clone_allowed(s));
+        s.tts_clone_ack = true;
+        CHECK(render::clone_allowed(s));
+    }
+    // ---- Помічник OmniVoice: завдання і протокол ----
+    {
+        std::vector<dub::SpeakerVoice> voices(2);
+        voices[0].ref_wav = "C:/r/ref.wav";
+        voices[0].ref_text = "текст";
+        voices[1].instruct = dub::generic_instruct(1);
+        const std::string job = dub::make_job_json({}, voices, {{"Hallo", "de", 0, "a.wav"}, {"Olá", "pt-BR", 1, "b.wav"}});
+        const auto j = json::parse(job);
+        CHECK(j && (*j)["items"].items().size() == 2);
+        if (j && (*j)["items"].items().size() == 2) {
+            CHECK((*j)["items"][0]["ref_audio"].as_string() == "C:/r/ref.wav" && (*j)["items"][0]["ref_text"].as_string() == "текст");
+            CHECK((*j)["items"][1]["instruct"].as_string() == "male, low pitch" && (*j)["items"][1]["language"].as_string() == "pt");
+            CHECK(!(*j)["items"][1].has("ref_audio"));
+        }
+        auto e = dub::parse_helper_line("GMDR_FAIL 12 CUDA out of memory\r");
+        CHECK(e.kind == dub::HelperEvent::Fail && e.index == 12 && e.text == "CUDA out of memory");
+        e = dub::parse_helper_line("GMDR_READY cuda:0");
+        CHECK(e.kind == dub::HelperEvent::Ready && e.text == "cuda:0");
+        CHECK(dub::parse_helper_line("GMDR_DONE 3").index == 3 && dub::parse_helper_line("Loading weights...").kind == dub::HelperEvent::None);
+        CHECK(dub::parse_helper_line("GMDR_DONE x").kind == dub::HelperEvent::None);
+    }
+    // ---- Розстановка фраз ----
+    {
+        // Влазить — як є; довша — пришвидшення; ще довша — до межі, а наступна фраза гравця зсувається
+        auto p = dub::place_clips({{1.0, 3.0, "a", 1.5}, {5.0, 6.0, "a", 1.0}});
+        CHECK_NEAR(p[0].at, 1.0, 1e-9);
+        CHECK_NEAR(p[0].tempo, 1.0, 1e-9);
+        p = dub::place_clips({{1.0, 3.0, "a", 4.4}, {5.0, 6.0, "a", 1.0}});   // до наступної 3.88 с
+        CHECK(p[0].tempo > 1.1 && p[0].tempo < 1.2);
+        CHECK_NEAR(p[1].at, 5.0, 1e-6);
+        p = dub::place_clips({{1.0, 3.0, "a", 8.0}, {5.0, 6.0, "a", 1.0}});
+        CHECK_NEAR(p[0].tempo, 1.35, 1e-9);
+        CHECK_NEAR(p[1].at, 1.0 + 8.0 / 1.35 + 0.12, 1e-6);
+        // Інший гравець не заважає; неозвучена фраза нічого не зсуває
+        p = dub::place_clips({{1.0, 2.0, "a", 1.0}, {1.2, 2.0, "b", 3.0}, {1.5, 2.0, "a", 0}});
+        CHECK_NEAR(p[1].at, 1.2, 1e-9);
+        CHECK_NEAR(p[1].tempo, 1.35, 1e-9);   // остання фраза b: до кінця оригіналу + 0.6 с, не швидше за 1.35
+        CHECK_NEAR(p[0].tempo, 1.0, 1e-9);
+    }
+    // ---- Фрази: синтез (тестовий рушій), читання, темп, мікс ----
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_dub";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    {
+        dub::TtsConfig c;
+        c.engine = "fake";
+        std::string err;
+        const std::vector<dub::TtsItem> items = {{"Hallo Welt, wie geht's?", "de", 0, dir / "0.wav"}, {"Ja", "de", 1, dir / "1.wav"}};
+        CHECK(dub::synthesize(c, {}, items, dir, {}, nullptr, nullptr, &err));
+        const auto a = dub::load_clip(dir / "0.wav", &err);
+        CHECK(a.has_value());
+        if (a) {
+            const double secs = static_cast<double>(a->size() / 2) / 48000;
+            CHECK_NEAR(secs, 0.3 + 23.0 / 14.0 + 0.04, 0.03);   // тон + 40 мс запасу в кінці
+            const auto fast = dub::change_tempo(*a, 1.25);
+            CHECK_NEAR(static_cast<double>(fast.size() / 2) / 48000, secs / 1.25, 0.05);
+            double sum = 0;
+            for (float v : *a) sum += static_cast<double>(v) * v;
+            CHECK_NEAR(20 * std::log10(std::sqrt(sum / a->size())), -20.0, 1.5);   // рівень вирівняно
+            // Джерело для змішувача: фраза з 0.5 с
+            dub::ClipsInput in({{24000, *a}});
+            std::vector<float> buf(48000 * 2, 0.0f);
+            in.mix(0, buf.data(), 48000, 1.0f);
+            CHECK(std::abs(buf[2 * 20000]) < 1e-9f);
+            double after = 0;
+            for (size_t k = 30000; k < 48000; ++k) after = std::max(after, static_cast<double>(std::abs(buf[2 * k])));
+            CHECK(after > 0.05);
+            // Мікс: звук «гри» (тиша) + фраза → FLAC і MKA потрібної тривалості
+            audio::WavWriter w;
+            std::vector<float> silence(48000 * 2 * 3, 0.0f);
+            CHECK(w.open(dir / "game.wav", 48000, 2, audio::WavWriter::Format::Int16, &err) && w.write(silence.data(), 48000 * 3) &&
+                  w.close(&err));
+            dub::MixSpec spec;
+            spec.game = dir / "game.wav";
+            spec.seconds = 3.0;
+            spec.duck = true;
+            media::AudioEncoderSettings aac;
+            aac.codec = "aac";
+            aac.bitrate = 128000;
+            media::AudioEncoderSettings flac;
+            flac.codec = "flac";
+            const std::vector<dub::MixOutput> outs = {{path_to_utf8(dir / "d.mka"), "matroska", aac, "Deutsch", "deu"},
+                                                      {path_to_utf8(dir / "d.flac"), "", flac, "Deutsch", "deu"}};
+            CHECK(dub::mix_dub(spec, {{24000, *a}}, outs, {}, nullptr, &err));
+            media::MediaFileInfo info;
+            CHECK(media::probe_media_file(path_to_utf8(dir / "d.flac"), info, &err) && std::abs(info.audio_seconds - 3.0) < 0.05);
+            // Мукс: «відео» з d.mka як основний файл + ще доріжка з мітками мови
+            CHECK(media::mux_files({{path_to_utf8(dir / "d.mka"), true, true, true, {}, "ukr", 1},
+                                    {path_to_utf8(dir / "d.flac"), false, true, false, "Deutsch (AI)", "deu", 0}},
+                                   path_to_utf8(dir / "both.mkv"), false, &err));
+            CHECK(media::probe_media_file(path_to_utf8(dir / "both.mkv"), info, &err) && info.audio_streams == 2);
+        }
+    }
+    // ---- Бібліотека голосів: JSON ----
+    {
+        dub::VoiceProfile p;
+        p.key = "steam:76561198000000001";
+        p.names = {"Гравець"};
+        p.samples.push_back({"a.wav", "Привіт усім", "uk", 3.5, "match", 12.25, 1700000000});
+        p.elevenlabs_voice_id = "abc";
+        const auto q = dub::profile_from_json(dub::profile_to_json(p));
+        CHECK(q && q->key == p.key && q->name() == "Гравець" && q->samples.size() == 1 && q->samples[0].demo_time == 12.25 &&
+              q->elevenlabs_voice_id == "abc" && q->total_seconds() == 3.5);
+        CHECK(dub::persistent_key("steam:1") && !dub::persistent_key("slot:3") && !dub::persistent_key("steam:"));
+        speech::Line l1{1.0, 4.0, "steam:1", "A", "Це досить довга фраза"}, l2{5.0, 5.5, "steam:1", "A", "коротко"},
+            l3{6.0, 8.0, "steam:2", "B", "Чужа фраза гравця"};
+        const auto cand = dub::sample_candidates("steam:1", {l2, l1, l3});
+        CHECK(cand.size() == 1 && cand[0].start == 1.0);
+    }
+    fs::remove_all(dir, ec);
+}
+
 static void test_speech() {
     std::printf("[speech]\n");
     voice::SpeakerTrack t;
@@ -2097,6 +2304,7 @@ int main(int argc, char** argv) {
     test_part_assembly();
     test_resume_record();
     test_speech();
+    test_translate_dub();
     test_i18n();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];

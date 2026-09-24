@@ -21,7 +21,11 @@ namespace gmdr::render {
     X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files) \
     X(extra_versions) X(notify_when_done) X(minimize_to_tray) X(speaker_overlay) X(edit_package) X(library_dirs) X(speed) X(speed_audio) \
     X(speech_subtitles) X(whisper_language) X(whisper_model) X(whisper_cli) X(ui_language) X(parallel_games)  \
-    X(ui_advanced) X(ui_theme) X(ui_accent) X(ui_scale) X(ui_compact) X(ui_sidebar_collapsed) X(ui_page)
+    X(ui_advanced) X(ui_theme) X(ui_accent) X(ui_scale) X(ui_compact) X(ui_sidebar_collapsed) X(ui_page)  \
+    X(dub_languages) X(translate_subtitles) X(dub) X(dub_outputs) X(dub_audio_format) X(dub_original_volume) \
+    X(dub_template) X(translator) X(translator_url) X(translator_model) X(deepl_key) X(google_key)      \
+    X(libre_key) X(openai_key) X(elevenlabs_key) X(tts_engine) X(tts_device) X(tts_python) X(tts_clone) \
+    X(tts_clone_ack) X(elevenlabs_model) X(elevenlabs_voice) X(voice_library_auto)
 
 namespace {
 json::Value to_value(const std::string& v) { return json::Value::string(v); }
@@ -49,6 +53,30 @@ RenderSettings RenderSettings::from_json(const json::Value& j) {
     GMDR_SETTINGS_FIELDS(X)
 #undef X
     return s;
+}
+
+bool is_secret_field(const std::string& name) { return name.size() > 4 && name.ends_with("_key"); }
+
+namespace {
+json::Value redact(const json::Value& v) {
+    if (v.is_object()) {
+        json::Value o = json::Value::object();
+        for (const auto& [k, x] : v.members())
+            o.set(k, is_secret_field(k) && !x.as_string().empty() ? json::Value::string("(removed)") : redact(x));
+        return o;
+    }
+    if (v.is_array()) {
+        json::Value a = json::Value::array();
+        for (const auto& x : v.items()) a.push(redact(x));
+        return a;
+    }
+    return v;
+}
+} // namespace
+
+std::string redact_secrets_json(const std::string& text) {
+    auto j = json::parse(text);
+    return j ? redact(*j).dump() : text;
 }
 
 bool save_settings(const RenderSettings& s, const std::string& path, std::string* error) {

@@ -43,7 +43,9 @@ void open_path(const std::string& path);              // відкрити фай
 void show_in_folder(const std::string& path);         // показати файл у провіднику
 std::vector<std::string> ui_font_candidates();        // шрифти з кирилицею
 std::vector<std::string> ui_bold_font_candidates();   // напівжирні — для заголовків і кнопок дій
-std::vector<std::string> ui_symbol_font_candidates(); // резервні шрифти із символами (✓ ✗ ▶)
+// Резервні шрифти для гліфів, яких немає в основному: символи (✓ ✗ ▶), китайська, японська,
+// корейська, деванагарі. Група — варіанти для одного письма (береться перший наявний).
+std::vector<std::vector<std::string>> ui_fallback_fonts();
 std::string clipboard_text_set(const std::string& text);   // скопіювати в буфер обміну
 
 // Для автоматичних тестів: зберегти знімок вікна у PPM (змінна GMDR_SCREENSHOT).

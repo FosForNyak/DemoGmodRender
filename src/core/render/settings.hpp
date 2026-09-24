@@ -114,6 +114,29 @@ struct RenderSettings {
     int         threads = 0;
     bool        keep_temp_files = false;
 
+    // ---- Переклад і озвучення (розпізнане мовлення → інші мови) ----
+    std::string dub_languages;            // мови перекладу через кому: "en,de,pl"
+    bool        translate_subtitles = false;   // перекладені субтитри <відео>.<мова>.srt
+    bool        dub = false;              // озвучити переклад (голосом гравця, якщо клонування дозволено)
+    std::string dub_outputs = "tracks";   // куди озвучення, через кому: tracks (доріжки в основному відео),
+                                          // videos (окреме відео для кожної мови), audio (окремі аудіофайли)
+    std::string dub_audio_format = "mp3"; // окремі аудіофайли: mp3 / flac / wav / m4a
+    double      dub_original_volume = 0.12;   // оригінальні голоси під озвученням (0 — прибрати)
+    std::string dub_template;             // останній вибраний шаблон публікації (для вікна)
+    std::string translator = "deepl";     // deepl / google / libre / openai (translate::providers)
+    std::string translator_url;           // libre / openai: адреса (порожньо — типова)
+    std::string translator_model;         // openai: модель ("qwen2.5:7b", "gpt-4o-mini")
+    // API-ключі — лише зашифровані (util/secret.hpp: "dpapi:…"), у звіт про проблему не потрапляють
+    std::string deepl_key, google_key, libre_key, openai_key, elevenlabs_key;
+    std::string tts_engine = "omnivoice"; // omnivoice (локально) / elevenlabs / fake
+    std::string tts_device = "auto";      // omnivoice: auto / cuda / cpu
+    std::string tts_python;               // omnivoice: свій Python з пакетом omnivoice (порожньо — встановлений програмою)
+    bool        tts_clone = false;        // озвучувати голосом самого гравця (клонування)
+    bool        tts_clone_ack = false;    // користувач підтвердив згоду гравців на клонування
+    std::string elevenlabs_model = "eleven_multilingual_v2";
+    std::string elevenlabs_voice;         // голос ElevenLabs для всіх без клону (порожньо — різні готові)
+    bool        voice_library_auto = false;   // накопичувати зразки голосів з кожного розпізнаного демо
+
     // ---- Програма (вікно) ----
     bool        notify_when_done = true;  // сповіщення Windows, коли рендер чи черга закінчились
     bool        minimize_to_tray = false; // згорнуте вікно — лише значком у треї
@@ -122,6 +145,11 @@ struct RenderSettings {
     json::Value to_json() const;
     static RenderSettings from_json(const json::Value& j);
 };
+
+// Поле з API-ключем (зберігається зашифрованим, у звіт не потрапляє)
+bool is_secret_field(const std::string& name);
+// JSON налаштувань чи черги без API-ключів (для звіту про проблему); не JSON — як є
+std::string redact_secrets_json(const std::string& text);
 
 bool save_settings(const RenderSettings& s, const std::string& path_utf8, std::string* error = nullptr);
 bool load_settings(RenderSettings& s, const std::string& path_utf8, std::string* error = nullptr);

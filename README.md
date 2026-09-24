@@ -71,12 +71,27 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
 - **Editing package**: separate 24-bit WAVs (game, each player, microphone) and an XML
   project that Premiere Pro and DaVinci Resolve import with every track and marker in place.
 
+**Translation and dubbing**
+
+- Recognized speech is translated into 25 languages: DeepL, Google Cloud Translation,
+  LibreTranslate, or any OpenAI-compatible model, including local ones in Ollama and LM Studio.
+  Translations are cached, so the same line is never paid for twice.
+- Translated subtitles (`video.de.srt`) and **dubbing**: each line is read in its place, over
+  the game audio, by a local engine ([OmniVoice](https://github.com/k2-fsa/OmniVoice), 600+
+  languages including Ukrainian, English and Russian) or by ElevenLabs.
+- **In the player's own voice**: a player's voice can be cloned from their lines in the demo,
+  and a voice library collects the cleanest samples from every new demo. Cloning is off until
+  you confirm the players agreed to it.
+- Where the dub goes: extra audio tracks with language tags in the same video, a separate video
+  per language, or separate audio files. Publishing templates set this up for YouTube
+  (multi-language audio), Shorts/TikTok/Reels, Discord/Telegram and editing.
+
 **Workflow**
 
 - A workspace with side navigation: Overview (everything about the demo and the render
-  result on one screen), Video, Audio & voices, Game, Library, Queue and Settings, next to a
-  monitor with a live preview and a timeline with a track per player, mute/solo, playhead and
-  markers.
+  result on one screen), Video, Audio & voices, Game, Translation & dubbing, Library, Queue and
+  Settings, next to a monitor with a live preview and a timeline with a track per player,
+  mute/solo, playhead and markers.
 - **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every
   codec, game and audio option plus the Fragment & markers, Chat & speech and Log pages.
 - Dark and light themes (or follow Windows), seven accent colors, 80–200% interface scale and
@@ -199,6 +214,31 @@ There are two ways around that:
 - or record your microphone separately and add the file under **Audio & voices → Own
   microphone**. The offset sets the second of video where the file starts; it can be negative.
 
+## Translation and dubbing
+
+The **Translation & dubbing** page works on top of speech recognition, so download a whisper
+model on the Chat & speech page first. Then:
+
+1. Pick the languages.
+2. Pick a publishing template, or choose the outputs yourself: translated subtitles, a dub as
+   tracks in this video, a separate video per language, and separate audio files.
+3. Choose the translation service. DeepL gives the most natural result and has a free key
+   (500,000 characters a month). For a free offline setup, run a model in
+   [Ollama](https://ollama.com) (`ollama pull qwen2.5:7b`) and pick "Language model".
+4. For dubbing, press **Install** under the local engine. It downloads about 5 GB (uv, Python
+   3.12, PyTorch with CUDA, OmniVoice and its model) into one folder of the program and changes
+   nothing else; it works much faster on an NVIDIA GPU. Or use ElevenLabs with your key.
+
+Everything happens after the video is rendered; a failed translation or dub never breaks the
+video itself. Dub tracks are titled "(AI dub)". The YouTube template also writes
+`video.youtube.txt`, which says which file goes where in YouTube Studio (Languages → Dub).
+
+**Privacy.** API keys are stored encrypted with Windows DPAPI, readable only by your Windows
+account, and are removed from problem reports. With DeepL, Google or ElevenLabs, the text of
+the lines is sent to that service. With ElevenLabs cloning, the voice samples are sent too.
+The local engine and a local model send nothing anywhere. A voice is personal data: clone a
+player's voice only if they agreed, and delete samples from the voice library at any time.
+
 ## Command line
 
 `gmdr-cli.exe` does the same work without a window, which suits batch jobs. Its messages are in
@@ -219,6 +259,11 @@ gmdr-cli render demo.dem -o long.mp4 --start 1:00:00 --end 1:20:00 --motion-blur
 gmdr-cli render a.dem b.dem c.dem -o videos\
 gmdr-cli queue overnight.txt --then shutdown
 gmdr-cli transcribe demo.dem --language en -o speech.srt
+gmdr-cli render demo.dem -o yt.mp4 --translate en,de,pl --dub --publish youtube
+gmdr-cli render demo.dem -o clip.mkv --translate en --dub --dub-to tracks,videos --translator openai --translator-model qwen2.5:7b
+gmdr-cli translate demo.dem --translate en,es -o clip.mp4 --start 1:00 --end 2:00
+gmdr-cli voice-engine install -y
+gmdr-cli voices
 gmdr-cli watch demo.dem --from 12:30
 gmdr-cli voice demo.dem -o voices\ --start 1:00:00 --end 1:05:00
 gmdr-cli resume
@@ -234,6 +279,10 @@ A queue file has one demo per line with its own options. Empty lines and lines s
 "C:\demos\match.dem" --start 12:00 --end 13:00 --hide-hud
 C:\demos\other.dem --size 2560x1440
 ```
+
+Service keys for the command line come from environment variables (`GMDR_DEEPL_KEY`,
+`GMDR_GOOGLE_KEY`, `GMDR_LIBRE_KEY`, `GMDR_OPENAI_KEY`, `GMDR_ELEVENLABS_KEY`) or from keys saved
+in the window. Voice cloning needs `--clone-voices --voices-consent`.
 
 Run `gmdr-cli --help` for every option.
 

@@ -278,7 +278,7 @@ std::optional<std::vector<std::string>> translate(const Config& c, const std::ve
         return std::nullopt;
     }
     if (p->needs_key && trim(c.key).empty()) {
-        if (error) *error = trf("для {} потрібен API-ключ (сторінка «Переклад і озвучення»)", p->label);
+        if (error) *error = trf("для {} потрібен API-ключ (сторінка «Переклад і озвучення»)", tr(p->label));
         return std::nullopt;
     }
     if (p->uses_model && trim(c.model).empty()) {
@@ -286,7 +286,7 @@ std::optional<std::vector<std::string>> translate(const Config& c, const std::ve
         return std::nullopt;
     }
     if (!supports(c.provider, to)) {
-        if (error) *error = trf("{} не перекладає на цю мову ({}) — виберіть інший сервіс", p->label, to);
+        if (error) *error = trf("{} не перекладає на цю мову ({}) — виберіть інший сервіс", tr(p->label), to);
         return std::nullopt;
     }
     std::vector<std::string> out(texts.size());

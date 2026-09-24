@@ -283,6 +283,177 @@ bool remux_file(const std::string& path, bool faststart, std::string* error, con
     return true;
 }
 
+bool mux_files(const std::vector<MuxInput>& inputs, const std::string& out_path, bool faststart, std::string* error) {
+    if (inputs.empty()) return false;
+    // Пишемо поруч у тимчасовий файл: вихід може збігатися з першим входом
+    const std::string tmp = out_path + ".mux" + path_to_utf8(path_from_utf8(out_path).extension());
+    struct In {
+        InputCtxPtr      ctx;
+        std::vector<int> map;
+        PacketPtr        pkt = make_packet();
+        bool             has = false, eof = false;
+    };
+    std::vector<In> ins(inputs.size());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        AVFormatContext* c = nullptr;
+        int r = avformat_open_input(&c, inputs[i].path.c_str(), nullptr, nullptr);
+        if (r < 0) {
+            if (error) *error = trf("не вдалося відкрити {}: {}", inputs[i].path, av_error_string(r));
+            return false;
+        }
+        ins[i].ctx.reset(c);
+        if ((r = avformat_find_stream_info(c, nullptr)) < 0) {
+            if (error) *error = trf("не вдалося прочитати {}: {}", inputs[i].path, av_error_string(r));
+            return false;
+        }
+    }
+    AVFormatContext* out = nullptr;
+    avformat_alloc_output_context2(&out, nullptr, nullptr, tmp.c_str());
+    if (!out) {
+        if (error) *error = tr("невідомий формат файлу");
+        return false;
+    }
+    struct OutGuard {
+        AVFormatContext* c;
+        std::string      path;
+        bool             done = false;
+        ~OutGuard() {
+            if (!c) return;
+            if (!(c->oformat->flags & AVFMT_NOFILE) && c->pb) avio_closep(&c->pb);
+            avformat_free_context(c);
+            std::error_code ec;
+            if (!done) std::filesystem::remove(path_from_utf8(path), ec);
+        }
+    } out_guard{out, tmp};
+    const std::string out_fmt = out->oformat->name;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        const MuxInput& mi = inputs[i];
+        AVFormatContext* in = ins[i].ctx.get();
+        ins[i].map.assign(in->nb_streams, -1);
+        // Тег кодека — лише між однаковими контейнерами (hvc1 у MP4), інакше вибере сам контейнер
+        const bool same_format = std::string(in->iformat->name).find(out_fmt) != std::string::npos;
+        for (unsigned k = 0; k < in->nb_streams; ++k) {
+            const AVStream* is = in->streams[k];
+            const auto type = is->codecpar->codec_type;
+            if (is->disposition & AV_DISPOSITION_ATTACHED_PIC) continue;
+            if (!((type == AVMEDIA_TYPE_VIDEO && mi.video) || (type == AVMEDIA_TYPE_AUDIO && mi.audio) ||
+                  (type == AVMEDIA_TYPE_SUBTITLE && mi.subtitles)))
+                continue;
+            if (avformat_query_codec(out->oformat, is->codecpar->codec_id, FF_COMPLIANCE_NORMAL) == 0) {
+                if (error) *error = trf("контейнер '{}' не підтримує {}", out_fmt, avcodec_get_name(is->codecpar->codec_id));
+                return false;
+            }
+            AVStream* os = avformat_new_stream(out, nullptr);
+            if (!os || avcodec_parameters_copy(os->codecpar, is->codecpar) < 0) {
+                if (error) *error = tr("не вдалося скопіювати параметри потоку");
+                return false;
+            }
+            os->codecpar->codec_tag = same_format ? is->codecpar->codec_tag : 0;
+            os->time_base = is->time_base;
+            os->avg_frame_rate = is->avg_frame_rate;
+            os->r_frame_rate = is->r_frame_rate;
+            os->disposition = is->disposition;
+            av_dict_copy(&os->metadata, is->metadata, 0);
+            if (type == AVMEDIA_TYPE_AUDIO) {
+                if (!mi.title.empty()) {
+                    av_dict_set(&os->metadata, "title", mi.title.c_str(), 0);
+                    av_dict_set(&os->metadata, "handler_name", mi.title.c_str(), 0);
+                }
+                if (!mi.language.empty()) av_dict_set(&os->metadata, "language", mi.language.c_str(), 0);
+                if (mi.default_audio == 1) os->disposition |= AV_DISPOSITION_DEFAULT;
+                else if (mi.default_audio == 0) os->disposition &= ~AV_DISPOSITION_DEFAULT;
+            }
+            ins[i].map[k] = os->index;
+        }
+    }
+    AVFormatContext* first = ins.front().ctx.get();
+    av_dict_copy(&out->metadata, first->metadata, 0);
+    if (first->nb_chapters > 0) {
+        out->chapters = static_cast<AVChapter**>(av_calloc(first->nb_chapters, sizeof(AVChapter*)));
+        for (unsigned i = 0; out->chapters && i < first->nb_chapters; ++i) {
+            const AVChapter* c = first->chapters[i];
+            auto* ch = static_cast<AVChapter*>(av_mallocz(sizeof(AVChapter)));
+            if (!ch) break;
+            ch->id = c->id;
+            ch->time_base = c->time_base;
+            ch->start = c->start;
+            ch->end = c->end;
+            av_dict_copy(&ch->metadata, c->metadata, 0);
+            out->chapters[out->nb_chapters++] = ch;
+        }
+    }
+    int r = avio_open(&out->pb, tmp.c_str(), AVIO_FLAG_WRITE);
+    if (r < 0) {
+        if (error) *error = tr("не вдалося створити тимчасовий файл: ") + av_error_string(r);
+        return false;
+    }
+    AVDictionary* opts = nullptr;
+    if (faststart) av_dict_set(&opts, "movflags", "+faststart", 0);
+    r = avformat_write_header(out, &opts);
+    av_dict_free(&opts);
+    if (r < 0) {
+        if (error) *error = tr("не вдалося записати заголовок: ") + av_error_string(r);
+        return false;
+    }
+    // Наступний потрібний пакет кожного входу; пишемо той, що раніше за часом
+    auto pull = [&](In& in) {
+        while (!in.has && !in.eof) {
+            if (av_read_frame(in.ctx.get(), in.pkt.get()) < 0) {
+                in.eof = true;
+                break;
+            }
+            const int si = in.pkt->stream_index;
+            if (si >= 0 && static_cast<size_t>(si) < in.map.size() && in.map[si] >= 0) in.has = true;
+            else av_packet_unref(in.pkt.get());
+        }
+    };
+    auto when = [&](const In& in) {
+        const AVPacket* p = in.pkt.get();
+        const int64_t t = p->dts != AV_NOPTS_VALUE ? p->dts : p->pts;
+        if (t == AV_NOPTS_VALUE) return -1e18;
+        return static_cast<double>(t) * av_q2d(in.ctx->streams[p->stream_index]->time_base);
+    };
+    for (;;) {
+        In* next = nullptr;
+        for (auto& in : ins) {
+            pull(in);
+            if (in.has && (!next || when(in) < when(*next))) next = &in;
+        }
+        if (!next) break;
+        AVPacket* p = next->pkt.get();
+        const int si = p->stream_index;
+        const int os = next->map[si];
+        av_packet_rescale_ts(p, next->ctx->streams[si]->time_base, out->streams[os]->time_base);
+        p->stream_index = os;
+        p->pos = -1;
+        const int w = av_interleaved_write_frame(out, p);
+        av_packet_unref(p);
+        next->has = false;
+        if (w < 0) {
+            if (error) *error = tr("помилка запису: ") + av_error_string(w);
+            return false;
+        }
+    }
+    if ((r = av_write_trailer(out)) < 0) {
+        if (error) *error = tr("помилка завершення файлу: ") + av_error_string(r);
+        return false;
+    }
+    avio_closep(&out->pb);
+    for (auto& in : ins) in.ctx.reset();
+    std::error_code ec;
+    std::filesystem::rename(path_from_utf8(tmp), path_from_utf8(out_path), ec);
+    if (ec) {
+        std::filesystem::remove(path_from_utf8(out_path), ec);
+        std::filesystem::rename(path_from_utf8(tmp), path_from_utf8(out_path), ec);
+    }
+    if (ec) {
+        if (error) *error = tr("не вдалося замінити файл: ") + ec.message();
+        return false;
+    }
+    out_guard.done = true;
+    return true;
+}
+
 bool probe_media_file(const std::string& path, MediaFileInfo& out, std::string* error) {
     out = MediaFileInfo{};
     AVFormatContext* in = nullptr;

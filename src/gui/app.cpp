@@ -16,9 +16,11 @@
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/muxer.hpp"
 #include "core/media/video_encoder.hpp"
+#include "core/render/dub_jobs.hpp"
 #include "core/render/report.hpp"
 #include "core/util/file_assoc.hpp"
 #include "core/util/file_util.hpp"
+#include "core/util/mapped_file.hpp"
 #include "core/util/strings.hpp"
 #include "core/game/audio_mute.hpp"
 #include "core/game/rtx.hpp"
@@ -97,8 +99,20 @@ void App::init(const std::vector<std::string>& args) {
     io.ConfigDragClickToInputText = true;   // клік по «гарячому» значенню — ввести число
     dpi_ = platform_dpi_scale();
     apply_ui_theme();
-    // Звичайний і напівжирний (заголовки панелей, секції, кнопки дій); символи ✓ ✗ ▶ тощо —
-    // з резервного шрифту, у основному їх може не бути
+    // Звичайний і напівжирний (заголовки панелей, секції, кнопки дій); символи ✓ ✗ ▶, китайська,
+    // японська, корейська й гінді — з резервних шрифтів системи. Вони великі (десятки МБ), тож
+    // відображаються в пам'ять: система читає лише сторінки з потрібними гліфами, а сам файл —
+    // спільний для обох накреслень.
+    static std::vector<std::unique_ptr<MappedFile>> fallback;   // живуть до кінця програми
+    if (fallback.empty())
+        for (const auto& group : ui_fallback_fonts())
+            for (const auto& f : group) {
+                auto m = std::make_unique<MappedFile>();
+                std::error_code ec;
+                if (!fs::exists(path_from_utf8(f), ec) || !m->open(path_from_utf8(f))) continue;
+                fallback.push_back(std::move(m));
+                break;
+            }
     auto load_font = [&](const std::vector<std::string>& candidates) -> ImFont* {
         ImFont* font = nullptr;
         for (const auto& f : candidates) {
@@ -106,13 +120,11 @@ void App::init(const std::vector<std::string>& args) {
             if (fs::exists(path_from_utf8(f), ec) && (font = io.Fonts->AddFontFromFileTTF(f.c_str(), 15.0f))) break;
         }
         if (!font) return nullptr;
-        for (const auto& f : ui_symbol_font_candidates()) {
-            std::error_code ec;
-            if (!fs::exists(path_from_utf8(f), ec)) continue;
+        for (const auto& m : fallback) {
             ImFontConfig cfg;
             cfg.MergeMode = true;
-            io.Fonts->AddFontFromFileTTF(f.c_str(), 15.0f, &cfg);
-            break;
+            cfg.FontDataOwnedByAtlas = false;
+            io.Fonts->AddFontFromMemoryTTF(const_cast<uint8_t*>(m->data()), static_cast<int>(m->size()), 15.0f, &cfg);
         }
         return font;
     };
@@ -421,7 +433,8 @@ void App::start_encode_frames(const std::string& dir) {
 
 bool App::job_has_fraction_only() const {
     return dynamic_cast<render::ExportVoicesJob*>(job_.get()) || dynamic_cast<render::TranscribeJob*>(job_.get()) ||
-           dynamic_cast<render::DownloadJob*>(job_.get());
+           dynamic_cast<render::DownloadJob*>(job_.get()) || dynamic_cast<render::VoiceEngineJob*>(job_.get()) ||
+           dynamic_cast<render::ServiceCheckJob*>(job_.get()) || dynamic_cast<render::TranslateJob*>(job_.get());
 }
 
 void App::export_voices(const std::string& dir) {
@@ -553,6 +566,46 @@ void App::poll() {
                 popup_checks_.clear();
                 open_popup_ = true;
             }
+            platform_flash_window();
+            return;
+        }
+        // Сторінка «Переклад і озвучення»: перевірка сервісу — результат одразу на сторінці
+        if (dynamic_cast<render::ServiceCheckJob*>(job_.get())) {
+            service_status_ok_ = job_->state() == render::JobState::Succeeded;
+            service_status_ = service_status_ok_ ? job_->result() : job_->error();
+            return;
+        }
+        if (auto* vj = dynamic_cast<render::VoiceEngineJob*>(job_.get())) {
+            service_status_ok_ = vj->state() == render::JobState::Succeeded;
+            service_status_ = service_status_ok_ ? trf("Рушій озвучення працює ({})", vj->result()) : vj->error();
+            if (vj->state() == render::JobState::Failed) {
+                popup_title_ = tr("Рушій озвучення: помилка");
+                popup_text_ = vj->error();
+                popup_result_.clear();
+                popup_checks_.clear();
+                open_popup_ = true;
+            }
+            platform_flash_window();
+            return;
+        }
+        if (auto* tj = dynamic_cast<render::TranslateJob*>(job_.get())) {
+            popup_checks_.clear();
+            popup_test_ok_ = false;
+            popup_is_folder_ = false;
+            if (tj->state() == render::JobState::Succeeded) {
+                popup_title_ = tr("Субтитри перекладено");
+                popup_text_ = trf("Перекладені субтитри лежать поруч:\n{}", tj->result());
+                popup_result_ = path_to_utf8(path_from_utf8(tj->result()).parent_path());
+                popup_is_folder_ = true;
+                transcript_ = speech::load_transcript(s_.demo_path);
+            } else if (tj->state() == render::JobState::Failed) {
+                popup_title_ = tr("Переклад: помилка");
+                popup_text_ = tj->error();
+                popup_result_.clear();
+            } else {
+                return;
+            }
+            open_popup_ = true;
             platform_flash_window();
             return;
         }
@@ -1051,6 +1104,7 @@ static void dialog_title(const std::string& text, const ImVec4& color) {
 void App::draw_popups() {
     const float fs_ = ImGui::GetFontSize();
     draw_power_countdown();
+    draw_translate_popups();
     if (open_popup_ && !power_countdown_) {   // під час відліку перед вимкненням — лише він
         ImGui::OpenPopup("##result");
         open_popup_ = false;

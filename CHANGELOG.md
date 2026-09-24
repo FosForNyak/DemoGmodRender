@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Translation and dubbing.** Recognized speech is translated into 25 languages (DeepL, Google, LibreTranslate, or an OpenAI-compatible model, including local Ollama and LM Studio) as `.<lang>.srt` subtitles, and can be dubbed over the game audio by a local engine (OmniVoice, installed by the program on request) or by ElevenLabs. Dubs go into extra tracks with language tags, a separate video per language, or separate audio files. Publishing templates cover YouTube multi-language audio, Shorts/TikTok/Reels, Discord/Telegram and editing. New Translation & dubbing page; console: `--translate`, `--dub`, `--publish`, `translate`, `voice-engine`, `voices`.
+- **Players' own voices.** With the players' consent confirmed, a dub can use a clone of each player's voice. A voice library collects clean samples of every player (by SteamID) from each transcribed demo and can be cleared at any time.
+- Service API keys are stored encrypted (Windows DPAPI) and are removed from problem reports.
+- Chinese, Japanese, Korean and Hindi text is displayed using the system fonts.
+- Fixed: a normal render no longer logs "Test run: extra versions are not encoded".
 - **New interface.** Side navigation with pages instead of Adobe-style panels: Overview shows everything about the demo and the future render on one screen (duration, players, voice chat, server, protocol, warnings, output file, versions, subtitles). Settings are grouped into cards on the Video, Audio & voices and Game pages; the monitor and the timeline sit next to them and can be hidden.
 - **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every codec, game and audio option and the Fragment & markers, Chat & speech and Log pages.
 - **Own look**: a new logo, dark and light themes (or same as Windows), seven accent colors, 80–200% interface scale and a compact density — on the new Settings page. The window frame follows the theme on Windows 11.

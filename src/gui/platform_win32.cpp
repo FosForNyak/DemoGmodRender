@@ -424,11 +424,15 @@ std::vector<std::string> ui_bold_font_candidates() {
     return {w + "\\Fonts\\seguisb.ttf", w + "\\Fonts\\segoeuib.ttf", w + "\\Fonts\\tahomabd.ttf", w + "\\Fonts\\arialbd.ttf"};
 }
 
-std::vector<std::string> ui_symbol_font_candidates() {
+std::vector<std::vector<std::string>> ui_fallback_fonts() {
     wchar_t windir[MAX_PATH] = L"C:\\Windows";
     GetWindowsDirectoryW(windir, MAX_PATH);
-    const std::string w = wide_to_utf8(windir);
-    return {w + "\\Fonts\\seguisym.ttf", w + "\\Fonts\\segoeuisymbol.ttf"};
+    const std::string f = wide_to_utf8(windir) + "\\Fonts\\";
+    return {{f + "seguisym.ttf", f + "segoeuisymbol.ttf"},
+            {f + "msyh.ttc", f + "simsun.ttc"},                          // китайська (спрощена)
+            {f + "YuGothR.ttc", f + "meiryo.ttc", f + "msgothic.ttc"},  // японська
+            {f + "malgun.ttf", f + "gulim.ttc"},                         // корейська
+            {f + "Nirmala.ttc", f + "Nirmala.ttf", f + "mangal.ttf"}};   // гінді (деванагарі)
 }
 
 std::string clipboard_text_set(const std::string& text) {

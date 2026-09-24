@@ -8,6 +8,7 @@
 #include "../util/strings.hpp"
 #include "../util/zip_writer.hpp"
 #include "../util/i18n.hpp"
+#include "settings.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -210,8 +211,12 @@ bool make_problem_report(const fs::path& out_zip, const ReportInput& in, std::ve
     add_text(tr("система.txt"), sys);
     add_text_file(tr("журнал.txt"), app_data_dir() / "gmdr_log.txt");
     add_text_file(tr("журнал_попередній.txt"), app_data_dir() / "gmdr_log.old.txt");
-    if (!in.settings_path.empty()) add_text_file(tr("налаштування.json"), path_from_utf8(in.settings_path));
-    add_text_file(tr("черга.json"), app_data_dir() / "gmdr_queue.json");
+    // Налаштування й черга — без API-ключів сервісів перекладу й озвучення
+    auto add_json_file = [&](const std::string& name, const fs::path& src) {
+        if (auto t = read_file_text(src)) add_text(name, redact_secrets_json(*t));
+    };
+    if (!in.settings_path.empty()) add_json_file(tr("налаштування.json"), path_from_utf8(in.settings_path));
+    add_json_file(tr("черга.json"), app_data_dir() / "gmdr_queue.json");
     if (auto g = game::detect_gmod()) {
         const auto tail = game::console_log_tail(*g, 2000);
         if (!tail.empty()) {

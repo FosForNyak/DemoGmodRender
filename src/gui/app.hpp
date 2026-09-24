@@ -14,6 +14,7 @@
 //    app_page_game.cpp     — «Гра» (стандарт / RTX, рендер у грі)
 //    app_page_fragment.cpp — «Фрагмент і позначки»
 //    app_page_chat.cpp     — «Чат і мовлення», позначки, перегляд демо в грі
+//    app_page_translate.cpp — «Переклад і озвучення» (мови, сервіси, голоси гравців)
 //    app_page_library.cpp  — «Бібліотека» демо
 //    app_page_queue.cpp    — «Черга» рендерів
 //    app_page_settings.cpp — «Налаштування» (вигляд, мова, поведінка)
@@ -37,6 +38,7 @@
 
 #include "core/audio/voice_preview.hpp"
 #include "core/demo/library.hpp"
+#include "core/dub/voice_library.hpp"
 #include "core/game/gmod_install.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/render/jobs.hpp"
@@ -83,7 +85,7 @@ private:
     };
 
     // ---- сторінки (бічна навігація) ----
-    enum class Page { Home, Video, Audio, Game, Fragment, Chat, Library, Queue, Log, Settings, Count };
+    enum class Page { Home, Video, Audio, Game, Fragment, Chat, Translate, Library, Queue, Log, Settings, Count };
     struct PageInfo {
         Page        page;
         const char* id;          // для налаштувань і GMDR_TEST_PAGE
@@ -123,6 +125,19 @@ private:
     void draw_page_chat();
     void draw_page_settings();
     void draw_page_log();
+    // Сторінка «Переклад і озвучення»
+    void draw_page_translate();
+    void draw_translate_languages();
+    void draw_translate_outputs();
+    void draw_translator_card();
+    void draw_voice_engine_card();
+    void draw_voice_library_card();
+    bool draw_key_field(const char* id, std::string* stored);   // API-ключ: зберігається лише зашифрованим
+    void draw_translate_popups();
+    void start_translate_only();
+    void start_voice_engine(bool install, bool cuda);
+    void start_service_check(bool elevenlabs);
+    void refresh_voice_library();
     void apply_ui_theme();                           // тема, акцент, масштаб і щільність із налаштувань
     // Розпізнавання мовлення (сторінка «Чат і мовлення»): стан whisper, запуск, завантаження моделі
     void draw_speech_controls();
@@ -285,6 +300,18 @@ private:
     double                            whisper_checked_at_ = -100;
     bool                              open_model_popup_ = false;
     int                               model_choice_ = 0;
+
+    // Сторінка «Переклад і озвучення»
+    std::vector<dub::VoiceProfile>     voice_profiles_;
+    bool                               voice_profiles_loaded_ = false;
+    std::map<std::string, std::string> key_edit_;         // поле ключа → що вводять (до збереження)
+    std::map<std::string, bool>        key_editing_;
+    int                                nvidia_gpu_ = -1;  // -1 — ще не перевіряли
+    std::string                        service_status_;   // результат останньої перевірки сервісу
+    bool                               service_status_ok_ = false;
+    bool                               open_consent_popup_ = false, consent_for_library_ = false, consent_checked_ = false;
+    bool                               open_engine_popup_ = false, engine_cuda_ = true;
+    bool                               open_clear_voices_popup_ = false;
 
     // Попапи
     std::string popup_title_, popup_text_, popup_result_;

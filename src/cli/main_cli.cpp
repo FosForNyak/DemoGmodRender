@@ -14,7 +14,13 @@
 #include "core/game/lua_driver.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
+#include "core/dub/tts.hpp"
+#include "core/dub/voice_library.hpp"
+#include "core/render/dub_jobs.hpp"
+#include "core/render/dubbing.hpp"
 #include "core/render/jobs.hpp"
+#include "core/translate/translate.hpp"
+#include "core/util/secret.hpp"
 #include "core/render/markers.hpp"
 #include "core/render/report.hpp"
 #include "core/render/settings.hpp"
@@ -73,6 +79,11 @@ static void print_usage() {
   gmdr-cli transcribe <demo.dem> [-o файл]     розпізнати мовлення гравців (whisper.cpp, локально):
                                                .txt — репліки з часом, .srt — субтитри, .json — усе
   gmdr-cli whisper [--download N]              де whisper-cli і моделі; завантажити модель N (1 — найточніша)
+  gmdr-cli translate <demo.dem> --translate en,de   перекласти розпізнане мовлення в субтитри
+                                               <демо>.<мова>.srt (або поруч із -o), без рендеру
+  gmdr-cli voices [delete КЛЮЧ | clear]        бібліотека голосів гравців (для клонування)
+  gmdr-cli voice-engine [install [--cpu] -y | check | remove]   локальний рушій озвучення
+                                               OmniVoice (~5 ГБ: Python, PyTorch, модель)
   gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
   gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
   gmdr-cli render a.dem b.dem ... -o <папка>   черга: кілька демо підряд, гра запускається один раз
@@ -131,6 +142,21 @@ static void print_usage() {
   --markers "1:02=Вступ; 2:30=Бій"   позначки -> розділи у MP4/MOV/MKV (типово — збережені для демо)
   --no-chapters          не записувати розділи
   --mic ФАЙЛ  --mic-offset СЕКУНД  --mic-volume 1.0
+Переклад і озвучення (після рендеру; потрібне розпізнавання мовлення):
+  --translate en,de,pl   мови перекладу -> субтитри <відео>.<мова>.srt
+  --dub                  ще й озвучити переклад: --dub-to tracks,videos,audio (доріжки в цьому відео,
+                         окреме відео на мову, окремі аудіофайли); --dub-format mp3|flac|wav|m4a
+  --dub-original 0.12    гучність оригінальних голосів під озвученням (0 — прибрати)
+  --publish youtube|tracks|shorts|discord|editing   готовий набір виходів під сервіс
+  --translator deepl|google|libre|openai  --translator-url URL  --translator-model МОДЕЛЬ
+                         (openai — будь-яка OpenAI-сумісна модель: Ollama, LM Studio, OpenAI...)
+  --tts omnivoice|elevenlabs  --tts-device auto|cuda|cpu  --tts-python ФАЙЛ
+  --elevenlabs-model ID  --elevenlabs-voice ID
+  --clone-voices         озвучувати голосом самого гравця; лише разом із --voices-consent (ви
+                         підтверджуєте, що гравці згодні на клонування їхнього голосу)
+  --voice-library        накопичувати зразки голосів гравців з кожного розпізнаного демо
+  Ключі — лише змінними середовища: GMDR_DEEPL_KEY, GMDR_GOOGLE_KEY, GMDR_LIBRE_KEY,
+  GMDR_OPENAI_KEY, GMDR_ELEVENLABS_KEY (або збережені у вікні програми, зашифровано)
 Гра:
   --game-dir ПАПКА  --game-exe ФАЙЛ  --capture tga|jpg  --jpeg-quality N
   --hide-hud  --hide-viewmodel  --exec "команда"  --launch-args "..."  --max-pending N
@@ -181,7 +207,8 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
                                "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game",
-                               "--speaker-overlay", "--version", "--edit-package", "--speech-srt", "--force", "--forget"};
+                               "--speaker-overlay", "--version", "--edit-package", "--speech-srt", "--force", "--forget",
+                               "--dub", "--clone-voices", "--voices-consent", "--voice-library", "--cpu"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -311,6 +338,62 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
         s.speed_audio = v;
     }
     if (c.has("--accurate-color")) s.accurate_color = true;
+    // ---- Переклад і озвучення ----
+    if (c.has("--publish")) {
+        const render::PublishTemplate* t = render::find_template(c.get("--publish"));
+        if (!t) { err = tr("--publish: youtube, tracks, shorts, discord або editing"); return false; }
+        render::apply_template(s, *t);
+    }
+    if (c.has("--translate")) {
+        for (const auto& code : split(c.get("--translate"), ','))
+            if (!translate::find_language(trim(code))) {
+                std::string all;
+                for (const auto& l : translate::languages()) all += (all.empty() ? "" : ", ") + std::string(l.code);
+                err = trf("--translate: невідома мова «{}» (є: {})", trim(code), all);
+                return false;
+            }
+        s.dub_languages = c.get("--translate");
+        if (!c.has("--publish")) s.translate_subtitles = true;
+    }
+    if (c.has("--dub")) s.dub = true;
+    if (c.has("--dub-to")) {
+        for (const auto& x : split(c.get("--dub-to"), ','))
+            if (trim(x) != "tracks" && trim(x) != "videos" && trim(x) != "audio") {
+                err = tr("--dub-to: tracks, videos, audio (через кому)");
+                return false;
+            }
+        s.dub_outputs = c.get("--dub-to");
+    }
+    if (c.has("--dub-format")) {
+        const std::string f = c.get("--dub-format");
+        if (f != "mp3" && f != "flac" && f != "wav" && f != "m4a") { err = tr("--dub-format: mp3, flac, wav або m4a"); return false; }
+        s.dub_audio_format = f;
+    }
+    if (!num("--dub-original", s.dub_original_volume)) return false;
+    if (c.has("--translator")) {
+        if (!translate::find_provider(c.get("--translator"))) { err = tr("--translator: deepl, google, libre або openai"); return false; }
+        s.translator = c.get("--translator");
+    }
+    if (c.has("--translator-url")) s.translator_url = c.get("--translator-url");
+    if (c.has("--translator-model")) s.translator_model = c.get("--translator-model");
+    if (c.has("--tts")) {
+        if (!dub::find_engine(c.get("--tts"))) { err = tr("--tts: omnivoice або elevenlabs"); return false; }
+        s.tts_engine = c.get("--tts");
+    }
+    if (c.has("--tts-device")) s.tts_device = c.get("--tts-device");
+    if (c.has("--tts-python")) s.tts_python = c.get("--tts-python");
+    if (c.has("--elevenlabs-model")) s.elevenlabs_model = c.get("--elevenlabs-model");
+    if (c.has("--elevenlabs-voice")) s.elevenlabs_voice = c.get("--elevenlabs-voice");
+    if (c.has("--clone-voices")) s.tts_clone = true;
+    if (c.has("--voices-consent")) s.tts_clone_ack = true;
+    if (c.has("--voice-library")) s.voice_library_auto = true;
+    if (s.tts_clone && !s.tts_clone_ack)
+        std::fprintf(stderr, "%s", tr("УВАГА: клонування голосів вимкнено — додайте --voices-consent, якщо гравці згодні\n"));
+    // Ключі сервісів — зі змінних середовища (у командному рядку вони лишились би в історії)
+    for (auto [env, field] : {std::pair{"GMDR_DEEPL_KEY", &s.deepl_key}, std::pair{"GMDR_GOOGLE_KEY", &s.google_key},
+                              std::pair{"GMDR_LIBRE_KEY", &s.libre_key}, std::pair{"GMDR_OPENAI_KEY", &s.openai_key},
+                              std::pair{"GMDR_ELEVENLABS_KEY", &s.elevenlabs_key}})
+        if (const char* v = std::getenv(env); v && *v) *field = protect_secret(v);
     if (c.has("--no-crash-safe")) s.crash_safe = false;
     if (c.has("--player-volume")) s.voice_volumes = c.get("--player-volume");
     if (c.has("--chat-srt")) s.chat_srt = true;
@@ -674,6 +757,106 @@ static int cmd_transcribe(const Cli& c) {
     return 0;
 }
 
+// Перекласти розпізнане мовлення демо в субтитри (без рендеру)
+static int cmd_translate(const Cli& c) {
+    if (c.positional.empty() || !c.has("--translate")) {
+        std::puts(tr("Використання: gmdr-cli translate <demo.dem> --translate en,de [-o відео.mp4] [--start ЧАС] [--end ЧАС]\n"
+                  "                      [--translator deepl|google|libre|openai] [--language uk]\n"
+                  "Субтитри <демо>.<мова>.srt (з -o — поруч із тим файлом). Ключ — змінною GMDR_DEEPL_KEY тощо."));
+        return 1;
+    }
+    auto a = std::make_shared<demo::DemoAnalysis>();
+    try {
+        *a = demo::analyze_demo(path_from_utf8(c.positional[0]));
+    } catch (const std::exception& e) {
+        std::printf(tr("Помилка: %s\n"), e.what());
+        return 1;
+    }
+    auto v = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(*a));
+    render::RenderSettings s;
+    std::string err;
+    load_base_settings(c, s, err);   // сервіс перекладу й ключі — як у програмі
+    s.demo_path = c.positional[0];
+    s.output_path.clear();
+    s.voice_mode = "all";
+    s.start_tick = 0;
+    s.end_tick = -1;
+    if (!apply_options(c, s, a.get(), err)) {
+        std::printf(tr("Помилка: %s\n"), err.c_str());
+        return 1;
+    }
+    render::TranslateJob job(s, a, v, c.has("--start") || c.has("--end"));
+    return run_job(job);
+}
+
+// Бібліотека голосів гравців
+static int cmd_voices(const Cli& c) {
+    const std::string sub = c.positional.empty() ? "list" : c.positional[0];
+    if (sub == "delete" && c.positional.size() > 1) {
+        if (!dub::delete_profile(c.positional[1])) {
+            std::printf(tr("Не вдалося видалити %s\n"), c.positional[1].c_str());
+            return 1;
+        }
+        std::printf(tr("Видалено: %s\n"), c.positional[1].c_str());
+        return 0;
+    }
+    if (sub == "clear") {
+        if (!c.has("-y")) {
+            std::puts(tr("Буде видалено всі зразки голосів. Підтвердіть: gmdr-cli voices clear -y"));
+            return 1;
+        }
+        std::error_code ec;
+        fs::remove_all(dub::voices_dir(), ec);
+        std::puts(tr("Бібліотеку голосів очищено"));
+        return 0;
+    }
+    const auto list = dub::list_profiles();
+    std::printf(tr("Бібліотека голосів: %s\n"), path_to_utf8(dub::voices_dir()).c_str());
+    if (list.empty()) std::puts(tr("  порожньо (зразки додаються з розпізнаних демо, коли увімкнено --voice-library)"));
+    for (const auto& p : list)
+        std::printf(tr("  %-24s %-28s зразків %2zu, %5.1f с%s\n"), p.key.c_str(), p.name().c_str(), p.samples.size(), p.total_seconds(),
+                    p.elevenlabs_voice_id.empty() ? "" : tr(", є клон ElevenLabs"));
+    return 0;
+}
+
+// Локальний рушій озвучення
+static int cmd_voice_engine(const Cli& c) {
+    const std::string sub = c.positional.empty() ? "status" : c.positional[0];
+    render::RenderSettings s;
+    std::string err;
+    load_base_settings(c, s, err);
+    if (c.has("--tts-python")) s.tts_python = c.get("--tts-python");
+    if (c.has("--tts-device")) s.tts_device = c.get("--tts-device");
+    if (sub == "install") {
+        const bool cuda = !c.has("--cpu") && dub::has_nvidia_gpu();
+        if (!c.has("-y")) {
+            std::printf(tr("Буде завантажено близько %s (Python 3.12, PyTorch%s, OmniVoice і модель) у\n  %s\n"
+                           "Нічого в системі не змінюється. Підтвердіть: gmdr-cli voice-engine install -y%s\n"),
+                        cuda ? "5 ГБ" : "2 ГБ", cuda ? " з CUDA" : "", path_to_utf8(dub::engine_dir()).c_str(), cuda ? "" : " --cpu");
+            return 1;
+        }
+        render::VoiceEngineJob job(render::VoiceEngineJob::Action::Install, cuda, s);
+        return run_job(job);
+    }
+    if (sub == "check") {
+        render::VoiceEngineJob job(render::VoiceEngineJob::Action::Check, false, s);
+        return run_job(job);
+    }
+    if (sub == "remove") {
+        if (!dub::remove_engine(&err)) {
+            std::printf(tr("Не вдалося видалити: %s\n"), err.c_str());
+            return 1;
+        }
+        std::puts(tr("Рушій озвучення видалено"));
+        return 0;
+    }
+    const auto py = dub::engine_python(render::tts_config(s));
+    std::printf(tr("Рушій озвучення (OmniVoice): %s\n"), py ? path_to_utf8(*py).c_str() : tr("не встановлено"));
+    std::printf(tr("GPU NVIDIA: %s\n"), dub::has_nvidia_gpu() ? tr("є") : tr("немає (буде повільно, на процесорі)"));
+    if (!py) std::puts(tr("Встановити: gmdr-cli voice-engine install -y"));
+    return py ? 0 : 1;
+}
+
 // Стан розпізнавання мовлення і завантаження моделі
 static int cmd_whisper(const Cli& c) {
     const auto& models = speech::known_models();
@@ -994,6 +1177,9 @@ int main(int argc, char** argv) {
     if (c.command == "voice") return cmd_voice(c);
     if (c.command == "transcribe") return cmd_transcribe(c);
     if (c.command == "whisper") return cmd_whisper(c);
+    if (c.command == "translate") return cmd_translate(c);
+    if (c.command == "voices") return cmd_voices(c);
+    if (c.command == "voice-engine") return cmd_voice_engine(c);
     if (c.command == "encoders") return cmd_encoders(c);
     if (c.command == "driver") return cmd_driver(c);
 

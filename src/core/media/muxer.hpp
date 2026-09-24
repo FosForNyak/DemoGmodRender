@@ -70,6 +70,20 @@ bool container_supports_chapters(const std::string& path_utf8);
 bool remux_file(const std::string& path_utf8, bool faststart, std::string* error,
                 const std::vector<ChapterMark>* chapters = nullptr);
 
+// Зібрати новий файл з потоків кількох файлів без перекодування (озвучення: відео з
+// основного файлу + звукові доріжки перекладу). Пакети йдуть упереміш за часом; розділи й
+// метадані файлу — з першого входу.
+struct MuxInput {
+    std::string path;                  // UTF-8
+    bool        video = true;          // брати відео
+    bool        audio = true;          // брати звук
+    bool        subtitles = true;      // брати субтитри
+    std::string title;                 // назва звукових доріжок (порожньо — як була)
+    std::string language;              // мова звукових доріжок, ISO 639-2 (порожньо — як була)
+    int         default_audio = -1;    // 1 — доріжка звучить типово, 0 — ні, -1 — як була
+};
+bool mux_files(const std::vector<MuxInput>& inputs, const std::string& out_path_utf8, bool faststart, std::string* error);
+
 // Короткі відомості про готовий файл (для перевірки результату).
 struct MediaFileInfo {
     double  video_seconds = 0;

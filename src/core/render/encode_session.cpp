@@ -217,6 +217,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         audio::AudioInput* mic = nullptr;
         std::vector<audio::AudioInput*> voices;
         std::vector<float> voice_gains;
+        std::vector<std::string> voice_keys;   // гравець кожного голосу (для окремих WAV)
         if (spec.game_audio) {
             auto g = std::make_unique<audio::GameAudioInput>(spec.game_wav, spec.game_wav_live, spec.game_offset);
             g->set_read_ahead(spec.game_read_ahead);
@@ -261,6 +262,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
             v = in_video_time(v, true);
             voices.push_back(v);
             voice_gains.push_back(gain);
+            voice_keys.push_back(spec.voices[i]->key);
         }
         if (!spec.mic_file.empty()) {
             auto m = std::make_unique<audio::FileAudioInput>(spec.mic_file, spec.mic_offset);
@@ -296,11 +298,20 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
         if (!mix.sources.empty()) {
             tracks.push_back(mix);
             const bool stems = !s_.stems_dir.empty();
+            std::vector<std::pair<std::string, std::string>> kinds = {{"mix", ""}};   // що в кожній доріжці
             if (s_.separate_tracks || stems) {
-                if (game) tracks.push_back({tr("Гра"), {{game, spec.game_gain}}});
-                for (size_t i = 0; i < voices.size(); ++i)
+                if (game) {
+                    tracks.push_back({tr("Гра"), {{game, spec.game_gain}}});
+                    kinds.push_back({"game", ""});
+                }
+                for (size_t i = 0; i < voices.size(); ++i) {
                     tracks.push_back({voices[i]->name(), {{voices[i], voice_gains[i]}}});
-                if (mic) tracks.push_back({tr("Мікрофон"), {{mic, spec.mic_gain}}});
+                    kinds.push_back({"voice", voice_keys[i]});
+                }
+                if (mic) {
+                    tracks.push_back({tr("Мікрофон"), {{mic, spec.mic_gain}}});
+                    kinds.push_back({"mic", ""});
+                }
             }
             if (muxer_.is_image_sequence()) {
                 // У послідовність зображень звук не вбудувати — пишемо WAV поруч
@@ -338,7 +349,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                     auto w = std::make_unique<audio::WavWriter>();
                     if (!w->open(p, kMixRate, 2, audio::WavWriter::Format::Int24, error)) return false;
                     stem_wavs_[i] = std::move(w);
-                    stem_files_.push_back({tracks[i].title, path_to_utf8(p)});
+                    stem_files_.push_back({tracks[i].title, path_to_utf8(p), kinds[i].first, kinds[i].second});
                 }
                 log_info("{}", trf("Пакет для монтажу: {} окремих WAV у {}", stem_files_.size(), s_.stems_dir));
             }

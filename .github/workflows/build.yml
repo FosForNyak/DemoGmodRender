@@ -209,6 +209,20 @@ jobs:
               --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 --speech-srt @wargs
           if ($LASTEXITCODE -ne 0) { throw "рендер із текстом розмов не вдався" }
           if (-not (Select-String -Path ($sp -replace '\.mp4$', '.srt') -Pattern "Friend: фраза" -Quiet)) { throw "у субтитрах немає тексту розмов" }
+          # Переклад і озвучення (імітатори сервісів): перекладені субтитри, доріжки з мітками мови в
+          # основному відео, окреме відео й окремий аудіофайл для кожної мови
+          $dub = "$PWD\build\out_dub.mp4"
+          & build\gmdr-cli.exe render build\td\test24.dem -o $dub --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
+              --size 640x360 --fps 30 --codec libx264 --menu-delay 1 --start 1 @wargs `
+              --translate de,en --dub --dub-to tracks,videos,audio --dub-format flac --translator fake --tts fake
+          if ($LASTEXITCODE -ne 0) { throw "рендер з озвученням не вдався" }
+          if (-not (Select-String -Path ($dub -replace '\.mp4$', '.de.srt') -Pattern "\[de\] фраза" -Quiet)) { throw "немає перекладених субтитрів" }
+          $tracks = & third_party\ffmpeg\bin\ffprobe.exe -v error -select_streams a -show_entries stream_tags=language -of csv=p=0 $dub | Out-String
+          if (-not ($tracks.Contains("deu") -and $tracks.Contains("eng"))) { throw "у відео немає доріжок озвучення з мітками мови: $tracks" }
+          foreach ($f in @(($dub -replace '\.mp4$', '_de.mp4'), ($dub -replace '\.mp4$', '.en.flac'))) {
+            if (-not (Test-Path $f)) { throw "немає $f" }
+          }
+          if (Test-Path ($dub -replace '\.mp4$', '.dub_tmp')) { throw "тимчасова тека озвучення не прибрана" }
           # Черга: три фрагменти, гра запускається один раз
           Remove-Item "$fake\garrysmod\fake_launches.txt" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force build\queue | Out-Null

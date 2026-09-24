@@ -143,9 +143,12 @@ void show_in_folder(const std::string& path) {
     open_path(slash == std::string::npos ? "." : path.substr(0, slash));
 }
 
-std::vector<std::string> ui_symbol_font_candidates() {
-    return {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans.ttf"};
+std::vector<std::vector<std::string>> ui_fallback_fonts() {
+    return {{"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
+             "/usr/share/fonts/dejavu/DejaVuSans.ttf"},
+            {"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+             "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"},
+            {"/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf", "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf"}};
 }
 
 std::vector<std::string> ui_bold_font_candidates() {

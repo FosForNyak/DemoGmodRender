@@ -158,6 +158,8 @@ public:
     // Окремі WAV пакета для монтажу: {назва доріжки, шлях}
     struct StemFile {
         std::string title, path;
+        std::string kind;   // game / voice / mic
+        std::string key;    // voice: гравець ("steam:…")
     };
     const std::vector<StemFile>& stem_files() const { return stem_files_; }
     // Підписи «хто говорить» на кадрах (після motion blur, до кодування)

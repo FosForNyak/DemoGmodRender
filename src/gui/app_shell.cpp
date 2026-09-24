@@ -37,6 +37,7 @@ const std::vector<App::PageInfo>& App::pages() {
         {Page::Game, "game", N_("Гра"), Icon::Gamepad, false, true, false},
         {Page::Fragment, "fragment", N_("Фрагмент і позначки"), Icon::Scissors, true, true, false},
         {Page::Chat, "chat", N_("Чат і мовлення"), Icon::Chat, true, true, true},
+        {Page::Translate, "translate", N_("Переклад і озвучення"), Icon::Globe, false, false, false},
         {Page::Library, "library", N_("Бібліотека"), Icon::Library, false, false, true},
         {Page::Queue, "queue", N_("Черга"), Icon::Queue, false, false, true},
         {Page::Log, "log", N_("Журнал"), Icon::Terminal, true, false, true},
@@ -409,6 +410,7 @@ void App::draw_page(ImVec2 pos, ImVec2 size) {
     case Page::Game: draw_page_game(); break;
     case Page::Fragment: draw_page_fragment(); break;
     case Page::Chat: draw_page_chat(); break;
+    case Page::Translate: draw_page_translate(); break;
     case Page::Library: draw_page_library(); break;
     case Page::Queue: draw_page_queue(); break;
     case Page::Log: draw_page_log(); break;

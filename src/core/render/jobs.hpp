@@ -96,6 +96,8 @@ public:
 protected:
     virtual void run() = 0;
     void set_stage(const std::string& stage, double fraction = -1);
+    // Як set_stage, але в журнал — лише зміна етапу (для частих оновлень прогресу)
+    void report_progress(const std::string& stage, double fraction);
     template <class F>
     void update(F&& f) {
         std::lock_guard lock(mutex_);
@@ -212,6 +214,10 @@ protected:
 private:
     struct ParallelInput;   // що run() уже підготував для паралельного рендеру
     void run_parallel(const ParallelInput& in);
+    // Переклад і озвучення готового відео (dubbing.hpp), бібліотека голосів
+    void translate_after_render(const std::vector<EncodeSession::StemFile>& stems,
+                                const std::vector<const voice::SpeakerTrack*>& speakers, const speech::Transcript* transcript,
+                                double t0, double seconds, const media::AudioEncoderSettings& audio);
     bool prepare(std::string* error);
     // Завдання для драйвера: демо з тіку start_tick (після збою гри — з місця, де урвалися кадри).
     bool write_game_job(int32_t start_tick, std::string* error);
