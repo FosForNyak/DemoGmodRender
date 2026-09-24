@@ -1,10 +1,12 @@
 # =============================================================================
-#  Автоматична перевірка кожної зміни:
-#   * Windows / Visual Studio — збірка, модульні тести і наскрізний рендер через
-#     імітатор гри (tests/fake_game.cpp), готові .exe — в артефактах;
-#   * Linux / GCC — збірка з системним FFmpeg (перевіряє і старий шлях swscale),
-#     тести звичайні та з санітайзерами ASan + UBSan;
-#   * Linux / Clang — фазинг парсера демо (libFuzzer) протягом 2 хвилин.
+#  Every push and pull request is built and tested:
+#   * Windows / Visual Studio: build, unit tests and end-to-end renders through the
+#     fake game (tests/fake_game.cpp); the ready .exe files are uploaded as an artifact;
+#   * Linux / GCC: build against the system FFmpeg (also covers the old swscale path),
+#     tests plain and under ASan + UBSan;
+#   * Linux / Clang: 2 minutes of demo parser fuzzing (libFuzzer).
+#  A pushed v* tag also publishes a GitHub release with the Windows build, once all
+#  jobs have passed. The tag must match the version in CMakeLists.txt.
 # =============================================================================
 name: build
 
@@ -25,16 +27,16 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Збірка
+      - name: Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON
           cmake --build build
 
-      - name: whisper-cli (розпізнавання мовлення)
+      - name: whisper-cli (speech recognition)
         shell: pwsh
         run: ./scripts/get_whisper.ps1 -Dest build\whisper
 
-      - name: Синтетичні демо для тестів
+      - name: Synthetic test demos
         shell: pwsh
         run: |
           $env:PATH = "$PWD\third_party\ffmpeg\bin;$env:PATH"
@@ -43,12 +45,12 @@ jobs:
           python tests/tools/make_test_demo.py build/td/test20c.dem build/td/truth20.json --pe-bits 20 --compress-userinfo
           python tests/tools/make_test_demo.py build/td/test2026.dem build/td/truth2026.json --pe-bits 24 --compress-userinfo --gmod2026
 
-      - name: Модульні тести
+      - name: Unit tests
         run: build\gmdr-tests.exe build\td
         env:
           GMDR_TEST_REGISTRY: "1"   # асоціація .dem — в окремому розділі HKCU одноразової машини
 
-      - name: Наскрізний рендер через імітатор гри
+      - name: End-to-end renders through the fake game
         shell: pwsh
         run: |
           $fake = "$PWD\build\fake\GarrysMod"
@@ -240,19 +242,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Залежності
+      - name: Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libswresample-dev libavfilter-dev libglfw3-dev libgl-dev ffmpeg python3 lua5.1
 
-      - name: Збірка
+      - name: Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGMDR_BUILD_TESTS=ON \
             -DGMDR_SANITIZE="${{ matrix.sanitize }}"
           cmake --build build
 
-      - name: Тести
+      - name: Tests
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=0
@@ -265,11 +267,11 @@ jobs:
           ./build/gmdr-cli --lang en info build/td/test24.dem | grep -q '^Map: *gm_construct'
           ./build/gmdr-cli info build/td/test24.dem | grep -q '^Карта: *gm_construct'
 
-      - name: Lua-драйвер (імітація меню GMod)
+      - name: Lua driver (mocked GMod menu)
         if: matrix.sanitize == ''
         run: lua5.1 tests/lua/driver_mock_test.lua src/core/game/gmdr_driver.lua
 
-      - name: Переклад інтерфейсу (кожен рядок має англійський варіант)
+      - name: UI translation (every string has an English version)
         if: matrix.sanitize == ''
         run: python3 scripts/i18n.py check
 
@@ -278,20 +280,20 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Залежності
+      - name: Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build clang libclang-rt-18-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libswresample-dev libavfilter-dev ffmpeg python3
 
-      - name: Збірка фазера
+      - name: Build the fuzzer
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ -DGMDR_BUILD_GUI=OFF -DGMDR_BUILD_CLI=OFF -DGMDR_BUILD_FUZZERS=ON \
             -DGMDR_SANITIZE=address,undefined
           cmake --build build --target gmdr-fuzz-demo
 
-      - name: Фазинг (2 хвилини)
+      - name: Fuzzing (2 minutes)
         env:
           ASAN_OPTIONS: detect_leaks=0
         run: |
@@ -309,3 +311,45 @@ jobs:
             crash-*
             timeout-*
             oom-*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-msvc, linux-gcc, fuzz]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gmod-demo-render-windows
+          path: artifact
+
+      - name: Package
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^project(GModDemoRender VERSION $ver " CMakeLists.txt; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the version in CMakeLists.txt"; exit 1
+          fi
+          dir="GModDemoRender-$ver"
+          mkdir -p "$dir/licenses"
+          cp artifact/build/gmdr.exe artifact/build/gmdr-cli.exe artifact/build/*.dll artifact/build/rnnoise-voice.rnnn "$dir/"
+          cp -r artifact/build/whisper "$dir/whisper"
+          cp LICENSE "$dir/LICENSE.txt"
+          cp artifact/third_party/ffmpeg/LICENSE.txt "$dir/licenses/FFmpeg.txt"
+          cp third_party/imgui/LICENSE.txt "$dir/licenses/Dear-ImGui.txt"
+          cp third_party/rnnoise-models/README.md "$dir/licenses/RNNoise-model.md"
+          curl -fsSL https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/LICENSE -o "$dir/licenses/whisper.cpp.txt"
+          zip -r9q "$dir-win64.zip" "$dir"
+          unzip -l "$dir-win64.zip"
+          # Release notes: the CHANGELOG.md section of this version
+          awk -v v="$ver" 'index($0, "## " v " ") == 1 {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "::error::CHANGELOG.md has no section for $ver"; exit 1; fi
+          echo "ASSET=$dir-win64.zip" >> "$GITHUB_ENV"
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$ASSET" --title "GMod Demo Render $VERSION" --notes-file notes.md --verify-tag
