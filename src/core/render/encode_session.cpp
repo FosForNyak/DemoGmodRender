@@ -78,6 +78,20 @@ int add_copy_stream(media::Muxer& m, const std::string& first_part, AVRational f
     }
     return st;
 }
+
+// AVI не вміє сказати програвачу пропустити затримку аудіокодера (AAC — 1024 семпли, у файлі вони
+// з від'ємним часом), і FFmpeg, щоб час не був від'ємним, зсуває всі потоки. Відео в AVI він зсуває
+// цілими кадрами з округленням угору — порожніми чанками після першого кадру: при 60 к/с це 2 кадри,
+// тобто перший кадр стоїть утричі довше, файл на 2 кадри довший, а відео відстає від звуку на 12 мс
+// (33 мс зсуву проти 21 мс затримки кодера). Якщо ж відео без перестановки кадрів (AV1 — завжди,
+// H.264/HEVC — без B-кадрів), його час і так починається з 0 і нічого зсувати не треба: досить
+// прибрати затримку з самого звуку. Відео з B-кадрами FFmpeg зсуває на затримку декодера без порожніх
+// чанків, і як її показати, вирішує програвач, — там лишаємо як є.
+bool drop_audio_delay_for(const media::Muxer& m, const AVCodecContext* video) {
+    if (m.can_skip_audio_delay() || !video) return false;
+    const AVCodecDescriptor* d = avcodec_descriptor_get(video->codec_id);
+    return !d || !(d->props & AV_CODEC_PROP_REORDER) || video->has_b_frames == 0;
+}
 } // namespace
 
 // ================================ PreviewSink ======================================
@@ -327,6 +341,7 @@ bool EncodeSession::begin(int frame_w, int frame_h, const AudioSourcesSpec& spec
                     const auto& t = tracks[i];
                     auto enc = std::make_unique<media::AudioEncoder>();
                     if (!enc->open(s_.audio, global_header, error)) return false;
+                    if (drop_audio_delay_for(muxer_, copy_mode() ? nullptr : video_.context())) enc->drop_encoder_delay();
                     if (!muxer_.supports_codec(s_.audio.codec)) {
                         if (error) *error = trf("контейнер '{}' не підтримує аудіокодек {}",
                                                         muxer_.format()->name, s_.audio.codec);
@@ -411,6 +426,7 @@ bool EncodeSession::open_extra(Extra& e, bool with_audio, std::string* error) {
         }
         e.audio = std::make_unique<media::AudioEncoder>();
         if (!e.audio->open(e.cfg.audio, global_header, error)) return false;
+        if (drop_audio_delay_for(e.muxer, e.cfg.video_parts.empty() ? e.video.context() : nullptr)) e.audio->drop_encoder_delay();
         e.audio_stream = e.muxer.add_stream(e.audio->context(), tr("Мікс"));
     }
     return e.muxer.write_header(true, false, error);

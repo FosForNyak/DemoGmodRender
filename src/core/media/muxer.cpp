@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <string_view>
 
 namespace gmdr::media {
 
@@ -108,6 +109,10 @@ bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
     }
     header_written_ = true;
     return true;
+}
+
+bool Muxer::can_skip_audio_delay() const {
+    return !fmt_ctx_ || std::string_view(fmt_ctx_->oformat->name) != "avi";
 }
 
 bool Muxer::write_packet(int stream_index, AVPacket* pkt, AVRational enc_tb) {

@@ -115,6 +115,11 @@ bool AudioEncoder::push(const float* in, size_t frames, const PacketSink& sink, 
         const uint8_t* in_planes[1] = {reinterpret_cast<const uint8_t*>(in)};
         const int got = swr_convert(swr_.get(), out, out_max, in ? in_planes : nullptr, static_cast<int>(frames));
         if (got > 0) av_audio_fifo_write(fifo_.get(), reinterpret_cast<void**>(out), got);
+        if (drop_samples_ > 0) {
+            const int n = static_cast<int>(std::min<int64_t>(drop_samples_, av_audio_fifo_size(fifo_.get())));
+            av_audio_fifo_drain(fifo_.get(), n);
+            drop_samples_ -= n;
+        }
         av_freep(&out[0]);
         av_freep(&out);
         if (got < 0) {
@@ -137,6 +142,10 @@ bool AudioEncoder::send(AVFrame* f, const PacketSink& sink, std::string* error) 
         if (r < 0) {
             if (error) *error = tr("помилка аудіопакета: ") + av_error_string(r);
             return false;
+        }
+        if (ts_shift_ != 0) {
+            if (pkt_->pts != AV_NOPTS_VALUE) pkt_->pts += ts_shift_;
+            if (pkt_->dts != AV_NOPTS_VALUE) pkt_->dts += ts_shift_;
         }
         const bool ok = sink(pkt_.get());
         av_packet_unref(pkt_.get());
@@ -181,6 +190,12 @@ bool AudioEncoder::encode_from_fifo(bool final_flush, const PacketSink& sink, st
         next_pts_ += n;
         if (!send(frame_.get(), sink, error)) return false;
     }
+}
+
+void AudioEncoder::drop_encoder_delay() {
+    if (!ctx_ || ctx_->initial_padding <= 0) return;
+    drop_samples_ = ctx_->initial_padding;
+    ts_shift_ = av_rescale_q(ctx_->initial_padding, AVRational{1, ctx_->sample_rate}, ctx_->time_base);
 }
 
 bool AudioEncoder::flush(const PacketSink& sink, std::string* error) {

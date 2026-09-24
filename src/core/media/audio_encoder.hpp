@@ -33,6 +33,11 @@ public:
     // Додати семпли (стерео float 48 кГц). Кодує, коли назбирається повний кадр кодека.
     bool push(const float* interleaved, size_t frames, const PacketSink& sink, std::string* error);
     bool flush(const PacketSink& sink, std::string* error);
+    // Прибрати затримку кодера (initial_padding: AAC — 1024 семпли) з самого звуку, а не з часу
+    // пакетів: перші стільки семплів входу відкидаються, а час пакетів зсувається на стільки ж, тож
+    // перший пакет має час 0, а декодований звук — свій час і без підказки контейнера програвачу.
+    // Для контейнерів, що підказати не вміють (AVI). Викликати до першого push().
+    void drop_encoder_delay();
 
     AVCodecContext* context() const { return ctx_.get(); }
     std::string     describe() const;
@@ -49,6 +54,8 @@ private:
     PacketPtr            pkt_;
     int                  frame_size_ = 1024;
     int64_t              next_pts_ = 0;
+    int64_t              drop_samples_ = 0;   // скільки семплів входу ще відкинути (drop_encoder_delay)
+    int64_t              ts_shift_ = 0;       // зсув часу пакетів, у time_base кодека
 };
 
 } // namespace gmdr::media

@@ -26,6 +26,9 @@ public:
     // Параметр самого формату (напр. "loop" для webp) — до write_header.
     void set_format_option(const char* key, const char* value);
     const AVOutputFormat* format() const { return fmt_ctx_ ? fmt_ctx_->oformat : nullptr; }
+    // Чи вміє контейнер сказати програвачу пропустити затримку аудіокодера (перші семпли AAC, MP3):
+    // MP4 — списком редагування, MKV — CodecDelay. AVI — ні: звук у ньому йде від першого семпла.
+    bool can_skip_audio_delay() const;
 
     // Перевірити, чи контейнер підтримує кодек.
     bool supports_codec(const std::string& encoder_name) const;

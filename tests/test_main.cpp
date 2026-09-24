@@ -1575,6 +1575,57 @@ static void test_plan_parts() {
     CHECK(render::plan_parts(100, 100, ti, 1.0 / 60, 2, 1).empty());
 }
 
+// AVI з AAC: затримка кодера звуку (1024 семпли з від'ємним часом) не має зсувати відео без
+// B-кадрів порожніми чанками — раніше тут виходило 62 чанки на 60 кадрів (перший кадр стояв утричі довше)
+static void test_avi_audio_delay() {
+    std::printf("[avi audio delay]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_avi_delay";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    {
+        audio::WavWriter w;
+        w.open(dir / "game.wav", 48000, 2, audio::WavWriter::Format::Float32);
+        std::vector<float> v(48000 * 2, 0.25f);
+        w.write(v.data(), v.size() / 2);
+        w.close();
+    }
+    render::EncodeSettings es;
+    es.video.codec = "mpeg4";   // без B-кадрів: dts == pts, як AV1
+    es.video.width = 160;
+    es.video.height = 90;
+    es.video.fps = {60, 1};
+    es.audio_enabled = true;
+    es.audio.codec = "aac";
+    es.audio.sample_rate = 48000;
+    es.output_path = path_to_utf8(dir / "out.avi");
+    render::AudioSourcesSpec spec;
+    spec.game_wav = dir / "game.wav";
+    std::string err;
+    {
+        render::EncodeSession ses(es, nullptr);
+        if (!ses.begin(160, 90, spec, &err)) {
+            std::printf("  пропуск: %s\n", err.c_str());
+            return;
+        }
+        for (int f = 0; f < 60; ++f) {
+            frames::Image img;
+            img.allocate(160, 90, frames::PixelLayout::BGR24);
+            for (int y = 0; y < 90; ++y) std::memset(img.row(0, y), f == 30 ? 255 : 30, 160 * 3);
+            CHECK(ses.push_subframe(std::move(img), &err));
+        }
+        CHECK(ses.finish(&err));
+    }
+    media::MediaFileInfo info;
+    CHECK(media::probe_media_file(es.output_path, info, &err));
+    CHECK(info.video_frames == 60);
+    CHECK_NEAR(info.video_seconds, 1.0, 0.02);
+    CHECK(info.audio_streams == 1);
+    CHECK_NEAR(info.audio_seconds, 1.0, 0.05);
+    fs::remove_all(dir, ec);
+}
+
 static void test_part_assembly() {
     std::printf("[part assembly]\n");
     namespace fs = std::filesystem;
@@ -2522,6 +2573,7 @@ int main(int argc, char** argv) {
     test_fragmented_mp4();
     test_plan_parts();
     test_part_assembly();
+    test_avi_audio_delay();
     test_resume_record();
     test_speech();
     test_translate_dub();
