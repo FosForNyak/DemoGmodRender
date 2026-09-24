@@ -78,6 +78,8 @@ static void print_usage() {
   gmdr-cli render a.dem b.dem ... -o <папка>   черга: кілька демо підряд, гра запускається один раз
   gmdr-cli queue <список.txt> [параметри]      черга з файлу: у рядку — демо і його параметри
                                                ("match.dem" --start 5:00 --end 7:30 -o "бій.mp4")
+  gmdr-cli resume [--forget] [--parallel N]    дописати рендер, урваний збоєм програми чи ПК (--forget —
+                                               забути про нього)
   gmdr-cli watch <demo.dem> [--from ЧАС]       переглянути демо в грі з цього місця; клавіші в грі:
                                                F9 — початок фрагмента, F11 — кінець, F6 — позначка
   gmdr-cli encode <папка_кадрів> [параметри]   закодувати готові кадри startmovie (TGA/JPG + WAV)
@@ -178,7 +180,7 @@ static const char* kFlags[] = {"--json", "--chat", "--test", "--hide-hud", "--hi
                                "--keep-temp", "-v", "--verbose", "--no-faststart", "--mix", "-h", "--help", "-y",
                                "--test-run", "--no-mute", "--rtx", "--srt", "--accurate-color", "--no-crash-safe",
                                "--chat-srt", "--no-chapters", "--level-voices", "--denoise", "--duck-game",
-                               "--speaker-overlay", "--version", "--edit-package", "--speech-srt", "--force"};
+                               "--speaker-overlay", "--version", "--edit-package", "--speech-srt", "--force", "--forget"};
 
 static bool is_flag(const std::string& a) {
     for (const char* f : kFlags)
@@ -742,6 +744,37 @@ static int cmd_report(const Cli& c) {
 
 // Черга: "render a.dem b.dem ..." (demos) або "queue список.txt" (рядок — демо і його параметри;
 // параметри з командного рядка — для всіх). Гра запускається один раз.
+// Дописати рендер, урваний збоєм програми чи ПК (найновіший)
+static int cmd_resume(const Cli& c) {
+    auto list = render::pending_resumes();
+    if (list.empty()) {
+        std::printf("%s", tr("Урваних рендерів, які можна дописати, немає\n"));
+        return 0;
+    }
+    render::ResumeRecord r = list.front();
+    const double fps = parse_rational(r.settings.fps).value_or(Rational{60, 1}).value();
+    std::printf(tr("Урваний рендер: %s\n  демо: %s\n  записано ≈ %s з %s\n"), r.settings.output_path.c_str(),
+                r.settings.demo_path.c_str(), format_duration(static_cast<double>(r.frames) / fps).c_str(),
+                format_duration(r.seconds).c_str());
+    std::fflush(stdout);   // до журналу рендеру, що йде в stderr
+    if (c.has("--forget")) {
+        render::forget_resume(r.id);
+        std::printf("%s", tr("Запис про урваний рендер прибрано (частковий файл лишився як був)\n"));
+        return 0;
+    }
+    if (c.has("--parallel")) {
+        const auto v = parse_int(c.get("--parallel"));
+        if (!v || *v < 1 || *v > 4) {
+            std::printf("%s\n", tr("--parallel: від 1 до 4 копій гри"));
+            return 1;
+        }
+        r.settings.parallel_games = static_cast<int>(*v);
+    }
+    render::RenderJob job(r.settings, nullptr, nullptr);
+    job.set_resume(r);
+    return run_job(job);
+}
+
 static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
     std::vector<Cli> lines;
     if (!demos.empty()) {
@@ -960,6 +993,7 @@ int main(int argc, char** argv) {
     if (c.command == "driver") return cmd_driver(c);
 
     if (c.command == "watch") return cmd_watch(c);
+    if (c.command == "resume") return cmd_resume(c);
     if (c.command == "queue") return cmd_queue(c, {});
     if (c.command == "render" && c.positional.size() > 1) return cmd_queue(c, c.positional);
 

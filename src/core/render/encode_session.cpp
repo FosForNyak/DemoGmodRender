@@ -657,6 +657,9 @@ bool EncodeSession::copy_video(const std::atomic<bool>* cancel, const std::funct
                 }
             }
         };
+        // Обмеження частини (дописування після збою): кадри від ключового кадру limit і далі — ні
+        const int64_t limit =
+            k < s_.video_part_frames.size() && s_.video_part_frames[k] > 0 ? s_.video_part_frames[k] : INT64_MAX;
         int64_t part_frames = 0, part_packets = 0;
         while (in.next(pkt.get())) {
             if (cancel && *cancel) {
@@ -665,6 +668,12 @@ bool EncodeSession::copy_video(const std::atomic<bool>* cancel, const std::funct
                 return false;
             }
             shift(pkt.get(), in.time_base(), base);
+            if (limit != INT64_MAX && pkt->pts != AV_NOPTS_VALUE && pkt->pts - base >= limit) {
+                const bool key = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
+                av_packet_unref(pkt.get());
+                if (key) break;   // далі — наступні групи кадрів (GOP), їх не беремо
+                continue;
+            }
             if (pkt->pts != AV_NOPTS_VALUE) part_frames = std::max(part_frames, pkt->pts - base + 1);
             if (!muxer_.write_packet(video_stream_, pkt.get(), enc_tb)) {
                 av_packet_unref(pkt.get());
@@ -681,7 +690,7 @@ bool EncodeSession::copy_video(const std::atomic<bool>* cancel, const std::funct
                 report(done_bytes + static_cast<uint64_t>(in.position()));
             }
         }
-        write_extras(INT64_MAX);
+        write_extras(limit == INT64_MAX ? INT64_MAX : part_packets);
         done_bytes += file_size_or_zero(path_from_utf8(s_.video_parts[k]));
         report(done_bytes);
         log_debug("Склеювання: частина {} — {} кадрів ({})", k + 1, part_frames, s_.video_parts[k]);

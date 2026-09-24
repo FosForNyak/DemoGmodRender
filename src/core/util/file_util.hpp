@@ -23,6 +23,8 @@ bool write_file_atomic(const fs::path& p, const std::string& text, std::string* 
 bool copy_file_overwrite(const fs::path& from, const fs::path& to, std::string* error = nullptr);
 
 uint64_t file_size_or_zero(const fs::path& p);
+// Чи лежить p усередині теки dir (лексично, без звернення до диска; на Windows — без урахування регістру).
+bool     path_is_inside(const fs::path& p, const fs::path& dir);
 bool     remove_file_quiet(const fs::path& p);
 uint64_t free_disk_space(const fs::path& p);
 

@@ -163,6 +163,10 @@ void App::init(const std::vector<std::string>& args) {
         log_warn("{}", trf("Минулий рендер перервався, і звук Garry's Mod міг лишитися вимкненим у мікшері гучності Windows. "
                  "Програма ввімкне його під час наступного рендеру (або ввімкніть його в мікшері вручну)."));
 
+    // Рендер, урваний збоєм програми чи ПК, — запропонувати дописати
+    refresh_resume_offer();
+    if (resume_offer_) open_resume_popup_ = true;
+
     // Демо з командного рядка (перетягнули на .exe)
     for (size_t i = 1; i < args.size(); ++i)
         if (ends_with_i(args[i], ".dem")) {
@@ -359,6 +363,24 @@ void App::start_render(bool test_run) {
     save_settings_now();
     show_game_ = false;
     job_ = std::make_unique<render::RenderJob>(s_, analysis_, voices_, test_run);
+    job_reported_ = false;
+    job_->start();
+}
+
+void App::refresh_resume_offer() {
+    auto list = render::pending_resumes();
+    if (list.empty()) resume_offer_.reset();
+    else resume_offer_ = list.front();
+}
+
+// Дописати урваний рендер: налаштування — з запису, частковий файл обрізається до ключового кадру
+void App::start_resume() {
+    if (!resume_offer_ || job_running()) return;
+    save_settings_now();
+    show_game_ = false;
+    auto job = std::make_unique<render::RenderJob>(resume_offer_->settings, nullptr, nullptr);
+    job->set_resume(*resume_offer_);
+    job_ = std::move(job);
     job_reported_ = false;
     job_->start();
 }
@@ -654,6 +676,8 @@ void App::draw_menu_bar() {
             auto d = pick_folder_dialog(tr("Папка з кадрами startmovie (TGA/JPG) і WAV"));
             if (!d.empty()) start_encode_frames(d);
         }
+        if (resume_offer_ && ImGui::MenuItem(tr("Дописати урваний рендер..."), nullptr, false, !job_running()))
+            open_resume_popup_ = true;
         ImGui::Separator();
         if (ImGui::MenuItem(tr("Відкрити папку з відео"), nullptr, false, !s_.output_path.empty()))
             open_path(path_to_utf8(path_from_utf8(s_.output_path).parent_path()));
@@ -959,6 +983,7 @@ void App::apply_preset(int index) {
 
 // ================================== Попапи ========================================
 void App::on_job_finished(render::JobState state, const std::string& title, const std::string& text, bool test_run) {
+    refresh_resume_offer();   // дописаний рендер свій запис прибрав
     if (s_.notify_when_done && (platform_window_hidden() || after_done_ != PowerAction::None)) {
         std::string body = text.substr(0, text.find("\n\n"));   // перший абзац — без довгих подробиць
         if (body.size() > 220) body = body.substr(0, 217) + "...";
@@ -1097,6 +1122,41 @@ void App::draw_popups() {
             }
         }
         if (ImGui::Button("OK", ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (open_resume_popup_ && resume_offer_) ImGui::OpenPopup(tr("Дописати урваний рендер?"));
+    open_resume_popup_ = false;
+    if (ImGui::BeginPopupModal(tr("Дописати урваний рендер?"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (resume_offer_) {
+            const auto& r = *resume_offer_;
+            const double fps = parse_rational(r.settings.fps).value_or(Rational{60, 1}).value();
+            ImGui::PushTextWrapPos(fs_ * 34);
+            ImGui::TextWrapped("%s", trf("Минулого разу рендер урвався — програма чи ПК зупинились посеред запису:\n{}\n\n"
+                                         "Записано ≈ {} з {}. Програма дорендерить решту і склеїть без перекодування — "
+                                         "рендер не почнеться з нуля.",
+                                         r.settings.output_path, format_duration(static_cast<double>(r.frames) / fps),
+                                         format_duration(r.seconds)).c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::BeginDisabled(job_running());
+            if (ImGui::Button(tr("Дорендерити"), ImVec2(fs_ * 8, 0))) {
+                start_resume();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button(tr("Пізніше"), ImVec2(fs_ * 6, 0))) ImGui::CloseCurrentPopup();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Запитати знову наступного разу (або «Файл → Дописати урваний рендер»)"));
+            ImGui::SameLine();
+            if (ImGui::Button(tr("Забути"), ImVec2(fs_ * 6, 0))) {
+                render::forget_resume(r.id);
+                resume_offer_.reset();
+                ImGui::CloseCurrentPopup();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Більше не пропонувати; частковий файл лишиться як є"));
+        } else {
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
 

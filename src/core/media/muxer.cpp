@@ -95,6 +95,7 @@ bool Muxer::write_header(bool faststart, bool fragmented, std::string* error) {
         // Фрагментований MP4: індекс пишеться частинами після кожного ключового кадру,
         // тож обірваний файл однаково відкривається.
         av_dict_set(&opts, "movflags", "+frag_keyframe+empty_moov+default_base_moof+delay_moov", 0);
+        fmt_ctx_->flush_packets = 1;   // кожен готовий фрагмент — одразу на диск, а не в буфер запису
         fragmented_ = true;
     } else if (mov_family && faststart) {
         av_dict_set(&opts, "movflags", "+faststart", 0);
@@ -308,6 +309,35 @@ bool probe_media_file(const std::string& path, MediaFileInfo& out, std::string* 
         }
     }
     return true;
+}
+
+std::vector<int64_t> keyframe_frames(const std::string& path, AVRational fps, std::string* error) {
+    std::vector<int64_t> keys;
+    AVFormatContext* in = nullptr;
+    int r = avformat_open_input(&in, path.c_str(), nullptr, nullptr);
+    if (r < 0) {
+        if (error) *error = av_error_string(r);
+        return keys;
+    }
+    InputCtxPtr guard(in);
+    avformat_find_stream_info(in, nullptr);
+    const int vs = av_find_best_stream(in, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vs < 0) {
+        if (error) *error = tr("у файлі немає відео");
+        return keys;
+    }
+    const AVRational tb = in->streams[vs]->time_base;
+    AVPacket* pkt = av_packet_alloc();
+    // Обірваний файл читається до першої помилки — усе, що до неї, цілі пакети
+    while (av_read_frame(in, pkt) >= 0) {
+        if (pkt->stream_index == vs && (pkt->flags & AV_PKT_FLAG_KEY) && pkt->pts != AV_NOPTS_VALUE)
+            keys.push_back(av_rescale_q_rnd(pkt->pts, tb, AVRational{fps.den, fps.num},
+                                            static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX)));
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    if (keys.empty() && error) *error = tr("у файлі немає ключових кадрів");
+    return keys;
 }
 
 int container_supports(const std::string& ext, const std::string& encoder_name) {

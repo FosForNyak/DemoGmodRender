@@ -24,6 +24,7 @@
 #include "../voice/voice_decoder.hpp"
 #include "encode_session.hpp"
 #include "parallel.hpp"
+#include "resume.hpp"
 #include "settings.hpp"
 
 namespace gmdr::render {
@@ -198,6 +199,8 @@ public:
 
     // Режим частини паралельного рендеру (до start)
     void set_part(PartSpec p) { part_ = std::move(p); }
+    // Дописати рендер, урваний збоєм програми чи ПК (налаштування — з запису, до start)
+    void set_resume(ResumeRecord r) { resume_ = std::move(r); }
     PartResult part_result() const {
         std::lock_guard lock(part_mutex_);
         return part_result_;
@@ -239,6 +242,7 @@ private:
     std::shared_ptr<GameHandoff>                    handoff_;
     bool                                            keep_game_ = false;
     std::optional<PartSpec>                         part_;           // копія гри в паралельному рендері
+    std::optional<ResumeRecord>                     resume_;         // дописування після збою
     mutable std::mutex                              part_mutex_;
     PartResult                                      part_result_;
 };

@@ -431,6 +431,7 @@ void write_edit_project(const RenderSettings& s, const EncodeSettings& es, int64
 // Перемістити файл (між дисками — копією)
 bool move_file(const fs::path& from, const fs::path& to) {
     std::error_code ec;
+    if (fs::equivalent(from, to, ec)) return true;   // уже на місці (копія поверх себе з видаленням знищила б файл)
     fs::rename(from, to, ec);
     if (!ec) return true;
     if (!copy_file_overwrite(from, to, nullptr)) return false;
@@ -574,6 +575,23 @@ void recover_leftovers(const game::GModInstall& g) {
     const fs::path tmp = g.garrysmod / "gmdr_tmp";
     if (!fs::exists(tmp, ec)) return;
     if (!game::GameProcess::find_by_name({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}).empty()) return;
+    // Звук гри рендерів, урваних збоєм програми чи ПК, лежить тут — переносимо його до їхніх тек
+    // частин (дописування візьме його звідти), решту тимчасових файлів можна прибирати
+    for (auto r : pending_resumes()) {
+        bool changed = false;
+        for (size_t j = 0; j < r.wavs.size(); ++j) {
+            const fs::path src = path_from_utf8(r.wavs[j].first);
+            if (!path_is_inside(src, tmp) || !fs::exists(src, ec)) continue;
+            const fs::path dst = parts_dir_for(r.settings.output_path) / path_from_utf8(std::format("part0_{}.wav", j + 1));
+            fs::create_directories(dst.parent_path(), ec);
+            fs::remove(dst, ec);
+            if (move_file(src, dst)) {
+                r.wavs[j].first = path_to_utf8(dst);
+                changed = true;
+            }
+        }
+        if (changed) save_resume(r);
+    }
     for (fs::directory_iterator it(tmp, ec), end; !ec && it != end; it.increment(ec)) {
         if (!it->is_directory()) continue;
         const fs::path bak = it->path() / "config.cfg.bak";
@@ -1118,11 +1136,19 @@ struct RenderJob::ParallelInput {
     int32_t                                 range_start = 0, range_end = 0;
     double                                  expected_seconds = 0;
     double                                  vti = 0;   // тривалість тіку у відео
+    double                                  t0 = 0;    // час демо першого кадру відео
+    std::optional<PartResult>               head;      // дописування: уже записаний початок (обрізаний до ключового кадру)
 };
 
 void RenderJob::run() {
     KeepAwake keep_awake;   // ПК не засне посеред рендеру
     if (part_) set_thread_log_prefix(trf("[частина {}] ", part_->plan.index + 1));
+    // Запис для дописування після збою: звичайне завершення (готово, помилка, скасування) його
+    // прибирає, лишається він лише після збою програми чи ПК. Дописування своє прибирає саме, коли вдасться.
+    struct ResumeGuard {
+        std::string id;
+        ~ResumeGuard() { forget_resume(id); }
+    } resume_guard;
     std::string err;
     // ---- 1. Аналіз ----
     if (!analysis_) {
@@ -1240,6 +1266,82 @@ void RenderJob::run() {
         if (!transcript) log_warn("{}", trf("Мовлення не розпізнано ({}) — у субтитрах будуть лише імена", err));
     }
 
+    // ---- Дописування рендеру, урваного збоєм програми чи ПК ----
+    if (resume_) {
+        ParallelInput in;
+        const double ti0 = static_cast<double>(A.tick_interval);
+        const double fps_v = es.video.fps.num / static_cast<double>(es.video.fps.den);
+        const double frame_dt = vspeed / fps_v;
+        const fs::path out = path_from_utf8(s_.output_path);
+        const fs::path pdir = parts_dir_for(s_.output_path);
+        const fs::path head = resume_head_path(s_.output_path);
+        std::error_code ec;
+        fs::create_directories(pdir, ec);
+        // Частковий файл — у теку частин (якщо дописування вже починалось, він там)
+        if (fs::exists(out, ec)) {
+            fs::remove(head, ec);
+            if (!move_file(out, head)) {
+                fail(trf("Не вдалося перенести частково записане відео {} у {}", s_.output_path, path_to_utf8(head)));
+                return;
+            }
+        }
+        if (!fs::exists(head, ec)) {
+            forget_resume(resume_->id);
+            fail(trf("Не знайдено частково записаного відео {} — дописувати нема що", s_.output_path));
+            return;
+        }
+        std::string kerr;
+        const auto keys = media::keyframe_frames(path_to_utf8(head), es.video.fps, &kerr);
+        // Обрізаємо на останньому ключовому кадрі (далі група кадрів могла не дописатись). Краще —
+        // на ключовому, що припадає рівно на тік: тоді кадри дописаної частини лягають на ту саму
+        // сітку без зсуву (якщо такий знайдеться не далі 10 с від останнього)
+        int64_t keep = keys.empty() ? -1 : keys.back();
+        if (const int64_t m = tick_aligned_period(ti0, frame_dt, 600); m > 0 && keep > 0) {
+            for (auto it = keys.rbegin(); it != keys.rend() && *it >= keep - std::llround(fps_v * 10); ++it)
+                if (*it > 0 && *it % m == 0) {
+                    keep = *it;
+                    break;
+                }
+        }
+        in.t0 = resume_->video_t0;
+        const int64_t total = std::llround((range_end * ti0 - in.t0) / frame_dt);
+        if (keep > 0) {
+            // WAV зірваного сеансу — до частин (стару тимчасову папку гри зараз буде прибрано)
+            PartResult h;
+            h.video = path_to_utf8(head);
+            h.frames = keep;
+            h.complete = true;
+            for (size_t j = 0; j < resume_->wavs.size(); ++j) {
+                const fs::path src = path_from_utf8(resume_->wavs[j].first);
+                const fs::path dst = pdir / path_from_utf8(std::format("part0_{}.wav", j + 1));
+                if (fs::exists(src, ec)) move_file(src, dst);   // уже перенесений recover_leftovers — на місці
+                if (fs::exists(dst, ec)) h.wavs.push_back({dst, resume_->wavs[j].second});
+            }
+            if (h.wavs.empty() && s_.audio && s_.game_audio)
+                log_warn("{}", trf("Звук гри зірваного рендеру не знайдено — у дописаному відео до {} звуку гри не буде",
+                                   format_duration(static_cast<double>(keep) / fps_v)));
+            in.head = h;
+            log_info("{}", trf("Дописую урваний рендер: уже є {} ({} кадрів до останнього ключового), лишилось {}",
+                               format_duration(static_cast<double>(keep) / fps_v), keep,
+                               format_duration(static_cast<double>(std::max<int64_t>(0, total - keep)) / fps_v)));
+        } else {
+            log_warn("{}", trf("У частково записаному відео не знайдено цілих кадрів ({}) — рендерю фрагмент заново", kerr));
+        }
+        const bool par_ok = s_.parallel_games > 1 && !s_.rtx && !s_.manual_mode;
+        in.parts = plan_parts_range(in.t0, std::max<int64_t>(0, keep), total, range_end, ti0, frame_dt,
+                                    par_ok ? std::min(s_.parallel_games, 4) : 1, std::llround(fps_v * min_part_seconds()));
+        in.speakers = speakers;
+        in.voice_fx = voice_fx;
+        in.transcript = transcript ? &*transcript : nullptr;
+        in.es = es;
+        in.range_start = range_start;
+        in.range_end = range_end;
+        in.expected_seconds = std::max(0.0, static_cast<double>(total)) / fps_v;
+        in.vti = vti;
+        run_parallel(in);
+        return;
+    }
+
     // ---- Паралельний рендер кількома копіями гри ----
     if (!part_ && s_.parallel_games > 1) {
         std::string why;
@@ -1264,6 +1366,7 @@ void RenderJob::run() {
             in.range_end = range_end;
             in.expected_seconds = expected_seconds;
             in.vti = vti;
+            in.t0 = range_start * static_cast<double>(A.tick_interval);
             run_parallel(in);
             return;
         }
@@ -1503,6 +1606,8 @@ void RenderJob::run() {
         return e ? std::max(1, std::atoi(e)) : s_.rtx ? 90 : 30;
     }());
     int restarts = 0;
+    ResumeRecord resume_rec;           // запис для дописування після збою (id порожній — не пишемо)
+    auto last_resume_save = Clock::now() - std::chrono::seconds(60);
     // Час демо першого кадру відео: тік, з якого гра почала запис, а в частині паралельного
     // рендеру — місце цієї частини в сітці кадрів усього фрагмента
     double video_t0 = range_start * ti;
@@ -1764,6 +1869,17 @@ void RenderJob::run() {
                     fatal(tr("Не вдалося почати кодування: ") + err);
                     return;
                 }
+                // Запис для дописування після збою: лише коли частковий файл переживе збій
+                // (MKV/WebM, або MP4/MOV фрагментами); з RTX дописування ще не перевірене
+                if (!test_run_ && !s_.manual_mode && !s_.rtx && !part_ && parallel_container_ok(s_) &&
+                    (!is_mov_family(s_.output_path, s_.container) || es.crash_safe)) {
+                    resume_rec.id = id_;
+                    resume_rec.settings = s_;
+                    resume_rec.video_t0 = video_t0;
+                    resume_rec.seconds = expected_seconds;
+                    resume_rec.wavs = {{path_to_utf8(spec.game_wav), first_tick * ti}};
+                    resume_guard.id = id_;
+                }
                 if (s_.subtitles_srt && !speakers.empty()) {
                     // Субтитри пишемо одразу: відрізок і голоси вже відомі
                     write_speaker_subtitles(s_, speakers, spec.voice_origin_sample, expected_seconds,
@@ -1809,6 +1925,10 @@ void RenderJob::run() {
                     for (int64_t i = 0; i < -shift && session.push_subframe(copy_image(img), &err); ++i) ++pushed;
                 }
                 session.game_audio_new_segment(frames_dir / path_from_utf8(movie_prefix() + ".wav"), seg_t - video_t0);
+                if (!resume_rec.id.empty()) {
+                    resume_rec.wavs.push_back({path_to_utf8(frames_dir / path_from_utf8(movie_prefix() + ".wav")), seg_t});
+                    save_resume(resume_rec);
+                }
                 if (part_) {
                     std::lock_guard lock(part_mutex_);
                     part_result_.wavs.push_back({frames_dir / path_from_utf8(movie_prefix() + ".wav"), seg_t});
@@ -1939,6 +2059,13 @@ void RenderJob::run() {
             if (proc->suspend()) log_debug("Гра на паузі: {}", disk_low ? "мало місця на диску" : trf("кодер не встигає ({} кадрів у черзі)", pending));
         } else if (proc->suspended() && ((queue_low && !disk_low) || cancel_)) {
             proc->resume();
+        }
+
+        // Запис для дописування — раз на 3 с (скільки кадрів уже є)
+        if (!resume_rec.id.empty() && session.started() && Clock::now() - last_resume_save > std::chrono::seconds(3)) {
+            last_resume_save = Clock::now();
+            resume_rec.frames = session.frames_encoded();
+            save_resume(resume_rec);
         }
 
         // ---- Прогрес ----
@@ -2162,35 +2289,43 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     const auto t_start = Clock::now();
     std::string err;
     std::error_code ec;
-    log_info("{}", trf("Паралельний рендер: копій гри — {}, кожна рендерить ≈ {} відео", n,
-                       format_duration(in.expected_seconds / static_cast<double>(n))));
+    const int64_t head_frames = in.head ? in.head->frames : 0;
+    if (n > 1)
+        log_info("{}", trf("Паралельний рендер: копій гри — {}, кожна рендерить ≈ {} відео", n,
+                           format_duration((in.expected_seconds - head_frames * in.es.video.fps.den /
+                                                                      static_cast<double>(in.es.video.fps.num)) /
+                                           static_cast<double>(n))));
 
     // ---- Гра: знайти, драйвер, копія config.cfg — один раз на всі копії ----
-    set_stage(tr("Підготовка гри"), 0);
-    gmod_ = resolve_game(s_, true, &err);
-    if (!gmod_) {
-        fail(err);
-        return;
+    std::optional<std::string> demo_for_game;
+    if (n > 0) {
+        set_stage(tr("Підготовка гри"), 0);
+        gmod_ = resolve_game(s_, true, &err);
+        if (!gmod_) {
+            fail(err);
+            return;
+        }
+        id_ = make_unique_id();
+        tmp_dir_ = gmod_->garrysmod / "gmdr_tmp" / id_;
+        fs::create_directories(tmp_dir_, ec);
+        if (ec) {
+            fail(tr("Не вдалося створити тимчасову папку в папці гри: ") + ec.message());
+            return;
+        }
+        config_backup_ = tmp_dir_ / "config.cfg.bak";
+        game::backup_config(*gmod_, config_backup_);
+        demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, &err);
+        if (!demo_for_game) {
+            cleanup(false);
+            fail(err);
+            return;
+        }
     }
-    id_ = make_unique_id();
-    tmp_dir_ = gmod_->garrysmod / "gmdr_tmp" / id_;
-    fs::create_directories(tmp_dir_, ec);
-    if (ec) {
-        fail(tr("Не вдалося створити тимчасову папку в папці гри: ") + ec.message());
-        return;
-    }
-    config_backup_ = tmp_dir_ / "config.cfg.bak";
-    game::backup_config(*gmod_, config_backup_);
-    const auto demo_for_game = demo_path_for_game(*gmod_, s_.demo_path, tmp_dir_, id_, &err);
-    if (!demo_for_game) {
-        cleanup(false);
-        fail(err);
-        return;
-    }
-    // Частини — поруч із відео (там і так має бути місце на все відео)
+    // Частини — поруч із відео (там і так має бути місце на все відео); при дописуванні там уже
+    // лежить записаний початок і його звук
     const fs::path out = path_from_utf8(s_.output_path);
-    const fs::path parts_dir = out.parent_path() / path_from_utf8(path_to_utf8(out.stem()) + ".gmdr_parts");
-    fs::remove_all(parts_dir, ec);
+    const fs::path parts_dir = parts_dir_for(s_.output_path);
+    if (!in.head) fs::remove_all(parts_dir, ec);
     fs::create_directories(parts_dir, ec);
     if (ec) {
         cleanup(false);
@@ -2204,6 +2339,13 @@ void RenderJob::run_parallel(const ParallelInput& in) {
         }
         std::error_code rec;
         fs::remove_all(parts_dir, rec);
+    };
+    // Дописування не вдалося повністю: відео частин уже склеєне у файл, а звук гри лишаємо —
+    // з ним можна буде дописати ще раз
+    auto remove_part_videos = [&] {
+        std::error_code rec;
+        for (fs::directory_iterator it(parts_dir, rec), end; !rec && it != end; it.increment(rec))
+            if (!ends_with_i(path_to_utf8(it->path().filename()), ".wav")) fs::remove(it->path(), rec);
     };
 
     // ---- Копії гри: кожна — RenderJob у режимі частини ----
@@ -2231,13 +2373,13 @@ void RenderJob::run_parallel(const ParallelInput& in) {
         ps.dir = parts_dir;
         ps.gate = gate;
         ps.gmod = gmod_;
-        ps.demo_for_game = *demo_for_game;
+        ps.demo_for_game = demo_for_game.value_or(std::string());
         job->set_part(std::move(ps));
         if (plan.index == 0) job->share_preview(preview_);   // у прев'ю — перша частина
         job->set_show_game(show_game_);
         jobs.push_back(std::move(job));
     }
-    set_stage(trf("Запуск копій гри: {}", n), 0);
+    if (n > 0) set_stage(n > 1 ? trf("Запуск копій гри: {}", n) : tr("Запуск Garry's Mod"), 0);
     for (auto& j : jobs) j->start();
 
     const double fps_v = in.es.video.fps.num / static_cast<double>(in.es.video.fps.den);
@@ -2260,7 +2402,7 @@ void RenderJob::run_parallel(const ParallelInput& in) {
         for (auto& j : jobs) ps.push_back(j->progress());
         update([&](Progress& p) {
             const Progress& first = ps.front();
-            int64_t frames = 0, subframes = 0, pending = 0, bytes = 0;
+            int64_t frames = head_frames, subframes = 0, pending = 0, bytes = 0;
             double speed = 0;
             int restarts = 0, recording = 0, paused = 0;
             bool running = false, disk_low = false;
@@ -2276,7 +2418,8 @@ void RenderJob::run_parallel(const ParallelInput& in) {
                 running = running || q.game_running;
                 disk_low = disk_low || q.disk_low;
             }
-            p.stage = recording == 0 ? trf("{} (копій гри: {})", first.stage, n) : trf("Рендер — копій гри: {}", n);
+            p.stage = n == 1 ? first.stage
+                      : recording == 0 ? trf("{} (копій гри: {})", first.stage, n) : trf("Рендер — копій гри: {}", n);
             p.frames = frames;
             p.subframes = subframes;
             p.video_seconds = static_cast<double>(frames) / fps_v;
@@ -2314,7 +2457,13 @@ void RenderJob::run_parallel(const ParallelInput& in) {
         use.push_back(k);
         if (!res[k].complete) break;
     }
-    const bool whole = use.size() == n && res[n - 1].complete;
+    const bool whole = use.size() == n && (n == 0 || res[n - 1].complete);
+    size_t failed_part = n;   // перша незавершена частина (для підказки)
+    for (size_t k = 0; k < n; ++k)
+        if (!res[k].complete) {
+            failed_part = k;
+            break;
+        }
     std::string first_error;
     for (size_t k = 0; k < n; ++k) {
         if (jobs[k]->state() != JobState::Failed) continue;
@@ -2326,11 +2475,11 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     set_stage(tr("Закриваю гру"));
     cleanup(true);
     if (kill_) {
-        remove_parts();
+        if (!in.head) remove_parts();   // дописування: записаний початок лишається — можна спробувати ще
         update([](Progress& p) { p.stage = tr("Скасовано"); });
         return;
     }
-    if (use.empty()) {
+    if (use.empty() && !in.head) {
         remove_parts();
         if (cancel_) {
             update([](Progress& p) { p.stage = tr("Скасовано"); });
@@ -2344,7 +2493,20 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     set_stage(tr("Склеювання частин"), 0);
     EncodeSettings fes = in.es;
     fes.crash_safe = false;
-    for (size_t k : use) fes.video_parts.push_back(res[k].video);
+    if (in.head) {
+        // Записаний до збою початок — до останнього ключового кадру
+        fes.video_parts.push_back(in.head->video);
+        fes.video_part_frames.push_back(in.head->frames);
+        if (!fes.extras.empty()) {
+            log_warn("{}", trf("Додаткові версії при дописуванні не робляться (їхні файли збою не пережили) — "
+                               "зробіть їх окремим рендером"));
+            fes.extras.clear();
+        }
+    }
+    for (size_t k : use) {
+        fes.video_parts.push_back(res[k].video);
+        if (in.head) fes.video_part_frames.push_back(0);
+    }
     for (size_t i = 0; i < fes.extras.size();) {
         std::vector<std::string> v;
         for (size_t k : use)
@@ -2356,8 +2518,10 @@ void RenderJob::run_parallel(const ParallelInput& in) {
             fes.extras.erase(fes.extras.begin() + static_cast<ptrdiff_t>(i));
         }
     }
-    const double t0 = in.parts.front().first_time;   // час демо першого кадру відео
+    const double t0 = in.t0;   // час демо першого кадру відео
     AudioSourcesSpec spec;
+    if (in.head)
+        for (const auto& [wav, t] : in.head->wavs) spec.game_segments.push_back({wav, t - t0});
     for (size_t k : use)
         for (const auto& [wav, t] : res[k].wavs) spec.game_segments.push_back({wav, t - t0});
     spec.game_audio = s_.game_audio && !spec.game_segments.empty();
@@ -2381,7 +2545,12 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     spec.speed_mute = s_.speed_audio == "mute";
     auto session = std::make_unique<EncodeSession>(fes, nullptr);
     const bool ok = session->begin(s_.width, s_.height, spec, &err) &&
-                    session->copy_video(&kill_, [&](double f) { update([&](Progress& p) { p.fraction = f; }); }, &err) &&
+                    session->copy_video(&kill_, [&](double f) {
+                        update([&](Progress& p) {
+                            p.fraction = f;
+                            p.bytes_written = session->bytes_written();   // не розмір останньої частини
+                        });
+                    }, &err) &&
                     session->finish(&err);
     if (!ok) {
         session->abort();
@@ -2389,7 +2558,7 @@ void RenderJob::run_parallel(const ParallelInput& in) {
         std::error_code rec;
         fs::remove(out, rec);
         if (kill_) {
-            remove_parts();
+            if (!in.head) remove_parts();
             update([](Progress& p) { p.stage = tr("Скасовано"); });
             return;
         }
@@ -2402,10 +2571,23 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     const std::vector<std::string> extras_done = session->finished_extras();
     const auto stems = session->stem_files();
     session.reset();
-    remove_parts();
+    std::error_code sec;
+    if (const auto sz = fs::file_size(out, sec); !sec) update([&](Progress& p) { p.bytes_written = static_cast<int64_t>(sz); });
+    if (resume_ && !whole && !cancel_) {
+        // Дописати вдалося не все: запис лишається, а в ньому — звук гри всіх частин
+        ResumeRecord rec = *resume_;
+        rec.frames = frames_done;
+        rec.wavs.clear();
+        for (const auto& [wav, t] : spec.game_segments) rec.wavs.push_back({path_to_utf8(wav), t + t0});
+        save_resume(rec);
+        remove_part_videos();
+    } else {
+        remove_parts();
+        if (resume_) forget_resume(resume_->id);
+    }
 
     // ---- Субтитри, розділи, перевірка, обкладинка — як після звичайного рендеру ----
-    const int32_t start_tick = in.range_start;
+    const int32_t start_tick = static_cast<int32_t>(std::llround(t0 / static_cast<double>(A.tick_interval)));
     const int32_t end_tick = start_tick + static_cast<int32_t>(std::llround(secs / in.vti));
     if (s_.subtitles_srt && !in.speakers.empty())
         write_speaker_subtitles(s_, in.speakers, spec.voice_origin_sample, secs, in.transcript);
@@ -2417,14 +2599,16 @@ void RenderJob::run_parallel(const ParallelInput& in) {
     const auto t_end = Clock::now();
     log_info("{}", trf("Готово! {} — {} кадрів, {}, {}", s_.output_path, frames_done, format_duration(secs),
                        format_bytes(file_size_or_zero(out))));
-    log_info("{}", trf("Паралельний рендер: копій гри — {}, рендер {}, склеювання {}", n,
-                       format_duration(std::chrono::duration<double>(t_rendered - t_start).count()),
-                       format_duration(std::chrono::duration<double>(t_end - t_rendered).count())));
+    if (n > 1)
+        log_info("{}", trf("Паралельний рендер: копій гри — {}, рендер {}, склеювання {}", n,
+                           format_duration(std::chrono::duration<double>(t_rendered - t_start).count()),
+                           format_duration(std::chrono::duration<double>(t_end - t_rendered).count())));
+    if (in.head && whole) log_info("{}", trf("Урваний рендер дописано — відео склеєно без перекодування"));
     if (cancel_) log_info("{}", trf("Запис зупинено достроково — збережено відрендерену частину"));
     else if (!whole)
         log_warn("{}", trf("Збережено перші {} відео з {}: копія гри з частиною {} не впоралась. Решту можна дорендерити "
                            "окремо: початок фрагмента — тік {}", format_duration(secs), format_duration(in.expected_seconds),
-                           use.back() + 1, end_tick));
+                           failed_part + 1, end_tick));
     succeed(s_.output_path);
 }
 

@@ -171,6 +171,8 @@ private:
     std::shared_ptr<const voice::VoiceDecodeResult> voices_;
     std::unique_ptr<render::Job>                    job_;
     bool                                            job_reported_ = true;
+    std::optional<render::ResumeRecord>             resume_offer_;       // урваний збоєм рендер, який можна дописати
+    bool                                            open_resume_popup_ = false;
     bool                                            show_game_ = false;
 
     std::optional<game::GModInstall>                gmod_;
@@ -249,6 +251,8 @@ private:
     bool        open_popup_ = false;
     bool        confirm_overwrite_ = false;
     bool        confirm_quit_ = false;
+    void        start_resume();
+    void        refresh_resume_offer();
     bool        show_about_ = false;
     bool        show_help_ = false;
     std::string pending_encode_dir_;

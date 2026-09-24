@@ -82,6 +82,11 @@ struct MediaFileInfo {
 };
 bool probe_media_file(const std::string& path_utf8, MediaFileInfo& out, std::string* error);
 
+// Номери (від 0, за частотою кадрів fps) ключових кадрів відео у файлі — напр. обірваному збоєм:
+// кадри до ключового — цілі групи (GOP), тож на ньому файл можна обрізати і дописати решту.
+// Порожньо — не вдалося прочитати.
+std::vector<int64_t> keyframe_frames(const std::string& path_utf8, AVRational fps, std::string* error);
+
 // Порада: яке розширення/контейнер для кодека (для GUI).
 std::vector<std::string> containers_for_codec(const std::string& encoder_name);
 

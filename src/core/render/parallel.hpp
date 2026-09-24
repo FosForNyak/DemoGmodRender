@@ -28,6 +28,14 @@ struct PartPlan {
 // хоч би в якій частині він був.
 std::vector<PartPlan> plan_parts(int32_t start_tick, int32_t end_tick, double tick_interval, double frame_dt,
                                  int parts, int64_t min_frames);
+// Те саме для кадрів [first_frame, total_frames) відео, чий кадр 0 — час демо t0 (дорендерити
+// решту після збою: початок уже є у файлі).
+std::vector<PartPlan> plan_parts_range(double t0, int64_t first_frame, int64_t total_frames, int32_t end_tick,
+                                       double tick_interval, double frame_dt, int parts, int64_t min_frames);
+
+// Найменша кількість кадрів m (до max_m), за яку набігає ціла кількість тіків (30 кадр/с і 66 тік/с —
+// 5 кадрів = 11 тіків): межа на кадрі, кратному m, припадає рівно на тік. 0 — такого m немає.
+int64_t tick_aligned_period(double tick_interval, double frame_dt, int64_t max_m);
 
 // Копії гри запускаються по черзі: драйвер у меню кожної копії забирає спільний job.txt, тож
 // наступне завдання можна писати, лише коли попередня копія своє вже забрала.

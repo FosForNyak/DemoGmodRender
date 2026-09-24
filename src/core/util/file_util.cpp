@@ -118,6 +118,17 @@ bool copy_file_overwrite(const fs::path& from, const fs::path& to, std::string* 
     return true;
 }
 
+bool path_is_inside(const fs::path& p, const fs::path& dir) {
+    std::string a = path_to_utf8(p.lexically_normal()), b = path_to_utf8(dir.lexically_normal());
+#ifdef _WIN32
+    a = to_lower(a);
+    b = to_lower(b);
+#endif
+    while (!b.empty() && (b.back() == '/' || b.back() == '\\')) b.pop_back();
+    return !b.empty() && a.size() > b.size() + 1 && a.compare(0, b.size(), b) == 0 &&
+           (a[b.size()] == '/' || a[b.size()] == '\\');
+}
+
 uint64_t file_size_or_zero(const fs::path& p) {
     std::error_code ec;
     const auto s = fs::file_size(p, ec);

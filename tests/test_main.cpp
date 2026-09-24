@@ -1308,6 +1308,11 @@ static void test_fragmented_mp4() {
     const bool opened = media::probe_media_file(copy, info, &err);
     if (!opened) std::printf("  копія: %s\n", err.c_str());
     CHECK(opened && info.has_video && info.video_seconds >= 0.9);   // хоча б перший фрагмент (1 с)
+    // Ключові кадри обірваної копії: з 0, по зростанню, не далі записаного і не рідше GOP (30 кадрів)
+    const auto keys = media::keyframe_frames(copy, vs.fps, &err);
+    CHECK(!keys.empty() && keys.front() == 0 && keys.back() <= 75);
+    for (size_t i = 1; i < keys.size(); ++i) CHECK(keys[i] > keys[i - 1] && keys[i] - keys[i - 1] <= 30);
+    CHECK(media::keyframe_frames(path_to_utf8(dir / "missing.mp4"), vs.fps, &err).empty());
     CHECK(media::remux_file(path, true, &err));
     AVFormatContext* in = nullptr;
     CHECK(avformat_open_input(&in, path.c_str(), nullptr, nullptr) >= 0);
@@ -1379,6 +1384,7 @@ static void test_part_assembly() {
     base.video.height = 90;
     base.video.fps = {30, 1};
     base.video.preset = "veryfast";   // з B-кадрами: dts < pts
+    base.video.gop_seconds = 1;       // ключові кадри хоча б кожні 30 кадрів — є де обрізати
     base.audio_enabled = false;
     base.audio.codec = "pcm_s16le";
     base.audio.sample_rate = 48000;
@@ -1450,44 +1456,50 @@ static void test_part_assembly() {
     CHECK_NEAR(info.audio_seconds, 2.5, 0.05);
     CHECK(media::probe_media_file(p("out_small.mov"), info, &err) && info.video_frames == 75);
 
-    // Декодуємо: спалахи мають бути рівно на кадрах 30 і 45 + 15 = 60, звук — 0.25 до 1.5 с, далі 0.5
-    AVFormatContext* in = nullptr;
-    CHECK(avformat_open_input(&in, p("out.mov").c_str(), nullptr, nullptr) >= 0);
-    if (!in) return;
-    avformat_find_stream_info(in, nullptr);
-    const int vs = av_find_best_stream(in, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    const int as = av_find_best_stream(in, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    const AVCodec* dec = avcodec_find_decoder(in->streams[vs]->codecpar->codec_id);
-    AVCodecContext* dc = avcodec_alloc_context3(dec);
-    avcodec_parameters_to_context(dc, in->streams[vs]->codecpar);
-    CHECK(avcodec_open2(dc, dec, nullptr) >= 0);
-    std::vector<int> bright;   // номери кадрів зі спалахом (за pts)
+    // Декодуємо: номери кадрів зі спалахом (за pts) і звук (pcm_s16le)
+    std::vector<int> bright;
     std::vector<int16_t> pcm;
-    AVPacket* pk = av_packet_alloc();
-    AVFrame* fr = av_frame_alloc();
-    auto drain = [&] {
-        while (avcodec_receive_frame(dc, fr) >= 0) {
-            const int64_t n = av_rescale_q(fr->pts, in->streams[vs]->time_base, AVRational{1, 30});
-            if (fr->data[0][45 * fr->linesize[0] + 80] > 200) bright.push_back(static_cast<int>(n));
-            av_frame_unref(fr);
+    auto decode = [&](const std::string& path) {
+        bright.clear();
+        pcm.clear();
+        AVFormatContext* in = nullptr;
+        CHECK(avformat_open_input(&in, path.c_str(), nullptr, nullptr) >= 0);
+        if (!in) return;
+        avformat_find_stream_info(in, nullptr);
+        const int vs = av_find_best_stream(in, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        const int as = av_find_best_stream(in, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+        const AVCodec* dec = avcodec_find_decoder(in->streams[vs]->codecpar->codec_id);
+        AVCodecContext* dc = avcodec_alloc_context3(dec);
+        avcodec_parameters_to_context(dc, in->streams[vs]->codecpar);
+        CHECK(avcodec_open2(dc, dec, nullptr) >= 0);
+        AVPacket* pk = av_packet_alloc();
+        AVFrame* fr = av_frame_alloc();
+        auto drain = [&] {
+            while (avcodec_receive_frame(dc, fr) >= 0) {
+                const int64_t n = av_rescale_q(fr->pts, in->streams[vs]->time_base, AVRational{1, 30});
+                if (fr->data[0][45 * fr->linesize[0] + 80] > 200) bright.push_back(static_cast<int>(n));
+                av_frame_unref(fr);
+            }
+        };
+        while (av_read_frame(in, pk) >= 0) {
+            if (pk->stream_index == vs) {
+                avcodec_send_packet(dc, pk);
+                drain();
+            } else if (as >= 0 && pk->stream_index == as) {
+                const auto* smp = reinterpret_cast<const int16_t*>(pk->data);
+                pcm.insert(pcm.end(), smp, smp + pk->size / 2);
+            }
+            av_packet_unref(pk);
         }
+        avcodec_send_packet(dc, nullptr);
+        drain();
+        av_frame_free(&fr);
+        av_packet_free(&pk);
+        avcodec_free_context(&dc);
+        avformat_close_input(&in);
     };
-    while (av_read_frame(in, pk) >= 0) {
-        if (pk->stream_index == vs) {
-            avcodec_send_packet(dc, pk);
-            drain();
-        } else if (pk->stream_index == as) {
-            const auto* smp = reinterpret_cast<const int16_t*>(pk->data);
-            pcm.insert(pcm.end(), smp, smp + pk->size / 2);
-        }
-        av_packet_unref(pk);
-    }
-    avcodec_send_packet(dc, nullptr);
-    drain();
-    av_frame_free(&fr);
-    av_packet_free(&pk);
-    avcodec_free_context(&dc);
-    avformat_close_input(&in);
+    // Спалахи мають бути рівно на кадрах 30 і 45 + 15 = 60, звук — 0.25 до 1.5 с, далі 0.5
+    decode(p("out.mov"));
     CHECK(bright == std::vector<int>({30, 60}));
     auto sample = [&](double t) {
         const size_t i = static_cast<size_t>(t * 48000) * 2;
@@ -1498,6 +1510,101 @@ static void test_part_assembly() {
     CHECK_NEAR(sample(1.51), 0.5, 0.01);
     CHECK_NEAR(sample(2.4), 0.5, 0.01);
     CHECK(last_progress > 0.5);
+
+    // Дописування після збою: з першої частини береться лише початок до ключового кадру k
+    // (далі група кадрів могла не дописатись), решта — з другої частини
+    const auto keys = media::keyframe_frames(p("a.mov"), base.video.fps, &err);
+    int64_t k = 0;
+    for (const int64_t key : keys)
+        if (key > 0 && key < 45) k = key;
+    CHECK(k > 0);
+    if (k > 0) {
+        render::EncodeSettings cut = base;
+        cut.output_path = p("cut.mov");
+        cut.video_parts = {p("a.mov"), p("b.mov")};
+        cut.video_part_frames = {k, 0};
+        render::EncodeSession cs(cut, nullptr);
+        CHECK(cs.begin(0, 0, {}, &err));
+        CHECK(cs.copy_video(nullptr, nullptr, &err));
+        CHECK(cs.finish(&err));
+        CHECK(cs.frames_encoded() == k + 30);
+        CHECK(media::probe_media_file(p("cut.mov"), info, &err) && info.video_frames == k + 30);
+        decode(p("cut.mov"));
+        std::vector<int> expect;
+        if (k > 30) expect.push_back(30);
+        expect.push_back(static_cast<int>(k) + 15);
+        CHECK(bright == expect);
+    }
+    fs::remove_all(dir, ec);
+}
+
+static void test_resume_record() {
+    std::printf("[resume record]\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gmdr_test_resume";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    render::ResumeRecord r;
+    r.id = "test_" + make_unique_id();
+    r.settings.demo_path = "C:/demos/a.dem";
+    r.settings.output_path = path_to_utf8(dir / "відео.mp4");
+    r.settings.fps = "30";
+    r.settings.parallel_games = 2;
+    r.video_t0 = 1.5;
+    r.frames = 180;
+    r.seconds = 10;
+    r.wavs = {{path_to_utf8(dir / "g.wav"), 1.25}};
+    std::string err;
+    CHECK(render::save_resume(r, &err));
+    auto l = render::load_resume(render::resume_dir() / (r.id + ".json"));
+    CHECK(l.has_value());
+    if (l) {
+        CHECK(l->id == r.id && l->settings.output_path == r.settings.output_path && l->settings.parallel_games == 2);
+        CHECK(l->frames == 180 && l->video_t0 == 1.5 && l->seconds == 10);
+        CHECK(l->wavs.size() == 1 && l->wavs[0].first == r.wavs[0].first && l->wavs[0].second == 1.25);
+        CHECK(l->updated > 0);
+    }
+    auto find = [&] {
+        for (const auto& x : render::pending_resumes())
+            if (x.id == r.id) return true;
+        return false;
+    };
+    // Файлу ще немає — запис застарілий і прибирається
+    CHECK(!find());
+    CHECK(!fs::exists(render::resume_dir() / (r.id + ".json")));
+    // Є частковий файл (чи вже перенесений початок у папці частин) — пропонується
+    CHECK(render::save_resume(r, &err));
+    fs::create_directories(render::parts_dir_for(r.settings.output_path), ec);
+    write_file_atomic(render::resume_head_path(r.settings.output_path), "x", &err);
+    CHECK(render::resume_head_path(r.settings.output_path) == dir / "відео.gmdr_parts" / "part0.mp4");
+    CHECK(find());
+    // Залишки в теці гри після збою: recover_leftovers прибирає gmdr_tmp, але звук гри урваного
+    // рендеру спершу переносить до його теки частин (інакше дописане відео було б без нього)
+    game::GModInstall g;
+    g.root = dir / "GarrysMod";
+    g.garrysmod = g.root / "garrysmod";
+    const fs::path gtmp = g.garrysmod / "gmdr_tmp" / r.id;
+    fs::create_directories(gtmp, ec);
+    write_file_atomic(gtmp / "gmdr_x.wav", "RIFF", &err);
+    write_file_atomic(gtmp / "gmdr_x_000001.tga", "t", &err);
+    r.wavs = {{path_to_utf8(gtmp / "gmdr_x.wav"), 1.25}};
+    CHECK(render::save_resume(r, &err));
+    CHECK(path_is_inside(gtmp / "gmdr_x.wav", g.garrysmod / "gmdr_tmp") && !path_is_inside(dir / "g.wav", gtmp) &&
+          !path_is_inside(g.garrysmod / "gmdr_tmp2" / "a.wav", g.garrysmod / "gmdr_tmp"));
+    if (game::GameProcess::find_by_name({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}).empty()) {
+        render::recover_leftovers(g);
+        const fs::path moved = render::parts_dir_for(r.settings.output_path) / "part0_1.wav";
+        CHECK(fs::exists(moved) && !fs::exists(g.garrysmod / "gmdr_tmp"));
+        l = render::load_resume(render::resume_dir() / (r.id + ".json"));
+        CHECK(l && l->wavs.size() == 1 && path_from_utf8(l->wavs[0].first) == moved && l->wavs[0].second == 1.25);
+    } else {
+        std::printf("  пропуск перевірки залишків: запущено GMod\n");
+    }
+    // «Забути»: запис і допоміжне прибрано, частковий файл — знову на місці відео
+    render::forget_resume(r.id);
+    CHECK(!find());
+    CHECK(fs::exists(dir / "відео.mp4") && !fs::exists(render::parts_dir_for(r.settings.output_path)));
     fs::remove_all(dir, ec);
 }
 
@@ -1967,6 +2074,7 @@ int main(int argc, char** argv) {
     test_fragmented_mp4();
     test_plan_parts();
     test_part_assembly();
+    test_resume_record();
     test_speech();
     test_i18n();
     if (argc > 1) {
