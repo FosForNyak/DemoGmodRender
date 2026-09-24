@@ -37,6 +37,10 @@ std::vector<PartPlan> plan_parts_range(double t0, int64_t first_frame, int64_t t
 // 5 кадрів = 11 тіків): межа на кадрі, кратному m, припадає рівно на тік. 0 — такого m немає.
 int64_t tick_aligned_period(double tick_interval, double frame_dt, int64_t max_m);
 
+// Найкоротша частина, заради якої варто запускати ще одну копію гри, с (20; для автотестів —
+// змінна GMDR_TEST_MIN_PART). Паралельний рендер — лише для фрагментів від 2 × цього.
+double min_part_seconds();
+
 // Копії гри запускаються по черзі: драйвер у меню кожної копії забирає спільний job.txt, тож
 // наступне завдання можна писати, лише коли попередня копія своє вже забрала.
 struct LaunchGate {

@@ -33,6 +33,7 @@ bool                     starts_with_i(std::string_view s, std::string_view pref
 bool                     ends_with_i(std::string_view s, std::string_view suffix);
 std::vector<std::string> split(std::string_view s, char sep, bool skip_empty = true);
 std::string              replace_all(std::string s, std::string_view from, std::string_view to);
+std::string              join(const std::vector<std::string>& parts, std::string_view sep);
 
 // Розбирає "key=value; key2=value2" (роздільники ';' або перевід рядка).
 std::vector<std::pair<std::string, std::string>> parse_key_values(std::string_view s);

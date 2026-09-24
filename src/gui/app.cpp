@@ -24,6 +24,8 @@
 #include "core/util/strings.hpp"
 #include "core/game/audio_mute.hpp"
 #include "core/game/rtx.hpp"
+#include "core/config/formats.hpp"
+#include "core/config/presets.hpp"
 
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -165,7 +167,7 @@ void App::init(const std::vector<std::string>& args) {
             s_.rtx_game_dir = s_.game_dir;
             s_.game_dir.clear();
             s_.game_exe.clear();
-            s_.rtx = true;
+            s_.game_renderer = "rtx";
             mark_dirty();
         }
     detect_gmod(false);
@@ -235,7 +237,7 @@ void App::start_gpu_probe() {
 void App::detect_gmod(bool force) {
     gmod_.reset();
     std::vector<std::string> log;
-    if (s_.rtx) {
+    if ((s_.game_renderer == "rtx")) {
         if (force) s_.rtx_game_dir.clear();
         gmod_ = render::locate_game(s_, &log);
     } else {
@@ -249,11 +251,11 @@ void App::detect_gmod(bool force) {
     if (gmod_ && gmod_->valid()) {
         driver_state_ = game::driver_state(*gmod_);
         gmod_status_ = trf("Знайдено: {}", path_to_utf8(gmod_->root));
-        log_info("{}: {}", s_.rtx ? "GMod RTX" : "Garry's Mod", path_to_utf8(gmod_->root));
+        log_info("{}: {}", (s_.game_renderer == "rtx") ? "GMod RTX" : "Garry's Mod", path_to_utf8(gmod_->root));
         render::recover_leftovers(*gmod_);
     } else {
         gmod_.reset();
-        gmod_status_ = s_.rtx ? tr("Копію GMod RTX не знайдено — встановіть її через RTXLauncher або вкажіть папку")
+        gmod_status_ = (s_.game_renderer == "rtx") ? tr("Копію GMod RTX не знайдено — встановіть її через RTXLauncher або вкажіть папку")
                               : tr("Garry's Mod не знайдено — вкажіть папку гри вручну");
         log_warn("{}", gmod_status_);
     }
@@ -929,16 +931,6 @@ void App::detect_rtx_launcher() {
     }
 }
 
-std::string App::best_gpu_codec(const char* family) const {
-    std::lock_guard lock(gpu_mutex_);
-    for (const char* vendor : {"_nvenc", "_amf", "_qsv"}) {
-        const std::string name = std::string(family) + vendor;
-        auto it = gpu_status_.find(name);
-        if (it != gpu_status_.end() && it->second == 1) return name;
-    }
-    return {};
-}
-
 double App::fragment_seconds() const {
     if (!analysis_) return 0;
     const int32_t last = analysis_->last_tick;
@@ -948,72 +940,21 @@ double App::fragment_seconds() const {
 }
 
 void App::apply_preset(int index) {
-    auto base = [&](int w, int h, const char* fps) {
-        s_.width = w;
-        s_.height = h;
-        s_.fps = fps;
-        s_.render_width = s_.render_height = 0;
-        s_.quality = -1;
-        s_.preset.clear();
-        s_.video_bitrate.clear();
-        s_.video_options.clear();
-        s_.pix_fmt = "auto";
-        s_.target_size_mb = 0;
-        s_.chroma = 420;
-        s_.bit_depth = 8;
-        s_.separate_tracks = false;
-    };
-    switch (index) {
-    case 0:   // YouTube 1080p60
-        base(1920, 1080, "60");
-        set_container("mp4");
-        s_.video_codec = "libx264";
-        s_.preset = "slow";
-        s_.audio_codec = "aac";
-        s_.audio_bitrate = "320k";
-        break;
-    case 1: {   // YouTube 4K60, 10 біт
-        base(3840, 2160, "60");
-        set_container("mp4");
-        const std::string gpu = best_gpu_codec("hevc");
-        s_.video_codec = gpu.empty() ? "libx265" : gpu;
-        s_.bit_depth = 10;
-        s_.audio_codec = "aac";
-        s_.audio_bitrate = "320k";
-        break;
+    const auto& list = config::presets();
+    if (index < 0 || index >= static_cast<int>(list.size())) return;
+    // Робочі GPU-кодеки — з фонової проби вікна; неперевірені — «невідомо», а не «є»
+    config::EnvironmentCapabilities env;
+    {
+        std::lock_guard lock(gpu_mutex_);
+        for (const auto& e : config::video_encoders()) {
+            if (!e.gpu) continue;
+            auto it = gpu_status_.find(e.name);
+            env.encoders.video[e.name].state.state =
+                it != gpu_status_.end() && it->second == 1 ? config::Availability::Available : config::Availability::Unknown;
+        }
     }
-    case 2:   // Монтаж — ProRes
-        base(s_.width, s_.height, s_.fps.c_str());
-        set_container("mov");
-        s_.video_codec = "prores_ks";
-        s_.quality = 3;
-        s_.chroma = 422;
-        s_.bit_depth = 10;
-        s_.audio_codec = "pcm_s24le";
-        s_.separate_tracks = true;
-        break;
-    case 3: case 4: case 5: {   // Discord
-        const bool small = index == 3;
-        base(small ? 1280 : 1920, small ? 720 : 1080, small ? "30" : "60");
-        set_container("mp4");
-        s_.video_codec = "libx264";
-        s_.preset = "slow";
-        s_.audio_codec = "aac";
-        s_.audio_bitrate = small ? "96k" : "160k";
-        s_.target_size_mb = index == 3 ? 10 : index == 4 ? 50 : 500;
-        break;
-    }
-    case 6:   // Архів без втрат
-        base(s_.width, s_.height, s_.fps.c_str());
-        set_container("mkv");
-        s_.video_codec = "ffv1";
-        s_.chroma = 444;
-        s_.audio_codec = "flac";
-        break;
-    default:
-        return;
-    }
-    log_info("{}", trf("Пресет «{}»: {}", tr(kQuickPresets[index].label), tr(kQuickPresets[index].tip)));
+    s_ = config::apply_preset(s_, list[index].id, env);
+    log_info("{}", trf("Пресет «{}»: {}", tr(list[index].label.c_str()), tr(list[index].description.c_str())));
     mark_dirty();
 }
 

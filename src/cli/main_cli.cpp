@@ -11,6 +11,7 @@
 // =============================================================================
 #include "core/demo/analysis.hpp"
 #include "core/game/gmod_install.hpp"
+#include "core/game/game_renderer.hpp"
 #include "core/game/lua_driver.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/video_encoder.hpp"
@@ -320,10 +321,20 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
         s.game_window = w;
     }
     if (c.has("--no-mute")) s.mute_game_sound = false;
-    if (c.has("--rtx")) s.rtx = true;
+    if (c.has("--rtx")) s.game_renderer = "rtx";
     if (c.has("--rtx-dir")) {
         s.rtx_game_dir = c.get("--rtx-dir");
-        s.rtx = true;
+        s.game_renderer = "rtx";
+    }
+    if (c.has("--renderer")) {
+        const game::GameRenderer* r = game::find_game_renderer(c.get("--renderer"));
+        if (!r) {
+            std::string ids;
+            for (const auto* x : game::game_renderers()) ids += (ids.empty() ? "" : ", ") + x->id();
+            err = trf("--renderer: {}", ids);
+            return false;
+        }
+        s.game_renderer = r->id();
     }
     if (c.has("--parallel")) {
         const auto v = parse_int(c.get("--parallel"));

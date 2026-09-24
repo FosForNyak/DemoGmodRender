@@ -162,7 +162,7 @@ endif()
 # ---- Тести --------------------------------------------------------------------
 if(GMDR_BUILD_TESTS)
     enable_testing()
-    add_executable(gmdr-tests tests/test_main.cpp)
+    add_executable(gmdr-tests tests/test_main.cpp tests/test_config.cpp)
     target_link_libraries(gmdr-tests PRIVATE gmdr_core)
     add_test(NAME unit COMMAND gmdr-tests)
     gmdr_copy_voice_model(gmdr-tests)

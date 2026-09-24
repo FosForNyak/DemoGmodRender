@@ -100,6 +100,15 @@ std::string replace_all(std::string s, std::string_view from, std::string_view t
     return s;
 }
 
+std::string join(const std::vector<std::string>& parts, std::string_view sep) {
+    std::string out;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i) out += sep;
+        out += parts[i];
+    }
+    return out;
+}
+
 std::vector<std::pair<std::string, std::string>> parse_key_values(std::string_view s) {
     std::vector<std::pair<std::string, std::string>> out;
     std::string normalized(s);

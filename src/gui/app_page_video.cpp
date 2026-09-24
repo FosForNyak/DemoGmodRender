@@ -8,6 +8,7 @@
 #include "app_ui.hpp"
 #include "platform.hpp"
 
+#include "core/config/presets.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/media/muxer.hpp"
 #include "core/media/video_encoder.hpp"
@@ -123,9 +124,10 @@ void App::draw_page_video() {
         label(tr("Пресет"));
         ImGui::SetNextItemWidth(field_width(22));
         if (begin_combo("##qpreset", tr("вибрати готовий набір..."))) {
-            for (int i = 0; i < IM_ARRAYSIZE(kQuickPresets); ++i) {
-                if (ImGui::Selectable(tr(kQuickPresets[i].label))) apply_preset(i);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(kQuickPresets[i].tip));
+            const auto& presets = config::presets();
+            for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
+                if (ImGui::Selectable(tr(presets[i].label.c_str()))) apply_preset(i);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr(presets[i].description.c_str()));
             }
             ImGui::EndCombo();
         }

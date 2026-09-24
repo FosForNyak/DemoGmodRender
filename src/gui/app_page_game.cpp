@@ -32,9 +32,9 @@ void App::draw_page_game() {
     if (card_begin("Garry's Mod", tr("Звичайна гра зі Steam або GMod RTX — у кожної своя папка"), Icon::Gamepad)) {
         // Режим: звичайна гра зі Steam чи копія GMod RTX — у кожного своя папка
         label(tr("Режим гри"));
-        int mode = s_.rtx ? 1 : 0;
+        int mode = (s_.game_renderer == "rtx") ? 1 : 0;
         if (segmented("##gmode", &mode, {tr("Стандарт"), "RTX"}, std::min(field_width(), fs_ * 13.0f))) {
-            s_.rtx = mode == 1;
+            s_.game_renderer = mode == 1 ? "rtx" : "standard";
             detect_gmod(false);
             changed = true;
         }
@@ -43,12 +43,12 @@ void App::draw_page_game() {
                     "-insecure), і довше розганяє демо, щоб денойзер встиг зібрати історію кадрів. Рендер з RTX значно "
                     "повільніший — спершу зробіть тестовий прогін."));
 
-        std::string& dir = s_.rtx ? s_.rtx_game_dir : s_.game_dir;
-        label(s_.rtx ? tr("Папка GMod RTX") : tr("Папка Garry's Mod"));
+        std::string& dir = (s_.game_renderer == "rtx") ? s_.rtx_game_dir : s_.game_dir;
+        label((s_.game_renderer == "rtx") ? tr("Папка GMod RTX") : tr("Папка Garry's Mod"));
         const float btn = ImGui::GetFrameHeight() + 4;
         const float path_w = field_width() - btn * 2 + fs_ * 1.7f - 4;
         ImGui::SetNextItemWidth(path_w);
-        const std::string hint = !s_.rtx          ? std::string(tr("автоматично (бібліотеки Steam)"))
+        const std::string hint = !(s_.game_renderer == "rtx")          ? std::string(tr("автоматично (бібліотеки Steam)"))
                                  : rtx_dir_.empty() ? std::string(tr("RTXLauncher не знайдено — вкажіть папку"))
                                                     : trf("автоматично: {}", rtx_dir_);
         if (ImGui::InputTextWithHint("##gamedir", hint.c_str(), &dir, ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -57,8 +57,8 @@ void App::draw_page_game() {
         }
         ImGui::SameLine(0, 4);
         if (icon_button("##browsegd", Icon::Folder, tr("Огляд..."))) {
-            auto d = pick_folder_dialog(s_.rtx ? tr("Папка копії GMod RTX") : tr("Папка Garry's Mod (…\\steamapps\\common\\GarrysMod)"),
-                                        dir.empty() && s_.rtx ? rtx_dir_ : dir);
+            auto d = pick_folder_dialog((s_.game_renderer == "rtx") ? tr("Папка копії GMod RTX") : tr("Папка Garry's Mod (…\\steamapps\\common\\GarrysMod)"),
+                                        dir.empty() && (s_.game_renderer == "rtx") ? rtx_dir_ : dir);
             if (!d.empty()) {
                 dir = d;
                 detect_gmod(false);
@@ -66,14 +66,14 @@ void App::draw_page_game() {
             }
         }
         ImGui::SameLine(0, 4);
-        if (icon_button("##autogd", Icon::Refresh, s_.rtx ? tr("Взяти з налаштувань RTXLauncher") : tr("Знайти автоматично"))) {
+        if (icon_button("##autogd", Icon::Refresh, (s_.game_renderer == "rtx") ? tr("Взяти з налаштувань RTXLauncher") : tr("Знайти автоматично"))) {
             detect_gmod(true);
             changed = true;
         }
         label("");
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(gmod_ ? kColOk : kColErr, "%s", gmod_status_.c_str());
-        if (s_.rtx && !gmod_) {
+        if ((s_.game_renderer == "rtx") && !gmod_) {
             label("");
             ImGui::AlignTextToFramePadding();
             if (ImGui::TextLink(tr("Де взяти GMod RTX: RTXLauncher на GitHub"))) open_path("https://github.com/Xenthio/RTXLauncher");
@@ -108,11 +108,11 @@ void App::draw_page_game() {
             }
             help_marker(tr("Невеликий Lua-скрипт у меню GMod (lua/menu/gmdr_driver.lua + 1 рядок у menu.lua). Він запускає демо, вмикає startmovie точно на початку і вимикає в кінці. Сам нічого не робить, поки програма не створить завдання. Видалити — меню «Інструменти» або «Перевірити цілісність файлів» у Steam."));
         }
-        if (s_.rtx && gmod_ && std::none_of(gmod_->executables.begin(), gmod_->executables.end(), [](const fs::path& e) {
+        if ((s_.game_renderer == "rtx") && gmod_ && std::none_of(gmod_->executables.begin(), gmod_->executables.end(), [](const fs::path& e) {
                 return to_lower(path_to_utf8(e.parent_path().filename())) == "win64";
             }))
             ImGui::TextColored(kColWarn, "%s", tr("RTX потребує 64-бітної гри (гілка x86-64) — у цій папці її немає"));
-        if (s_.rtx && s_.game_window == "offscreen")
+        if ((s_.game_renderer == "rtx") && s_.game_window == "offscreen")
             ImGui::TextColored(kColDim, "%s", tr("З RTX вікно гри буде позаду інших вікон: за межами екрана Remix не малює."));
     }
     card_end();
@@ -160,7 +160,7 @@ void App::draw_page_game() {
                         "на всю довжину — без швів. Кожна копія займає свою пам'ять і відеопам'ять (≈1–2 ГБ). Працює для "
                         "фрагментів від 40 с у MP4, MOV, MKV чи WebM; RTX, ручний режим, тестовий прогін і черга рендерять однією "
                         "копією."));
-            if (s_.parallel_games > 1 && s_.rtx) ImGui::TextColored(kColDim, "%s", tr("З RTX рендерить одна копія гри."));
+            if (s_.parallel_games > 1 && (s_.game_renderer == "rtx")) ImGui::TextColored(kColDim, "%s", tr("З RTX рендерить одна копія гри."));
             label(tr("Розмір вікна гри"));
             bool same = s_.render_width <= 0 || s_.render_height <= 0;
             if (radio(tr("як відео"), same)) {

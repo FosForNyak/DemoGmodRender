@@ -1,31 +1,10 @@
 #include "settings.hpp"
 
+#include "../game/game_renderer.hpp"
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
 
 namespace gmdr::render {
-
-// Макроси, щоб не писати кожне поле двічі (серіалізація/десеріалізація).
-#define GMDR_SETTINGS_FIELDS(X)                                                                       \
-    X(demo_path) X(game_dir) X(game_exe) X(render_width) X(render_height) X(capture_format) X(frame_transport) \
-    X(jpeg_quality) X(hide_hud) X(hide_viewmodel) X(extra_commands) X(extra_launch_args)             \
-    X(max_pending_frames) X(quit_game_when_done) X(manual_mode) X(mute_engine_voice) X(menu_delay)   \
-    X(high_priority) X(game_window) X(mute_game_sound) X(rtx) X(rtx_game_dir) X(start_tick) X(end_tick)              \
-    X(width) X(height) X(fps) X(motion_blur) X(shutter)                                              \
-    X(video_codec) X(pix_fmt) X(bit_depth) X(chroma) X(quality) X(video_bitrate) X(preset)           \
-    X(video_options) X(scaler) X(accurate_color) X(full_range) X(gop_seconds) X(audio) X(audio_codec) \
-    X(audio_bitrate) X(sample_rate) X(game_audio) X(game_volume) X(game_audio_offset) X(voice_mode)   \
-    X(voice_selected) X(voice_volume) X(voice_delay) X(voice_volumes) X(separate_tracks) X(mic_file) \
-    X(mic_offset) X(mic_volume) X(voice_level) X(voice_denoise) X(voice_denoise_players) X(duck_game) \
-    X(loudness_target) X(output_path) X(container) X(faststart) X(crash_safe)                         \
-    X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files) \
-    X(extra_versions) X(notify_when_done) X(minimize_to_tray) X(speaker_overlay) X(edit_package) X(library_dirs) X(speed) X(speed_audio) \
-    X(speech_subtitles) X(whisper_language) X(whisper_model) X(whisper_cli) X(ui_language) X(parallel_games)  \
-    X(ui_advanced) X(ui_theme) X(ui_accent) X(ui_scale) X(ui_compact) X(ui_sidebar_collapsed) X(ui_page)  \
-    X(dub_languages) X(translate_subtitles) X(dub) X(dub_outputs) X(dub_audio_format) X(dub_original_volume) \
-    X(dub_template) X(translator) X(translator_url) X(translator_model) X(deepl_key) X(google_key)      \
-    X(libre_key) X(openai_key) X(elevenlabs_key) X(tts_engine) X(tts_device) X(tts_python) X(tts_clone) \
-    X(tts_clone_ack) X(elevenlabs_model) X(elevenlabs_voice) X(voice_library_auto)
 
 namespace {
 json::Value to_value(const std::string& v) { return json::Value::string(v); }
@@ -41,6 +20,7 @@ void from_value(const json::Value& j, double& v) { if (!j.is_null()) v = j.as_nu
 
 json::Value RenderSettings::to_json() const {
     json::Value j = json::Value::object();
+    j.set("configuration_version", json::Value::number(kConfigurationVersion));
 #define X(name) j.set(#name, to_value(name));
     GMDR_SETTINGS_FIELDS(X)
 #undef X
@@ -52,7 +32,23 @@ RenderSettings RenderSettings::from_json(const json::Value& j) {
 #define X(name) from_value(j[#name], s.name);
     GMDR_SETTINGS_FIELDS(X)
 #undef X
+    // Міграція: версія 0 (до номерів версій) — режим RTX був прапорцем "rtx"
+    const int version = static_cast<int>(j["configuration_version"].as_int(0));
+    if (version < 1 && j["game_renderer"].is_null() && j["rtx"].as_bool(false)) s.game_renderer = "rtx";
     return s;
+}
+
+const game::GameRenderer& renderer_of(const RenderSettings& s) {
+    const game::GameRenderer* r = game::find_game_renderer(s.game_renderer);
+    return r ? *r : game::standard_renderer();
+}
+
+std::string& renderer_game_dir(RenderSettings& s) {
+    return renderer_of(s).traits().dir_setting == "rtx_game_dir" ? s.rtx_game_dir : s.game_dir;
+}
+
+const std::string& renderer_game_dir(const RenderSettings& s) {
+    return renderer_of(s).traits().dir_setting == "rtx_game_dir" ? s.rtx_game_dir : s.game_dir;
 }
 
 bool is_secret_field(const std::string& name) { return name.size() > 4 && name.ends_with("_key"); }

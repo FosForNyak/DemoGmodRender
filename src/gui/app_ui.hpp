@@ -223,16 +223,4 @@ inline constexpr KnownCodec kAudioCodecs[] = {
     {"libmp3lame", "MP3", false, ""}, {"libvorbis", "Vorbis", false, ""},     {"ac3", "AC-3 (Dolby Digital)", false, ""},
 };
 
-// Готові набори налаштувань "в один клік" (сторінка "Відео").
-struct QuickPreset { const char* label; const char* tip; };
-inline constexpr QuickPreset kQuickPresets[] = {
-    {"YouTube 1080p60", "1920×1080, 60 кадрів/с, H.264, MP4 — підходить будь-де"},
-    {"YouTube 4K60 (10 біт)", "3840×2160, 60 кадрів/с, HEVC 10 біт (на відеокарті, якщо вона вміє), MP4"},
-    {"Монтаж — ProRes 422 HQ", "ProRes 422 HQ 10 біт, MOV, звук PCM 24 біт і окремі доріжки — для Premiere/DaVinci Resolve"},
-    {"Discord — 10 МБ", "1280×720, 30 кадрів/с, бітрейт розраховується під 10 МБ на весь фрагмент"},
-    {"Discord — 50 МБ", "1920×1080, 60 кадрів/с, під 50 МБ"},
-    {"Discord Nitro — 500 МБ", "1920×1080, 60 кадрів/с, під 500 МБ"},
-    {"Архів без втрат (FFV1)", "FFV1 4:4:4, MKV, звук FLAC — без жодних втрат якості, великий файл"},
-};
-
 } // namespace gmdr::gui::ui

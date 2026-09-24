@@ -150,7 +150,7 @@ void App::draw_page_home() {
         }
         card_end();
         if (card_begin(tr("Гра"), nullptr, Icon::Gamepad, false)) {
-            info_row(tr("Режим"), s_.rtx ? "GMod RTX" : tr("Стандарт"));
+            info_row(tr("Режим"), (s_.game_renderer == "rtx") ? "GMod RTX" : tr("Стандарт"));
             info_row(tr("Папка"), gmod_status_, gmod_ ? kGreen : kRed);
             if (action_button(tr("Налаштувати гру"), Kind::Ghost, 0, Icon::Gear)) go_to(Page::Game);
         }
@@ -293,7 +293,7 @@ void App::draw_page_home() {
 
     // ---- Гра і система ----
     if (card_begin(tr("Гра і система"), nullptr, Icon::Gamepad)) {
-        info_row(tr("Режим"), s_.rtx ? "GMod RTX" : tr("Стандарт"));
+        info_row(tr("Режим"), (s_.game_renderer == "rtx") ? "GMod RTX" : tr("Стандарт"));
         info_row(tr("Гра"), gmod_status_, gmod_ ? kGreen : kRed);
         if (gmod_)
             info_row(tr("Драйвер рендеру"), driver_state_ == game::DriverState::Installed  ? std::string(tr("встановлено"))

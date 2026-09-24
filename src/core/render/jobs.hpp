@@ -239,7 +239,7 @@ private:
     std::string                                     id_;
     std::filesystem::path                           tmp_dir_;
     std::filesystem::path                           config_backup_;
-    std::filesystem::path                           rtx_backup_;
+    std::filesystem::path                           renderer_backup_dir_;   // куди рендерер (RTX) кладе оригінали файлів гри
     std::filesystem::path                           stray_dir_;   // куди гра насправді писала кадри (якщо не в tmp)
     // Кадри з гри: каналом, без файлів на диску (frame_transport.hpp), чи файлами. Канал створюється
     // разом із завданням для гри (write_game_job) — він має бути готовий раніше, ніж гра почне запис.

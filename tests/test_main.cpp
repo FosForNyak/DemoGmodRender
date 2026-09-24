@@ -84,18 +84,9 @@ using namespace gmdr;
 
 static bool pix_fmt_bit_depth_16(AVPixelFormat f) { return media::pix_fmt_bit_depth(f) > 8; }
 
-static int g_fail = 0, g_pass = 0;
-#define CHECK(cond)                                                                                  \
-    do {                                                                                             \
-        if (cond) { ++g_pass; }                                                                      \
-        else { ++g_fail; std::printf("  ПРОВАЛ %s:%d: %s\n", __FILE__, __LINE__, #cond); }            \
-    } while (0)
-#define CHECK_NEAR(a, b, eps)                                                                        \
-    do {                                                                                             \
-        const double _a = (a), _b = (b);                                                             \
-        if (std::abs(_a - _b) <= (eps)) { ++g_pass; }                                                \
-        else { ++g_fail; std::printf("  ПРОВАЛ %s:%d: %s = %g, очікувалось %g ± %g\n", __FILE__, __LINE__, #a, _a, _b, (double)(eps)); } \
-    } while (0)
+#include "test_check.hpp"
+
+void test_config();   // test_config.cpp
 
 // Рівень RMS відрізка [from_s, to_s) секунд (48 кГц; stride 2 — лівий канал стерео), дБ.
 static double rms_db(const std::vector<float>& x, double from_s, double to_s, size_t stride = 1);
@@ -2532,7 +2523,7 @@ static void test_rtx_profile() {
         return l ? l->root : fs::path();
     };
     CHECK(pick() == plain);
-    s.rtx = true;
+    s.game_renderer = "rtx";
     CHECK(pick() == root);
     s.rtx_game_dir.clear();
     s.game_dir = path_to_utf8(root);
@@ -2578,6 +2569,7 @@ int main(int argc, char** argv) {
     test_speech();
     test_translate_dub();
     test_i18n();
+    test_config();
     if (argc > 1) {
         const std::filesystem::path dir = argv[1];
         if (std::filesystem::exists(dir / "test24.dem")) test_demo(dir / "test24.dem", 24);

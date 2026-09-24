@@ -5,7 +5,8 @@
 #include "../game/audio_mute.hpp"
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
-#include "../game/rtx.hpp"
+#include "../config/formats.hpp"
+#include "../game/game_renderer.hpp"
 #include "../media/muxer.hpp"
 #include "../util/file_util.hpp"
 #include "../util/http_download.hpp"
@@ -402,21 +403,11 @@ void finalize_output(const RenderSettings& s, bool fragmented, int64_t frames, d
 } // namespace
 
 namespace {
-// Коротша частина не варта ще одного запуску гри (для автотестів: GMDR_TEST_MIN_PART=секунди)
-double min_part_seconds() {
-    const char* e = std::getenv("GMDR_TEST_MIN_PART");
-    return e ? std::max(0.5, std::atof(e)) : 20.0;
-}
-
 // Паралельний рендер: частини склеюються пакетами, тож контейнер має зберігати їх як є
 bool parallel_container_ok(const RenderSettings& s) {
-    if (s.output_path.find('%') != std::string::npos) return false;   // послідовність зображень
-    std::string c = to_lower(s.container);
-    if (c.empty()) {
-        c = to_lower(path_to_utf8(path_from_utf8(s.output_path).extension()));
-        if (!c.empty() && c[0] == '.') c = c.substr(1);
-    }
-    return c == "mp4" || c == "mov" || c == "m4v" || c == "mkv" || c == "matroska" || c == "webm";
+    if (config::is_image_sequence(s)) return false;
+    const config::ContainerInfo* c = config::find_container(config::container_of(s));
+    return c && c->joinable;
 }
 
 // Проєкт для Premiere / DaVinci Resolve: відео, окремі WAV і позначки на одній шкалі
@@ -613,10 +604,9 @@ void recover_leftovers(const game::GModInstall& g) {
             log_warn("{}", trf("Знайдено залишки перерваного рендеру — відновлюю config.cfg гри"));
             game::restore_config(g, bak);
         }
-        if (fs::exists(it->path() / "rtx.conf.bak", ec)) {
-            log_warn("{}", trf("Знайдено залишки перерваного RTX-рендеру — повертаю rtx.conf"));
-            game::restore_rtx_profile(g, it->path() / "rtx.conf.bak");
-        }
+        for (const auto* r : game::game_renderers())   // RTX: rtx.conf
+            if (r->restore(g, it->path(), false))
+                log_warn("{}", trf("Знайдено залишки перерваного рендеру ({}) — повертаю файли гри, як були", r->label()));
         const std::string id = path_to_utf8(it->path().filename());
         game::remove_job_files(g, id);
         fs::remove_all(it->path(), ec);
@@ -937,7 +927,7 @@ RenderJob::RenderJob(RenderSettings s, std::shared_ptr<const demo::DemoAnalysis>
         p.checks.clear();
         for (int i = 0; i < kCheckCount; ++i) p.checks.push_back({tr(kCheckNames[i]), CheckItem::Pending, {}});
     });
-    if (!s_.rtx) set_check(kCheckRtx, CheckItem::Skipped, tr("без RTX"));
+    if (!renderer_of(s_).traits().black_frame_check) set_check(kCheckRtx, CheckItem::Skipped, tr("без RTX"));
 }
 
 bool RenderJob::can_show_game() const {
@@ -960,14 +950,13 @@ void RenderJob::set_check(int index, CheckItem::State state, const std::string& 
 }
 
 std::optional<game::GModInstall> locate_game(const RenderSettings& s, std::vector<std::string>* log) {
-    if (!s.rtx) {
-        if (!s.game_dir.empty()) return game::gmod_from_dir(path_from_utf8(s.game_dir));
-        return game::detect_gmod(log);
-    }
-    if (!s.rtx_game_dir.empty()) return game::gmod_from_dir(path_from_utf8(s.rtx_game_dir));
-    if (!s.game_dir.empty())
-        if (auto g = game::gmod_from_dir(path_from_utf8(s.game_dir)); g && g->valid() && game::is_rtx_install(*g)) return g;
-    return game::detect_rtx_install(log);
+    const game::GameRenderer& r = renderer_of(s);
+    const std::string& dir = renderer_game_dir(s);
+    if (!dir.empty()) return game::gmod_from_dir(path_from_utf8(dir));
+    // Старі налаштування: копію для цього рендерера (напр. RTX) вказано як звичайну папку гри
+    if (&dir != &s.game_dir && !s.game_dir.empty())
+        if (auto g = game::gmod_from_dir(path_from_utf8(s.game_dir)); g && g->valid() && r.accepts(*g)) return g;
+    return r.detect(log);
 }
 
 namespace {
@@ -979,8 +968,8 @@ std::optional<game::GModInstall> resolve_game(RenderSettings& s, bool need_drive
     std::vector<std::string> log;
     std::optional<game::GModInstall> g = locate_game(s, &log);
     for (const auto& l : log) log_debug("{}", l);
-    if (s.rtx && !g) {
-        if (error) *error = tr("Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на сторінці «Гра».");
+    if (!g && &renderer_of(s) != &game::standard_renderer()) {
+        if (error) *error = renderer_of(s).not_found_message();
         return std::nullopt;
     }
     if (!g || !g->valid()) {
@@ -1038,22 +1027,9 @@ bool RenderJob::prepare(std::string* error) {
         handoff_->gmod = gmod_;
         handoff_->job_ids.push_back(id_);
     }
-    if (s_.rtx) {
-        if (!game::is_rtx_install(*gmod_))
-            log_warn("{}", trf("Увімкнено RTX, але в папці гри немає rtx.conf чи rtx-remix — це точно копія від RTXLauncher?"));
-        // Налаштування Remix для офлайн-рендеру; оригінал повернеться після рендеру (і після збою)
-        rtx_backup_ = backup_dir / "rtx.conf.bak";
-        std::string rerr;
-        if (fs::exists(rtx_backup_, ec))
-            log_info("{}", trf("rtx.conf уже налаштовано для рендеру попереднім пунктом черги"));
-        else if (game::apply_rtx_render_profile(*gmod_, rtx_backup_, &rerr)) {
-            log_info("{}", trf("rtx.conf: на час рендеру — повна роздільна здатність (DLAA), без генерації кадрів і заставки"));
-            log_info("{}", trf("RTX: шейдери Remix компілюються до кадру, а не у фоні — кадр чекає на них, а не виходить "
-                               "чорним (перша компіляція без кешу може тривати кілька хвилин)"));
-        }
-        else
-            log_warn("{}", trf("Не вдалося змінити rtx.conf ({}) — Remix рендеритиме з вашими налаштуваннями", rerr));
-    }
+    // Рендерер готує гру (RTX: налаштування Remix у rtx.conf; оригінал повернеться після рендеру і після збою)
+    renderer_backup_dir_ = backup_dir;
+    renderer_of(s_).prepare(*gmod_, backup_dir);
     const uint64_t free_space = free_disk_space(tmp_dir_);
     log_info("{}", trf("Вільно на диску з грою: {}", format_bytes(free_space)));
     if (free_space > 0 && free_space < (3ull << 30))
@@ -1128,11 +1104,11 @@ bool RenderJob::write_game_job(int32_t start_tick, std::string* error) {
     // RTX: денойзеру потрібна історія кадрів — розгін довший.
     if (analysis_ && analysis_->tick_interval > 0) {
         const auto ticks = [&](double sec) { return static_cast<int32_t>(std::llround(sec / analysis_->tick_interval)); };
-        const int32_t seek = job.start_tick - ticks(s_.rtx ? 10.0 : 5.0);
+        const int32_t seek = job.start_tick - ticks(renderer_of(s_).traits().warmup_seconds);
         if (seek > ticks(30.0)) job.seek_tick = seek;
     }
     // RTX: перший кадр з трасуванням чекає, поки Remix скомпілює шейдери (без кешу — хвилини)
-    if (s_.rtx) job.load_timeout = 1800;
+    if (const int t = renderer_of(s_).traits().load_timeout_seconds; t > 0) job.load_timeout = t;
     job.quit_when_done = keep_game_ ? false : s_.quit_game_when_done;
     job.wait_next = keep_game_;
     job.menu_delay = s_.menu_delay;
@@ -1171,10 +1147,7 @@ void RenderJob::cleanup(bool game_closing) {
             game::restore_config(*gmod_, config_backup_);
             if (handoff_) fs::remove(config_backup_, ec);   // наступний пункт черги зробить нову копію
         }
-        if (!rtx_backup_.empty() && fs::exists(rtx_backup_, ec)) {
-            game::restore_rtx_profile(*gmod_, rtx_backup_);
-            if (handoff_) fs::remove(rtx_backup_, ec);
-        }
+        if (!renderer_backup_dir_.empty()) renderer_of(s_).restore(*gmod_, renderer_backup_dir_, handoff_ != nullptr);
     }
     // Пункт черги віддає відкриту гру наступному: запис уже закінчено, тож свою тимчасову
     // папку можна прибрати, хоч гра й працює
@@ -1399,9 +1372,10 @@ void RenderJob::run() {
         } else {
             log_warn("{}", trf("У частково записаному відео не знайдено цілих кадрів ({}) — рендерю фрагмент заново", kerr));
         }
-        const bool par_ok = s_.parallel_games > 1 && !s_.rtx && !s_.manual_mode;
+        const int copies = std::min(s_.parallel_games, renderer_of(s_).traits().max_parallel);
+        const bool par_ok = copies > 1 && !s_.manual_mode;
         in.parts = plan_parts_range(in.t0, std::max<int64_t>(0, keep), total, range_end, ti0, frame_dt,
-                                    par_ok ? std::min(s_.parallel_games, 4) : 1, std::llround(fps_v * min_part_seconds()));
+                                    par_ok ? std::min(copies, 4) : 1, std::llround(fps_v * min_part_seconds()));
         in.speakers = speakers;
         in.voice_fx = voice_fx;
         in.transcript = transcript ? &*transcript : nullptr;
@@ -1420,7 +1394,7 @@ void RenderJob::run() {
         if (test_run_) why = tr("тестовий прогін");
         else if (handoff_) why = tr("пункт черги");
         else if (s_.manual_mode) why = tr("ручний режим");
-        else if (s_.rtx) why = tr("RTX");
+        else if (renderer_of(s_).traits().max_parallel < 2) why = renderer_of(s_).label();
         else if (!parallel_container_ok(s_)) why = tr("формат файлу — лише MP4, MOV, MKV або WebM");
         ParallelInput in;
         if (why.empty()) {
@@ -1461,7 +1435,7 @@ void RenderJob::run() {
     // ---- 3. Запуск ----
     set_stage(tr("Запуск Garry's Mod"));
     game::WindowMode window_mode = s_.manual_mode ? game::WindowMode::Normal : game::window_mode_from_string(s_.game_window);
-    if (s_.rtx && window_mode == game::WindowMode::Offscreen) {
+    if (!renderer_of(s_).traits().offscreen_window && window_mode == game::WindowMode::Offscreen) {
         // Перевірено: за межами екрана Remix віддає чорні кадри, а на моніторі (навіть позаду вікон) — з RTX
         window_mode = game::WindowMode::Behind;
         log_info("{}", trf("RTX: вікно гри буде позаду інших вікон, а не за межами екрана (інакше Remix не малює)"));
@@ -1476,10 +1450,8 @@ void RenderJob::run() {
         const auto [x, y] = game::GameProcess::offscreen_position();
         args.insert(args.end(), {"-x", std::to_string(x), "-y", std::to_string(y)});
     }
-    if (s_.rtx) {
-        // Так гру запускає сам RTXLauncher; файли гри в копії пропатчені, тож VAC вимкнено (-insecure)
-        for (const char* a : {"-dxlevel", "90", "-nod3d9ex", "+mat_disable_d3d9ex", "1", "-insecure"}) args.push_back(a);
-    }
+    // Параметри запуску рендерера (RTX — ті самі, що в RTXLauncher)
+    for (const auto& a : renderer_of(s_).traits().launch_args) args.push_back(a);
     // Параметри запуску без конфігу завдання: якщо в пункту черги вони інші, гру треба перезапустити
     const std::string launch_sig = game::format_command_line(exe, args) + " | " + s_.extra_launch_args + " | " + s_.game_window;
     args.insert(args.end(), {"-condebug", "+exec", "gmdr/job_" + id_ + ".cfg"});
@@ -1694,7 +1666,7 @@ void RenderJob::run() {
     // Сторож: скільки чекати на кадри, перш ніж вважати гру завислою (RTX-кадр рендериться довше)
     const auto watchdog = std::chrono::seconds([&] {
         const char* e = std::getenv("GMDR_TEST_WATCHDOG");   // для автотестів
-        return e ? std::max(1, std::atoi(e)) : s_.rtx ? 90 : 30;
+        return e ? std::max(1, std::atoi(e)) : renderer_of(s_).traits().hang_seconds;
     }());
     int restarts = 0;
     double cpu_sample = -1;            // процесорний час гри на момент останнього заміру (сторож)
@@ -2062,7 +2034,7 @@ void RenderJob::run() {
                 }
                 // Запис для дописування після збою: лише коли частковий файл переживе збій
                 // (MKV/WebM, або MP4/MOV фрагментами); з RTX дописування ще не перевірене
-                if (!test_run_ && !s_.manual_mode && !s_.rtx && !part_ && parallel_container_ok(s_) &&
+                if (!test_run_ && !s_.manual_mode && renderer_of(s_).traits().resume && !part_ && parallel_container_ok(s_) &&
                     (!is_mov_family(s_.output_path, s_.container) || es.crash_safe)) {
                     resume_rec.id = id_;
                     resume_rec.settings = s_;
@@ -2144,7 +2116,7 @@ void RenderJob::run() {
             }
             if (session.frames_encoded() > 0) set_check(kCheckEncode, CheckItem::Ok, session.video_description());
             // RTX: чи є трасування в кадрі. Чорний кадр (лише HUD) — Remix не малює.
-            if (s_.rtx && !rtx_checked && session.video_seconds() >= 1.0) {
+            if (renderer_of(s_).traits().black_frame_check && !rtx_checked && session.video_seconds() >= 1.0) {
                 PreviewFrame pf;
                 if (preview_->get_if_newer(0, pf) && !pf.rgba.empty()) {
                     rtx_checked = true;
@@ -2191,12 +2163,13 @@ void RenderJob::run() {
             cpu_sample = c;
             cpu_sample_t = Clock::now();
         }
-        const bool busy_wait = game_busy && silent < (s_.rtx ? std::chrono::minutes(20) : std::chrono::minutes(5));
+        const bool busy_wait = game_busy && silent < std::chrono::minutes(renderer_of(s_).traits().busy_wait_minutes);
         if (busy_wait && silent > std::chrono::seconds(15) && !busy_logged) {
             busy_logged = true;
             log_info("{}", trf("Гра вже {} с не віддає кадрів, але працює{} — чекаю",
                                std::chrono::duration_cast<std::chrono::seconds>(silent).count(),
-                               s_.rtx ? tr(" (Remix компілює шейдери?)") : ""));
+                               renderer_of(s_).traits().busy_hint.empty() ? std::string()
+                                                                          : " (" + renderer_of(s_).traits().busy_hint + ")"));
         }
         if (silent < std::chrono::seconds(2)) busy_logged = false;   // кадри пішли знову
         if (!window_fallback && effective_mode == game::WindowMode::Offscreen && silent > std::chrono::seconds(20)) {
@@ -2435,19 +2408,7 @@ void RenderJob::run() {
                                               video_start_tick + static_cast<int32_t>(std::llround(secs / vti)), vti));
     if (s_.chat_srt && frames_done > 0) write_chat_subtitles(s_, A, video_start_tick, secs);
     if (frames_done > 0) translate_after_render(stems, speakers, transcript ? &*transcript : nullptr, video_t0, secs, es.audio);
-    if (s_.rtx) {
-        // Звірка з журналом Remix: чи прийняв він налаштування для рендеру
-        const auto eff = game::read_remix_effective_options(*gmod_);
-        for (const auto& [k, v] : game::rtx_render_profile_values()) {
-            auto it = eff.find(k);
-            if (it == eff.end()) continue;   // Remix пише лише значення, відмінні від типових
-            if (it->second != v)
-                log_warn("{}", trf("Remix: {} = {} замість {} — налаштування користувача в меню Remix мають вищий пріоритет", k,
-                         it->second, v));
-            else
-                log_debug("Remix прийняв {} = {}", k, v);
-        }
-    }
+    renderer_of(s_).after_render(*gmod_);   // RTX: чи прийняв Remix налаштування для рендеру
     log_info("{}", trf("Готово! {} — {} кадрів, {}, {}", s_.output_path, frames_done, format_duration(secs),
              format_bytes(file_size_or_zero(path_from_utf8(s_.output_path)))));
     if (cancel_) log_info("{}", trf("Запис зупинено достроково — збережено відрендерену частину"));
@@ -2946,7 +2907,7 @@ void QueueJob::run() {
         if (!game_running && !handoff->dir.empty()) {
             // Первинні копії, які лишились (гру закрито не останнім пунктом)
             if (fs::exists(handoff->dir / "config.cfg.bak", ec)) game::restore_config(g, handoff->dir / "config.cfg.bak");
-            if (fs::exists(handoff->dir / "rtx.conf.bak", ec)) game::restore_rtx_profile(g, handoff->dir / "rtx.conf.bak");
+            for (const auto* r : game::game_renderers()) r->restore(g, handoff->dir, false);
             fs::remove_all(handoff->dir, ec);
             std::error_code ec2;
             if (fs::is_empty(handoff->dir.parent_path(), ec2)) fs::remove(handoff->dir.parent_path(), ec2);
@@ -3040,8 +3001,7 @@ void WatchJob::run() {
     std::vector<std::string> args;
     if (to_lower(path_to_utf8(exe.filename())).rfind("hl2", 0) == 0) args.insert(args.end(), {"-game", "garrysmod"});
     args.push_back("-novid");
-    if (s_.rtx)
-        for (const char* a : {"-dxlevel", "90", "-nod3d9ex", "+mat_disable_d3d9ex", "1", "-insecure"}) args.push_back(a);
+    for (const auto& a : renderer_of(s_).traits().launch_args) args.push_back(a);
     args.insert(args.end(), {"-condebug", "+exec", "gmdr/job_" + id + ".cfg"});
     for (const auto& a : split(s_.extra_launch_args, ' ')) args.push_back(trim(a));
     log_info("{}", trf("Команда запуску: {}", game::format_command_line(exe, args)));

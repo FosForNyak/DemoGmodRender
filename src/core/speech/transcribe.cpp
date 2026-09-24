@@ -59,7 +59,7 @@ std::vector<fs::path> whisper_dirs() {
 fs::path models_download_dir() { return app_data_dir() / "whisper" / "models"; }
 
 std::optional<WhisperTools> find_whisper(const std::string& cli_override, const std::string& model_override,
-                                         std::string* why) {
+                                         std::string* why, WhisperTools* partial) {
     std::error_code ec;
     auto env = [](const char* n) {
         const char* e = std::getenv(n);
@@ -81,6 +81,7 @@ std::optional<WhisperTools> find_whisper(const std::string& cli_override, const 
                 break;
             }
     }
+    if (partial) *partial = t;
     if (t.cli.empty()) {
         if (why)
             *why = trf("не знайдено whisper-cli: покладіть його (з DLL) у теку «whisper» поруч із програмою ({})",
@@ -109,6 +110,7 @@ std::optional<WhisperTools> find_whisper(const std::string& cli_override, const 
                 if (t.model.empty() && iequals(path_to_utf8(f.filename()), m.file)) t.model = f;
         if (t.model.empty() && !found.empty()) t.model = found.front();
     }
+    if (partial) *partial = t;
     if (t.model.empty()) {
         if (why) *why = tr("немає моделі розпізнавання — завантажте її («Розпізнати мовлення» → «Завантажити модель»)");
         return std::nullopt;

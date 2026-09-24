@@ -42,8 +42,9 @@ std::vector<std::filesystem::path> whisper_dirs();
 std::filesystem::path models_download_dir();
 // Явні шляхи мають перевагу (налаштування, --whisper-cli/--whisper-model, змінні
 // GMDR_WHISPER_CLI / GMDR_WHISPER_MODEL). Модель — найкраща з наявних.
+// partial — що знайшлося, навіть коли чогось бракує (є whisper-cli, але немає моделі).
 std::optional<WhisperTools> find_whisper(const std::string& cli_override, const std::string& model_override,
-                                         std::string* why);
+                                         std::string* why, WhisperTools* partial = nullptr);
 
 struct Line {
     double      start = 0, end = 0;   // секунди від тіку 0 демо

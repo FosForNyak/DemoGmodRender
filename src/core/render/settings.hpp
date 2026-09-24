@@ -1,6 +1,10 @@
 // =============================================================================
 //  settings.hpp — усі налаштування рендеру в одній структурі.
 //  Зберігаються у JSON (gmdr_settings.json поруч із програмою).
+//
+//  Це дані, а не стан інтерфейсу: вікно, CLI, черга й сам рендер працюють з тією
+//  самою структурою, а що з чим сумісне, вирішує config::evaluate()
+//  (config/constraints.hpp). Опис кожного поля — config::settings_catalog().
 // =============================================================================
 #pragma once
 
@@ -9,7 +13,15 @@
 
 #include "../util/json.hpp"
 
+namespace gmdr::game {
+class GameRenderer;
+}
+
 namespace gmdr::render {
+
+// Версія формату налаштувань (поле configuration_version у JSON). Старіші файли мігрують у
+// from_json(): 0 — до версій (RTX був bool "rtx").
+inline constexpr int kConfigurationVersion = 1;
 
 struct RenderSettings {
     // ---- Вхід ----
@@ -38,7 +50,7 @@ struct RenderSettings {
     int         parallel_games = 1;       // скільки копій гри рендерять фрагмент частинами одночасно (-multirun)
     std::string game_window = "offscreen";  // де вікно гри: offscreen (за межами екрана) / behind (позаду інших) / normal
     bool        mute_game_sound = true;   // вимкнути звук GMod у мікшері Windows на час рендеру (на відео не впливає)
-    bool        rtx = false;              // режим GMod RTX: копія від RTXLauncher (свої параметри запуску, довший розгін)
+    std::string game_renderer = "standard";   // чим рендерити: standard / rtx (game/game_renderer.hpp)
     std::string rtx_game_dir;             // папка копії GMod RTX (порожньо — з налаштувань RTXLauncher)
 
     // ---- Діапазон ----
@@ -109,6 +121,7 @@ struct RenderSettings {
     bool        ui_compact = false;       // щільніше: менші відступи
     bool        ui_sidebar_collapsed = false;   // бічна навігація — лише значки
     std::string ui_page;                  // остання відкрита сторінка
+    std::string ui_graphics_api = "auto"; // графічний API самого вікна (Qt): auto, d3d11, d3d12, vulkan, opengl, metal, software
     bool        chat_srt = false;         // субтитри з чатом (.srt, або .chat.srt разом із "хто говорить")
     bool        chapters = true;          // позначки у фрагменті -> розділи MP4/MOV/MKV
     std::string markers;                  // позначки поточного демо: рядок на позначку, "тік<TAB>назва"
@@ -149,8 +162,37 @@ struct RenderSettings {
     static RenderSettings from_json(const json::Value& j);
 };
 
+// Усі поля — один список: серіалізація (settings.cpp) і ідентифікатори налаштувань
+// (config::SettingId, config/settings_catalog.hpp) беруться з нього, тож не розійдуться.
+#define GMDR_SETTINGS_FIELDS(X)                                                                       \
+    X(demo_path) X(game_dir) X(game_exe) X(render_width) X(render_height) X(capture_format) X(frame_transport) \
+    X(jpeg_quality) X(hide_hud) X(hide_viewmodel) X(extra_commands) X(extra_launch_args)             \
+    X(max_pending_frames) X(quit_game_when_done) X(manual_mode) X(mute_engine_voice) X(menu_delay)   \
+    X(high_priority) X(game_window) X(mute_game_sound) X(game_renderer) X(rtx_game_dir) X(start_tick) X(end_tick)              \
+    X(width) X(height) X(fps) X(motion_blur) X(shutter)                                              \
+    X(video_codec) X(pix_fmt) X(bit_depth) X(chroma) X(quality) X(video_bitrate) X(preset)           \
+    X(video_options) X(scaler) X(accurate_color) X(full_range) X(gop_seconds) X(audio) X(audio_codec) \
+    X(audio_bitrate) X(sample_rate) X(game_audio) X(game_volume) X(game_audio_offset) X(voice_mode)   \
+    X(voice_selected) X(voice_volume) X(voice_delay) X(voice_volumes) X(separate_tracks) X(mic_file) \
+    X(mic_offset) X(mic_volume) X(voice_level) X(voice_denoise) X(voice_denoise_players) X(duck_game) \
+    X(loudness_target) X(output_path) X(container) X(faststart) X(crash_safe)                         \
+    X(subtitles_srt) X(chat_srt) X(chapters) X(markers) X(target_size_mb) X(threads) X(keep_temp_files) \
+    X(extra_versions) X(notify_when_done) X(minimize_to_tray) X(speaker_overlay) X(edit_package) X(library_dirs) X(speed) X(speed_audio) \
+    X(speech_subtitles) X(whisper_language) X(whisper_model) X(whisper_cli) X(ui_language) X(parallel_games)  \
+    X(ui_advanced) X(ui_theme) X(ui_accent) X(ui_scale) X(ui_compact) X(ui_sidebar_collapsed) X(ui_page) X(ui_graphics_api)  \
+    X(dub_languages) X(translate_subtitles) X(dub) X(dub_outputs) X(dub_audio_format) X(dub_original_volume) \
+    X(dub_template) X(translator) X(translator_url) X(translator_model) X(deepl_key) X(google_key)      \
+    X(libre_key) X(openai_key) X(elevenlabs_key) X(tts_engine) X(tts_device) X(tts_python) X(tts_clone) \
+    X(tts_clone_ack) X(elevenlabs_model) X(elevenlabs_voice) X(voice_library_auto)
+
 // Поле з API-ключем (зберігається зашифрованим, у звіт не потрапляє)
 bool is_secret_field(const std::string& name);
+
+// Рендерер з налаштувань (невідомий id — стандартний; про невідомий скаже config::evaluate)
+const game::GameRenderer& renderer_of(const RenderSettings& s);
+// Поле з папкою копії гри для вибраного рендерера (game_dir чи rtx_game_dir)
+std::string&       renderer_game_dir(RenderSettings& s);
+const std::string& renderer_game_dir(const RenderSettings& s);
 // JSON налаштувань чи черги без API-ключів (для звіту про проблему); не JSON — як є
 std::string redact_secrets_json(const std::string& text);
 

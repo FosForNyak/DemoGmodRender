@@ -187,7 +187,7 @@ void App::draw_page_settings() {
             fresh.output_path = s_.output_path;
             fresh.game_dir = s_.game_dir;
             fresh.rtx_game_dir = s_.rtx_game_dir;
-            fresh.rtx = s_.rtx;
+            fresh.game_renderer = s_.game_renderer;
             fresh.ui_language = s_.ui_language;
             fresh.ui_advanced = s_.ui_advanced;
             fresh.ui_theme = s_.ui_theme;

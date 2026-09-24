@@ -1,5 +1,7 @@
 #include "parallel.hpp"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 
@@ -65,6 +67,11 @@ std::vector<PartPlan> plan_parts_range(double t0, int64_t first_frame, int64_t t
         out.push_back(p);
     }
     return out;
+}
+
+double min_part_seconds() {
+    const char* e = std::getenv("GMDR_TEST_MIN_PART");
+    return e ? std::max(0.5, std::atof(e)) : 20.0;
 }
 
 } // namespace gmdr::render

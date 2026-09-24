@@ -6,6 +6,7 @@
 #include "../media/ffmpeg_util.hpp"
 #include "../util/file_util.hpp"
 #include "../util/strings.hpp"
+#include "../util/system_info.hpp"
 #include "../util/zip_writer.hpp"
 #include "../util/i18n.hpp"
 #include "settings.hpp"
@@ -37,59 +38,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-#ifdef _WIN32
-std::string os_description() {
-    using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
-    OSVERSIONINFOW v{sizeof(v)};
-    if (HMODULE nt = GetModuleHandleW(L"ntdll.dll"))
-        if (auto fn = reinterpret_cast<RtlGetVersionFn>(reinterpret_cast<void*>(GetProcAddress(nt, "RtlGetVersion"))))
-            fn(&v);
-    // Windows 11 теж повідомляє 10.0 — відрізняється номером збірки (22000+)
-    const char* name = v.dwMajorVersion == 10 && v.dwBuildNumber >= 22000 ? "Windows 11" : "Windows";
-    return trf("{} {}.{} (збірка {})", name, v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber);
-}
-
-std::string cpu_name() {
-    wchar_t buf[256] = {};
-    DWORD size = sizeof(buf);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"ProcessorNameString",
-                     RRF_RT_REG_SZ, nullptr, buf, &size) != ERROR_SUCCESS)
-        return "?";
-    return trim(path_to_utf8(fs::path(buf)));
-}
-
 std::string memory_description() {
-    MEMORYSTATUSEX m{sizeof(m)};
-    if (!GlobalMemoryStatusEx(&m)) return "?";
-    return trf("{} (вільно {})", format_bytes(m.ullTotalPhys), format_bytes(m.ullAvailPhys));
+    const uint64_t total = total_memory(), avail = available_memory();
+    if (total == 0) return "?";
+    return avail ? trf("{} (вільно {})", format_bytes(total), format_bytes(avail)) : format_bytes(total);
 }
-
-std::vector<std::string> gpu_names() {
-    std::set<std::string> names;
-    DISPLAY_DEVICEW d{sizeof(d)};
-    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &d, 0); ++i, d.cb = sizeof(d))
-        names.insert(path_to_utf8(fs::path(d.DeviceString)));
-    return {names.begin(), names.end()};
-}
-#else
-std::string os_description() {
-    utsname u{};
-    if (uname(&u) != 0) return "?";
-    return std::format("{} {} ({})", u.sysname, u.release, u.machine);
-}
-std::string cpu_name() {
-    auto text = read_file_text("/proc/cpuinfo");
-    if (!text) return "?";
-    for (const auto& line : split(*text, '\n'))
-        if (starts_with_i(line, "model name")) return trim(line.substr(line.find(':') + 1));
-    return "?";
-}
-std::string memory_description() {
-    const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
-    return pages > 0 && page > 0 ? format_bytes(static_cast<uint64_t>(pages) * static_cast<uint64_t>(page)) : "?";
-}
-std::vector<std::string> gpu_names() { return {}; }
-#endif
 
 std::string profile_dir() {
 #ifdef _WIN32
@@ -153,7 +106,12 @@ std::string system_summary() {
     s += tr("ОС: ") + os_description() + "\n";
     s += trf("Процесор: {} ({} потоків)\n", cpu_name(), std::thread::hardware_concurrency());
     s += tr("Пам'ять: ") + memory_description() + "\n";
-    for (const auto& g : gpu_names()) s += tr("Відеоадаптер: ") + g + "\n";
+    for (const auto& g : system_gpus()) {
+        s += tr("Відеоадаптер: ") + g.name;
+        if (g.vram_bytes) s += trf(", пам'ять {}", format_bytes(g.vram_bytes));
+        if (!g.driver.empty()) s += trf(", драйвер {}", g.driver);
+        s += "\n";
+    }
     s += std::format("FFmpeg: {} (avcodec {}.{}, avformat {}.{})\n", av_version_info(), LIBAVCODEC_VERSION_MAJOR,
                      LIBAVCODEC_VERSION_MINOR, LIBAVFORMAT_VERSION_MAJOR, LIBAVFORMAT_VERSION_MINOR);
     std::string gpu_enc;

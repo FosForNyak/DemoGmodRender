@@ -169,7 +169,6 @@ private:
     void refresh_codec_lists();
     bool job_running() const;
     void apply_preset(int index);
-    std::string best_gpu_codec(const char* family) const;   // "hevc" -> hevc_nvenc/amf/qsv, якщо працює
     double fragment_seconds() const;
     void rebuild_timeline();
     // Позначки поточного демо і фрагмент
