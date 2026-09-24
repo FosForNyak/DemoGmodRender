@@ -540,6 +540,53 @@ bool radio(const char* label, bool active) {
     return pressed;
 }
 
+// Перемикач-«капсула» з кількох варіантів: виділення плавно переїжджає до вибраного
+bool segmented(const char* id, int* current, std::initializer_list<const char*> labels, float width) {
+    const int n = static_cast<int>(labels.size());
+    if (n == 0) return false;
+    ImGui::PushID(id);
+    const float h = ImGui::GetFrameHeight();
+    ImGui::PushFont(bold_font(), 0.0f);
+    float seg = 0;
+    for (const char* l : labels) seg = std::max(seg, ImGui::CalcTextSize(l, nullptr, true).x + h * 1.4f);
+    ImGui::PopFont();
+    const float w = width > 0 ? width : seg * n;
+    seg = w / n;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##seg", ImVec2(w, h));
+    const bool hov = ImGui::IsItemHovered();
+    const int hover_i = hov ? std::clamp(static_cast<int>((ImGui::GetIO().MousePos.x - p.x) / seg), 0, n - 1) : -1;
+    bool changed = false;
+    if (ImGui::IsItemClicked() && hover_i >= 0 && hover_i != *current) {
+        *current = hover_i;
+        changed = true;
+    }
+    // Виділення їде до вибраного сегмента (позиція — у сховищі стану вікна)
+    float* pos = ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID("##anim"), static_cast<float>(*current));
+    const float target = static_cast<float>(std::clamp(*current, 0, n - 1));
+    *pos += (target - *pos) * std::min(1.0f, ImGui::GetIO().DeltaTime * 16.0f);
+    if (std::abs(target - *pos) < 0.002f) *pos = target;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float r = h * 0.5f, inset = std::round(2.0f * u());
+    dl->AddRectFilled(p, p + ImVec2(w, h), col(kField), r);
+    dl->AddRect(p, p + ImVec2(w, h), col(hov ? IM_COL32(96, 96, 96, 255) : kPanelLine), r, 0, 1.0f);
+    const ImVec2 t0(p.x + *pos * seg + inset, p.y + inset);
+    dl->AddRectFilled(t0, ImVec2(t0.x + seg - inset * 2, p.y + h - inset), col(kBlue), r - inset);
+    int i = 0;
+    for (const char* l : labels) {
+        const bool sel = i == *current;
+        if (sel) ImGui::PushFont(bold_font(), 0.0f);
+        const char* end = ImGui::FindRenderedTextEnd(l);
+        const ImVec2 ts = ImGui::CalcTextSize(l, end);
+        const ImU32 tc = sel ? IM_COL32_WHITE : i == hover_i ? kText : kTextDim;
+        dl->AddText(ImVec2(p.x + i * seg + std::round((seg - ts.x) * 0.5f), p.y + std::round((h - ts.y) * 0.5f)), col(tc), l, end);
+        if (sel) ImGui::PopFont();
+        ++i;
+    }
+    ImGui::PopID();
+    return changed;
+}
+
 bool begin_combo(const char* id, const char* preview, ImGuiComboFlags flags) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));

@@ -35,7 +35,8 @@ struct RenderSettings {
     int         parallel_games = 1;       // скільки копій гри рендерять фрагмент частинами одночасно (-multirun)
     std::string game_window = "offscreen";  // де вікно гри: offscreen (за межами екрана) / behind (позаду інших) / normal
     bool        mute_game_sound = true;   // вимкнути звук GMod у мікшері Windows на час рендеру (на відео не впливає)
-    bool        rtx = false;              // копія GMod RTX від RTXLauncher (свої параметри запуску, довший розгін)
+    bool        rtx = false;              // режим GMod RTX: копія від RTXLauncher (свої параметри запуску, довший розгін)
+    std::string rtx_game_dir;             // папка копії GMod RTX (порожньо — з налаштувань RTXLauncher)
 
     // ---- Діапазон ----
     int32_t start_tick = 0;

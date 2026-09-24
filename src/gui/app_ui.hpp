@@ -8,6 +8,7 @@
 
 #include "imgui.h"
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,8 @@ void same_line_if_fits(const char* next_label);
 // Галочка й перемикач у стилі Spectrum (увімкнені — сині).
 bool checkbox(const char* label, bool* v);
 bool radio(const char* label, bool active);
+// Перемикач-«капсула» з кількох варіантів (виділення плавно переїжджає); width 0 — за текстом
+bool segmented(const char* id, int* current, std::initializer_list<const char*> labels, float width = 0);
 // Випадний список: як ImGui::BeginCombo, але стрілка без окремої «кнопки».
 bool begin_combo(const char* id, const char* preview, ImGuiComboFlags flags = 0);
 

@@ -49,7 +49,8 @@ can switch it in **Tools → Мова / Language**.
   ProRes master. After the render you can also get a thumbnail, a GIF and an animated WebP.
 - **Parallel rendering.** Two to four game instances render parts of the fragment at the same
   time. The parts are joined without re-encoding, frame-exact.
-- **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). During
+- **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
+  tab switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
   the render the program sets Remix to video-friendly settings (DLAA, no frame generation) and
   restores your config afterwards.
 

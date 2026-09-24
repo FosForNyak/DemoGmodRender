@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The Game tab has a **Standard / RTX** switch. Each mode keeps its own game folder: the regular game is found through Steam, the RTX copy through RTXLauncher. A GMod RTX folder entered as the regular game folder is moved to RTX mode automatically. Console: `--rtx-dir FOLDER`.
+
 ## 1.0.0 — 2026-09-24
 
 The first public release. It brings together everything built during Beta 1 and Beta 2 and adds a new interface.

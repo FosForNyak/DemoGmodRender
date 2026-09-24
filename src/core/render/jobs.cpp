@@ -944,35 +944,40 @@ void RenderJob::set_check(int index, CheckItem::State state, const std::string& 
         log_debug("Перевірка: {} — так{}", kCheckNames[index], detail.empty() ? "" : " (" + detail + ")");
 }
 
+std::optional<game::GModInstall> locate_game(const RenderSettings& s, std::vector<std::string>* log) {
+    if (!s.rtx) {
+        if (!s.game_dir.empty()) return game::gmod_from_dir(path_from_utf8(s.game_dir));
+        return game::detect_gmod(log);
+    }
+    if (!s.rtx_game_dir.empty()) return game::gmod_from_dir(path_from_utf8(s.rtx_game_dir));
+    if (!s.game_dir.empty())
+        if (auto g = game::gmod_from_dir(path_from_utf8(s.game_dir)); g && g->valid() && game::is_rtx_install(*g)) return g;
+    return game::detect_rtx_install(log);
+}
+
 namespace {
 const std::vector<std::string> kGameProcessNames = {"gmod.exe", "hl2.exe", "gmod", "hl2_linux"};
 
-// Папка гри за налаштуваннями. RTX: потрібна копія від RTXLauncher — якщо вказано звичайну
-// гру, береться RTX-копія (s.game_exe тоді скидається: exe звичайної гри там не підходить).
-// Також: відновлення після збою, перевірка, що гра не запущена, і встановлення драйвера.
+// Папка гри за налаштуваннями (locate_game) і exe саме з неї. Також: відновлення після збою,
+// перевірка, що гра не запущена, і встановлення драйвера.
 std::optional<game::GModInstall> resolve_game(RenderSettings& s, bool need_driver, std::string* error) {
-    std::optional<game::GModInstall> g;
-    if (!s.game_dir.empty()) g = game::gmod_from_dir(path_from_utf8(s.game_dir));
-    else if (!s.rtx) {
-        std::vector<std::string> log;
-        g = game::detect_gmod(&log);
-        for (const auto& l : log) log_debug("{}", l);
-    }
-    if (s.rtx && (!g || !game::is_rtx_install(*g))) {
-        std::vector<std::string> log;
-        if (auto rtx = game::detect_rtx_install(&log)) {
-            if (g) log_info("{}", trf("RTX: замість звичайної гри використовую копію від RTXLauncher"));
-            g = rtx;
-            s.game_exe.clear();
-            for (const auto& l : log) log_info("{}", l);
-        } else if (!g) {
-            if (error) *error = tr("Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на вкладці «Гра».");
-            return std::nullopt;
-        }
+    std::vector<std::string> log;
+    std::optional<game::GModInstall> g = locate_game(s, &log);
+    for (const auto& l : log) log_debug("{}", l);
+    if (s.rtx && !g) {
+        if (error) *error = tr("Не знайдено копію GMod RTX від RTXLauncher. Вкажіть її папку на вкладці «Гра».");
+        return std::nullopt;
     }
     if (!g || !g->valid()) {
         if (error) *error = tr("Не знайдено Garry's Mod. Вкажіть папку гри (…\\steamapps\\common\\GarrysMod) у налаштуваннях.");
         return std::nullopt;
+    }
+    // Вибраний exe — з іншої копії гри (наприклад, звичайної, а рендеримо RTX): береться типовий
+    if (!s.game_exe.empty() &&
+        !to_lower(path_to_utf8(path_from_utf8(s.game_exe).lexically_normal()))
+             .starts_with(to_lower(path_to_utf8(g->root.lexically_normal())))) {
+        log_info("{}", trf("Вибраний exe гри не з цієї копії — беру типовий: {}", path_to_utf8(g->default_exe())));
+        s.game_exe.clear();
     }
     log_info("Garry's Mod: {}", path_to_utf8(g->root));
     recover_leftovers(*g);

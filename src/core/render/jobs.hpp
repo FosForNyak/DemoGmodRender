@@ -393,6 +393,11 @@ std::string detect_frame_prefix(const std::filesystem::path& dir, int64_t* count
 // Відновлення після аварійного завершення (повернути config.cfg, прибрати тимчасове).
 void recover_leftovers(const game::GModInstall& g);
 
+// Яку копію гри брати за налаштуваннями (без перевірок запуску й драйвера). Звичайний режим:
+// game_dir або автопошук через Steam. RTX: rtx_game_dir, потім RTX-копія, вказана як звичайна
+// папка гри (старі налаштування), потім копія з налаштувань RTXLauncher.
+std::optional<game::GModInstall> locate_game(const RenderSettings& s, std::vector<std::string>* log = nullptr);
+
 // Шлях виходу за замовчуванням: поруч із демо, те саме ім'я + розширення.
 std::string default_output_path(const std::string& demo_path, const std::string& container_ext);
 

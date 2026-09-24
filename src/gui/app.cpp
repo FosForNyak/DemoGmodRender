@@ -140,6 +140,17 @@ void App::init(const std::vector<std::string>& args) {
     log_info("{}", trf("GMod Demo Render {} — рендер демо Garry's Mod у відео", GMDR_VERSION));
     log_info("FFmpeg: libavcodec {}.{}.{}", LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
     refresh_codec_lists();
+    // Старі налаштування: копію GMod RTX вказано як звичайну папку гри. Тепер у неї своє поле
+    // і режим «RTX», а звичайна гра знаходиться автоматично.
+    if (s_.rtx_game_dir.empty() && !s_.game_dir.empty())
+        if (auto g = game::gmod_from_dir(path_from_utf8(s_.game_dir)); g && g->valid() && game::is_rtx_install(*g)) {
+            log_info("{}", trf("Папку {} перенесено в режим RTX (це копія GMod RTX)", s_.game_dir));
+            s_.rtx_game_dir = s_.game_dir;
+            s_.game_dir.clear();
+            s_.game_exe.clear();
+            s_.rtx = true;
+            mark_dirty();
+        }
     detect_gmod(false);
     detect_rtx_launcher();
     start_gpu_probe();
@@ -202,23 +213,31 @@ void App::start_gpu_probe() {
     });
 }
 
+// Копія гри для вибраного режиму: звичайна (папка або автопошук через Steam) чи RTX (своя
+// папка або та, що в налаштуваннях RTXLauncher; поле папки тоді лишається порожнім).
 void App::detect_gmod(bool force) {
     gmod_.reset();
-    if (!s_.game_dir.empty() && !force) gmod_ = game::gmod_from_dir(path_from_utf8(s_.game_dir));
-    if (!gmod_) {
-        std::vector<std::string> log;
-        gmod_ = game::detect_gmod(&log);
-        for (const auto& l : log) log_debug("{}", l);
-        if (gmod_) s_.game_dir = path_to_utf8(gmod_->root);
+    std::vector<std::string> log;
+    if (s_.rtx) {
+        if (force) s_.rtx_game_dir.clear();
+        gmod_ = render::locate_game(s_, &log);
+    } else {
+        if (!s_.game_dir.empty() && !force) gmod_ = game::gmod_from_dir(path_from_utf8(s_.game_dir));
+        if (!gmod_) {
+            gmod_ = game::detect_gmod(&log);
+            if (gmod_) s_.game_dir = path_to_utf8(gmod_->root);
+        }
     }
+    for (const auto& l : log) log_debug("{}", l);
     if (gmod_ && gmod_->valid()) {
         driver_state_ = game::driver_state(*gmod_);
         gmod_status_ = trf("Знайдено: {}", path_to_utf8(gmod_->root));
-        log_info("Garry's Mod: {}", path_to_utf8(gmod_->root));
+        log_info("{}: {}", s_.rtx ? "GMod RTX" : "Garry's Mod", path_to_utf8(gmod_->root));
         render::recover_leftovers(*gmod_);
     } else {
         gmod_.reset();
-        gmod_status_ = tr("Garry's Mod не знайдено — вкажіть папку гри вручну");
+        gmod_status_ = s_.rtx ? tr("Копію GMod RTX не знайдено — встановіть її через RTXLauncher або вкажіть папку")
+                              : tr("Garry's Mod не знайдено — вкажіть папку гри вручну");
         log_warn("{}", gmod_status_);
     }
 }

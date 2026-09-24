@@ -37,26 +37,54 @@ void App::draw_tab_game() {
     bool changed = false;
 
     if (section(tr("Garry's Mod"))) {
-        label(tr("Папка Garry's Mod"), lw);
-        ImGui::SetNextItemWidth(ww - ImGui::GetFrameHeight() - 4);
-        if (ImGui::InputText("##gamedir", &s_.game_dir, ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Режим: звичайна гра зі Steam чи копія GMod RTX — у кожного своя папка
+        label(tr("Режим гри"), lw);
+        int mode = s_.rtx ? 1 : 0;
+        if (segmented("##gmode", &mode, {tr("Стандарт"), "RTX"}, std::min(ww, fs_ * 13.0f))) {
+            s_.rtx = mode == 1;
+            detect_gmod(false);
+            changed = true;
+        }
+        help_marker(tr("Стандарт — звичайна гра зі Steam. RTX — копія GMod RTX від RTXLauncher: відео з трасуванням променів "
+                    "(RTX Remix). Програма запускає її з тими самими параметрами, що й RTXLauncher (-dxlevel 90 -nod3d9ex, "
+                    "-insecure), і довше розганяє демо, щоб денойзер встиг зібрати історію кадрів. Рендер з RTX значно "
+                    "повільніший — спершу зробіть тестовий прогін."));
+
+        std::string& dir = s_.rtx ? s_.rtx_game_dir : s_.game_dir;
+        label(s_.rtx ? tr("Папка GMod RTX") : tr("Папка Garry's Mod"), lw);
+        const float btn = ImGui::GetFrameHeight() + 4;
+        ImGui::SetNextItemWidth(ww - btn * 2);
+        const std::string hint = !s_.rtx          ? std::string(tr("автоматично (бібліотеки Steam)"))
+                                 : rtx_dir_.empty() ? std::string(tr("RTXLauncher не знайдено — вкажіть папку"))
+                                                    : trf("автоматично: {}", rtx_dir_);
+        if (ImGui::InputTextWithHint("##gamedir", hint.c_str(), &dir, ImGuiInputTextFlags_EnterReturnsTrue)) {
             detect_gmod(false);
             changed = true;
         }
         ImGui::SameLine(0, 4);
         if (icon_button("##browsegd", Icon::Folder, tr("Огляд..."))) {
-            auto d = pick_folder_dialog(tr("Папка Garry's Mod (…\\steamapps\\common\\GarrysMod)"), s_.game_dir);
+            auto d = pick_folder_dialog(s_.rtx ? tr("Папка копії GMod RTX") : tr("Папка Garry's Mod (…\\steamapps\\common\\GarrysMod)"),
+                                        dir.empty() && s_.rtx ? rtx_dir_ : dir);
             if (!d.empty()) {
-                s_.game_dir = d;
+                dir = d;
                 detect_gmod(false);
                 changed = true;
             }
         }
+        ImGui::SameLine(0, 4);
+        if (icon_button("##autogd", Icon::Refresh, s_.rtx ? tr("Взяти з налаштувань RTXLauncher") : tr("Знайти автоматично"))) {
+            detect_gmod(true);
+            changed = true;
+        }
         label("", lw);
         ImGui::TextColored(gmod_ ? kColOk : kColErr, "%s", gmod_status_.c_str());
+        if (s_.rtx && !gmod_) {
+            label("", lw);
+            if (ImGui::TextLink(tr("Де взяти GMod RTX: RTXLauncher на GitHub"))) open_path("https://github.com/Xenthio/RTXLauncher");
+        }
         if (gmod_) {
             label(tr("Версія гри"), lw);
-            ImGui::SetNextItemWidth(ww * 0.55f);
+            ImGui::SetNextItemWidth(ww - btn * 2);
             std::string cur = s_.game_exe.empty() ? tr("Автоматично: ") + game::GModInstall::exe_label(gmod_->default_exe())
                                                   : game::GModInstall::exe_label(path_from_utf8(s_.game_exe));
             if (begin_combo("##exe", cur.c_str())) {
@@ -82,31 +110,12 @@ void App::draw_tab_game() {
             help_marker(tr("Невеликий Lua-скрипт у меню GMod (lua/menu/gmdr_driver.lua + 1 рядок у menu.lua). Він запускає демо, вмикає startmovie точно на початку і вимикає в кінці. Сам нічого не робить, поки програма не створить завдання. Видалити — меню «Інструменти» або «Перевірити цілісність файлів» у Steam."));
         }
 
-        // ---- GMod RTX ----
-        if (!rtx_dir_.empty() || s_.rtx) {
-            label("GMod RTX", lw);
-            if (checkbox(tr("копія від RTXLauncher##rtx"), &s_.rtx)) changed = true;
-            help_marker(tr("Відео з трасуванням променів (RTX Remix) з копії гри, яку ставить RTXLauncher. Програма запускає її з "
-                        "тими самими параметрами, що й RTXLauncher (-dxlevel 90 -nod3d9ex, -insecure), і довше розганяє демо, "
-                        "щоб денойзер встиг зібрати історію кадрів. Рендер з RTX значно повільніший — спершу зробіть тестовий прогін."));
-            if (!rtx_dir_.empty() && !iequals(path_to_utf8(path_from_utf8(s_.game_dir)), rtx_dir_)) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton(tr("Використати RTX-копію"))) {
-                    s_.game_dir = rtx_dir_;
-                    s_.game_exe.clear();
-                    s_.rtx = true;
-                    detect_gmod(false);
-                    changed = true;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", rtx_dir_.c_str());
-            }
-            if (s_.rtx && gmod_ && std::none_of(gmod_->executables.begin(), gmod_->executables.end(), [](const fs::path& e) {
-                    return to_lower(path_to_utf8(e.parent_path().filename())) == "win64";
-                }))
-                ImGui::TextColored(kColWarn, "%s", tr("RTX потребує 64-бітної гри (гілка x86-64) — у цій папці її немає"));
-            if (s_.rtx && s_.game_window == "offscreen")
-                ImGui::TextColored(kColDim, "%s", tr("З RTX вікно гри буде позаду інших вікон: за межами екрана Remix не малює."));
-        }
+        if (s_.rtx && gmod_ && std::none_of(gmod_->executables.begin(), gmod_->executables.end(), [](const fs::path& e) {
+                return to_lower(path_to_utf8(e.parent_path().filename())) == "win64";
+            }))
+            ImGui::TextColored(kColWarn, "%s", tr("RTX потребує 64-бітної гри (гілка x86-64) — у цій папці її немає"));
+        if (s_.rtx && s_.game_window == "offscreen")
+            ImGui::TextColored(kColDim, "%s", tr("З RTX вікно гри буде позаду інших вікон: за межами екрана Remix не малює."));
     }   // «Garry's Mod»
 
     ImGui::Spacing();

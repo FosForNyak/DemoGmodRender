@@ -2040,6 +2040,26 @@ static void test_rtx_profile() {
     auto eff = game::read_remix_effective_options(*g);
     CHECK(eff.size() == 2);
     CHECK(eff["rtx.qualityDLSS"] == "5" && eff["rtx.graphicsPreset"] == "4");
+
+    // Копія гри за режимом: «Стандарт» — game_dir, RTX — rtx_game_dir або RTX-копія, вказана
+    // як звичайна папка гри (старі налаштування)
+    const fs::path plain = root.parent_path() / "Plain";
+    fs::create_directories(plain / "garrysmod");
+    write_file_text(plain / "garrysmod" / "gameinfo.txt", "GameInfo {}");
+    write_file_text(plain / "hl2.exe", "");
+    render::RenderSettings s;
+    s.game_dir = path_to_utf8(plain);
+    s.rtx_game_dir = path_to_utf8(root);
+    auto pick = [&] {
+        auto l = render::locate_game(s);
+        return l ? l->root : fs::path();
+    };
+    CHECK(pick() == plain);
+    s.rtx = true;
+    CHECK(pick() == root);
+    s.rtx_game_dir.clear();
+    s.game_dir = path_to_utf8(root);
+    CHECK(pick() == root);
     fs::remove_all(root.parent_path());
 }
 
