@@ -20,6 +20,7 @@ struct PresetInfo {
     std::string id;            // youtube-1080p60, discord-10mb ...
     std::string label;         // український ключ перекладу
     std::string description;   // український ключ перекладу
+    std::string gpu_family;    // пресет бере GPU-кодек цього сімейства, якщо проба пройшла (hevc); порожньо — ні
 };
 const std::vector<PresetInfo>& presets();
 const PresetInfo*              find_preset(const std::string& id);

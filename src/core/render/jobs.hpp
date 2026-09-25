@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "../config/constraints.hpp"
 #include "../demo/analysis.hpp"
 #include "../frames/frame_pipe.hpp"
 #include "../game/gmod_install.hpp"
@@ -86,6 +87,10 @@ public:
     std::string result() const;
     // Підсумковий звіт (тестовий прогін: кроки, швидкість, прогноз часу й розміру).
     std::string report() const;
+    // Завдання не почалось, бо налаштування не дозволяють (а не збій під час роботи):
+    // помилки перевірки з виправленнями (config/constraints.hpp)
+    bool                      settings_error() const;
+    std::vector<config::Issue> settings_issues() const;
     virtual std::string name() const = 0;
     // Живе прев'ю кадрів, що кодуються.
     const PreviewSink& preview() const { return *preview_; }
@@ -106,6 +111,7 @@ protected:
         f(progress_);
     }
     void fail(const std::string& message);
+    void fail_settings(const config::ValidationResult& r);
     void succeed(const std::string& result);
     void set_report(const std::string& report);
     double elapsed_seconds() const;
@@ -119,6 +125,8 @@ private:
     mutable std::mutex    mutex_;
     Progress              progress_;
     std::string           error_, result_, report_;
+    std::vector<config::Issue> settings_issues_;
+    bool                  settings_error_ = false;
     std::thread           thread_;
     std::chrono::steady_clock::time_point started_;
     std::atomic<int64_t>  ended_ns_{0};   // скільки тривало завдання (нс); 0 — ще триває

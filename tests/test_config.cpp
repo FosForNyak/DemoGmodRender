@@ -10,12 +10,15 @@
 #include "core/config/formats.hpp"
 #include "core/config/presets.hpp"
 #include "core/config/settings_catalog.hpp"
+#include "core/config/preflight.hpp"
 #include "core/game/game_renderer.hpp"
+#include "core/render/jobs.hpp"
 #include "core/util/strings.hpp"
 
 #include "test_check.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <set>
 #include <string>
@@ -666,6 +669,41 @@ void test_fixes_converge() {
 }
 
 } // namespace
+
+// Рендер з несумісними налаштуваннями не запускає гру: помилка налаштувань ще до підготовки гри
+void test_render_preflight(const std::filesystem::path& demo) {
+    std::printf("[config: перевірка перед рендером]\n");
+    const auto tmp = std::filesystem::temp_directory_path() / "gmdr_preflight_test";
+    std::filesystem::create_directories(tmp);
+    render::RenderSettings s;
+    s.demo_path = path_to_utf8(demo);
+    s.output_path = path_to_utf8(tmp / "out.webm");   // WebM не бере H.264 і AAC
+    s.game_dir = path_to_utf8(tmp / "no_game");
+    render::RenderJob job(s, nullptr, nullptr);
+    job.start();
+    job.wait();
+    CHECK(job.state() == render::JobState::Failed);
+    CHECK(job.settings_error());
+    const auto issues = job.settings_issues();
+    CHECK(std::any_of(issues.begin(), issues.end(), [](const Issue& i) { return i.rule == "video.codec"; }));
+    CHECK(std::any_of(issues.begin(), issues.end(), [](const Issue& i) { return i.rule == "audio.codec"; }));
+    CHECK(!std::filesystem::exists(tmp / "out.webm"));
+    // Тестовий прогін у ручному режимі — теж помилка налаштувань (раніше ручний режим мовчки вимикався)
+    s.output_path = path_to_utf8(tmp / "out.mp4");
+    s.manual_mode = true;
+    render::RenderJob test(s, nullptr, nullptr, true);
+    test.start();
+    test.wait();
+    CHECK(test.settings_error());
+    // Та сама перевірка для CLI: помилки, похідні з аналізу демо
+    s.manual_mode = false;
+    s.output_path = path_to_utf8(tmp / "out.webm");
+    config::PreflightOptions po;
+    const auto pf = config::preflight(s, po);
+    CHECK(!pf.result.executable());
+    std::error_code ec;
+    std::filesystem::remove_all(tmp, ec);
+}
 
 void test_config() {
     test_catalog_and_migration();

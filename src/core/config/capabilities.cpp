@@ -115,10 +115,11 @@ void scan_encoders(EnvironmentCapabilities& env) {
                                             : no(tr("немає моделі RNNoise поруч із програмою — шумодав візьме afftdn"));
 }
 
-void scan_game(EnvironmentCapabilities& env, const render::RenderSettings& s, bool processes) {
+void scan_game(EnvironmentCapabilities& env, const render::RenderSettings& s, bool processes, bool all_renderers) {
     auto& g = env.game;
     g.installs.clear();
     for (const auto* r : game::game_renderers()) {
+        if (!all_renderers && r != &render::renderer_of(s)) continue;
         GameInstallInfo info;
         info.renderer = r->id();
         render::RenderSettings probe = s;
@@ -207,7 +208,7 @@ EnvironmentCapabilities scan_environment(const render::RenderSettings& s, const 
     env.platform.os_label = os_description();
     if (opt.hardware) scan_hardware(env);
     scan_encoders(env);
-    if (opt.game) scan_game(env, s, opt.processes);
+    if (opt.game) scan_game(env, s, opt.processes, opt.all_renderers);
     rescan_paths(env, s);
     return env;
 }

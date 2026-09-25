@@ -103,6 +103,14 @@ jobs:
           & build\gmdr-cli.exe render build\td\test24.dem --test-run --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
               --size 640x360 --fps 30 --codec libx264 --menu-delay 1
           if ($LASTEXITCODE -ne 0) { throw "тестовий прогін не вдався" }
+          # Несумісні налаштування (WebM + H.264) — помилка ще до запуску гри, з виправленням
+          Remove-Item "$fake\garrysmod\fake_launches.txt" -ErrorAction SilentlyContinue
+          $bad = & build\gmdr-cli.exe render build\td\test24.dem -o "$PWD\build\out_bad.webm" --game-dir $fake `
+              --game-exe "$PWD\build\gmdr-fakegame.exe" --size 640x360 --fps 30 --codec libx264 --menu-delay 1 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $bad -notmatch "Налаштування не дозволяють почати рендер" -or $bad -notmatch "Формат MKV") {
+            $bad; throw "WebM + H.264: очікувалась помилка налаштувань з виправленням"
+          }
+          if (Test-Path "$fake\garrysmod\fake_launches.txt") { throw "WebM + H.264: гру запущено, хоча налаштування неможливі" }
           # Розділи з позначок і субтитри чату (MKV)
           $mkv = "$PWD\build\out_chapters.mkv"
           & build\gmdr-cli.exe render build\td\test24.dem -o $mkv --game-dir $fake --game-exe "$PWD\build\gmdr-fakegame.exe" `
@@ -325,6 +333,14 @@ jobs:
           ./build/gmdr-tests build/td
           ./build/gmdr-cli --lang en info build/td/test24.dem | grep -q '^Map: *gm_construct'
           ./build/gmdr-cli info build/td/test24.dem | grep -q '^Карта: *gm_construct'
+          # Перевірка налаштувань без гри: WebM + H.264 — помилка з виправленнями, код виходу 1
+          if ./build/gmdr-cli check build/td/test24.dem -o /tmp/x.webm --codec libx264 --json > /tmp/check.json; then
+            cat /tmp/check.json; echo "check: очікувалась помилка"; exit 1
+          fi
+          grep -q '"rule":"video.codec"' /tmp/check.json
+          grep -q '"executable":false' /tmp/check.json
+          mkdir -p /tmp/gm/garrysmod && touch /tmp/gm/garrysmod/gameinfo.txt /tmp/gm/hl2.exe
+          ./build/gmdr-cli check build/td/test24.dem -o /tmp/x.mkv --game-dir /tmp/gm --profile youtube-1080p60
 
       - name: Lua driver (mocked GMod menu)
         if: matrix.sanitize == ''

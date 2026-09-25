@@ -87,6 +87,7 @@ static bool pix_fmt_bit_depth_16(AVPixelFormat f) { return media::pix_fmt_bit_de
 #include "test_check.hpp"
 
 void test_config();   // test_config.cpp
+void test_render_preflight(const std::filesystem::path& demo);
 
 // Рівень RMS відрізка [from_s, to_s) секунд (48 кГц; stride 2 — лівий канал стерео), дБ.
 static double rms_db(const std::vector<float>& x, double from_s, double to_s, size_t stride = 1);
@@ -2576,6 +2577,7 @@ int main(int argc, char** argv) {
         if (std::filesystem::exists(dir / "test20c.dem")) test_demo(dir / "test20c.dem", 20);
         if (std::filesystem::exists(dir / "test2026.dem")) test_demo(dir / "test2026.dem", 24, true);
         if (std::filesystem::exists(dir / "test24.dem")) test_fuzz_demo(dir / "test24.dem");
+        if (std::filesystem::exists(dir / "test24.dem")) test_render_preflight(dir / "test24.dem");
         if (std::filesystem::exists(dir / "test24.dem") && std::filesystem::exists(dir / "test20c.dem")) test_demo_library(dir);
     }
     std::printf("\nПройдено: %d, провалено: %d\n", g_pass, g_fail);

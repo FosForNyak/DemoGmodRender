@@ -6,6 +6,7 @@
 #include "../game/lua_driver.hpp"
 #include "../game/process.hpp"
 #include "../config/formats.hpp"
+#include "../config/preflight.hpp"
 #include "../game/game_renderer.hpp"
 #include "../media/muxer.hpp"
 #include "../util/file_util.hpp"
@@ -148,6 +149,26 @@ void Job::fail(const std::string& message) {
     log_error("{}", message);
     mark_ended();
     state_ = JobState::Failed;
+}
+
+void Job::fail_settings(const config::ValidationResult& r) {
+    {
+        std::lock_guard lock(mutex_);
+        settings_error_ = true;
+        for (const auto& i : r.issues)
+            if (i.severity == config::Severity::Error) settings_issues_.push_back(i);
+    }
+    fail(config::preflight_error(r));
+}
+
+bool Job::settings_error() const {
+    std::lock_guard lock(mutex_);
+    return settings_error_;
+}
+
+std::vector<config::Issue> Job::settings_issues() const {
+    std::lock_guard lock(mutex_);
+    return settings_issues_;
 }
 
 void Job::succeed(const std::string& result) {
@@ -1201,6 +1222,26 @@ void RenderJob::run() {
         set_stage(tr("Розбір голосу"));
         voices_ = std::make_shared<voice::VoiceDecodeResult>(voice::decode_voice(A, {}, {}, &cancel_));
     }
+    // ---- Перевірка налаштувань: до запуску гри, ті самі правила, що у вікні й CLI ----
+    // (частини паралельного рендеру перевірив сам рендер, що їх запустив)
+    if (s_.output_path.empty()) s_.output_path = default_output_path(s_.demo_path, config::container_of(s_));
+    if (!part_) {
+        set_stage(tr("Перевірка налаштувань"));
+        config::PreflightOptions po;
+        po.purpose = test_run_  ? config::ValidationContext::Purpose::TestRun
+                     : handoff_ ? config::ValidationContext::Purpose::QueueItem
+                                : config::ValidationContext::Purpose::Render;
+        po.analysis = &A;
+        po.speakers = voices_ ? static_cast<int>(voices_->speakers.size()) : -1;
+        po.resume = resume_.has_value();
+        const config::Preflight pf = config::preflight(s_, po);
+        for (const auto& i : pf.result.issues)
+            if (i.severity == config::Severity::Warning) log_warn("{}", config::format_issue(i, false));
+        if (!pf.result.executable()) {
+            fail_settings(pf.result);
+            return;
+        }
+    }
     std::vector<const voice::SpeakerTrack*> speakers;
     if (voices_) speakers = select_speakers(s_, *voices_);
     std::vector<audio::VoiceCleanup> voice_fx;
@@ -1241,7 +1282,6 @@ void RenderJob::run() {
     if (!s_.audio || !s_.game_audio) set_check(kCheckAudio, CheckItem::Skipped, tr("звук гри вимкнено"));
     if (s_.manual_mode) set_check(kCheckDriver, CheckItem::Skipped, tr("ручний режим"));
 
-    if (s_.output_path.empty()) s_.output_path = default_output_path(s_.demo_path, "mp4");
     EncodeSettings es;
     if (!make_encode_settings(s_, es, &err)) {
         fail(err);
@@ -2846,6 +2886,20 @@ void QueueJob::run() {
     {
         std::lock_guard lock(m_);
         results_.assign(n, {});
+    }
+    // Усі пункти — одразу: що не почнеться, видно на початку черги, а не на своєму місці вночі.
+    // Нічого не виправляється мовчки: такий пункт на своїй черзі не вдасться з тими самими помилками.
+    {
+        set_stage(tr("Перевірка налаштувань"));
+        config::PreflightCache cache;
+        config::PreflightOptions po;
+        po.purpose = config::ValidationContext::Purpose::QueueItem;
+        for (size_t i = 0; i < n && !cancel_; ++i) {
+            const auto r = cache.check(items_[i], po);
+            for (const auto& issue : r.issues)
+                if (issue.severity == config::Severity::Error)
+                    log_warn("{}", trf("Черга: пункт {} не почнеться — {}", i + 1, config::format_issue(issue, false)));
+        }
     }
     int ok = 0;
     for (size_t i = 0; i < n && !cancel_; ++i) {

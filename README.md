@@ -267,6 +267,9 @@ gmdr-cli render demo.dem -o video.mp4 --size 2560x1440 --fps 60 --codec hevc_nve
 gmdr-cli render demo.dem -o film.mov --codec prores_ks --motion-blur 16 --shutter 180 --acodec pcm_s24le
 gmdr-cli render demo.dem -o clip.mp4 --start 30 --end 75 --hide-hud --mic mic.wav --mic-offset -1.5
 gmdr-cli render demo.dem --start 10:00 --end 11:00 --test-run
+gmdr-cli check demo.dem -o clip.webm --codec libvpx-vp9 --acodec libopus
+gmdr-cli render demo.dem -o yt.mp4 --profile youtube-4k60
+gmdr-cli render demo.dem -o rtx.mp4 --renderer rtx
 gmdr-cli render demo.dem -o discord.mp4 --start 1:00 --end 1:30 --size 1280x720 --target-size 10
 gmdr-cli render demo.dem -o yt.mp4 --level-voices --denoise --duck-game --loudness -14
 gmdr-cli render demo.dem -o clip.mkv --markers "5:30=Fight; 7:10=Final" --chat-srt
@@ -300,6 +303,16 @@ C:\demos\other.dem --size 2560x1440
 Service keys for the command line come from environment variables (`GMDR_DEEPL_KEY`,
 `GMDR_GOOGLE_KEY`, `GMDR_LIBRE_KEY`, `GMDR_OPENAI_KEY`, `GMDR_ELEVENLABS_KEY`) or from keys saved
 in the window. Voice cloning needs `--clone-voices --voices-consent`.
+
+Before the game starts, every render, test run and queue item goes through the same settings
+check as the window. Settings that cannot work together, such as H.264 in WebM, 12-bit x264 or
+two game copies with GMod RTX, stop the render with the reason and a suggested fix. The program
+no longer quietly changes them. A queue does not start while any of its items has such an error.
+`gmdr-cli check` runs the same check without rendering. It prints what the render would produce
+(game copies, frame size, pixel format, frame counts) and every problem found; `--json` gives the
+same for scripts, and the exit code is 1 when there are errors. `--profile` applies one of the
+window's ready-made sets (`youtube-1080p60`, `youtube-4k60`, `edit-prores`, `discord-10mb`,
+`discord-50mb`, `discord-500mb`, `archive-ffv1`), and other options on the command line refine it.
 
 Run `gmdr-cli --help` for every option.
 

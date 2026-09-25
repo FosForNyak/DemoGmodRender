@@ -12,7 +12,7 @@ const std::vector<PresetInfo>& presets() {
     static const std::vector<PresetInfo> list = {
         {"youtube-1080p60", "YouTube 1080p60", N_("1920×1080, 60 кадрів/с, H.264, MP4 — підходить будь-де")},
         {"youtube-4k60", N_("YouTube 4K60 (10 біт)"),
-         N_("3840×2160, 60 кадрів/с, HEVC 10 біт (на відеокарті, якщо вона вміє), MP4")},
+         N_("3840×2160, 60 кадрів/с, HEVC 10 біт (на відеокарті, якщо вона вміє), MP4"), "hevc"},
         {"edit-prores", N_("Монтаж — ProRes 422 HQ"),
          N_("ProRes 422 HQ 10 біт, MOV, звук PCM 24 біт і окремі доріжки — для Premiere/DaVinci Resolve")},
         {"discord-10mb", N_("Discord — 10 МБ"), N_("1280×720, 30 кадрів/с, бітрейт розраховується під 10 МБ на весь фрагмент")},

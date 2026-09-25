@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **One settings check everywhere, and no silent changes.** Every setting now has an id, and the
+  rules about which settings can work together live in one place. The command line, the queue and
+  the render itself (before the game starts) all use them, and the new window will too. A problem
+  comes with its reason and, where possible, a fix to apply. These combinations used to be changed
+  quietly or to fail only after the game had loaded the demo; now they stop the render before the
+  game starts, with a fix:
+  - WebM with H.264 or AAC;
+  - 12-bit x264, which came out as 10-bit;
+  - a frame size the pixel format cannot take, such as 641×361 coming out as 640×360 (this one is
+    shown as information, with the fix to the even size);
+  - two to four game copies with GMod RTX, which rendered with one;
+  - Opus at 44.1 kHz;
+  - ProRes 4:4:4 with a 422 profile;
+  - extra versions next to an image sequence;
+  - a test run in manual mode;
+  - a GPU encoder that does not open on this graphics card (it is now tried before the game starts).
+- A queue checks every item before it starts. From the command line, a queue with a broken item does
+  not start at all, and the window's queue logs such items at the start.
+- `gmdr-cli check demo.dem [options]` shows what a render would produce and every problem found,
+  without rendering (`--json` for scripts; exit code 1 on errors). `--profile NAME` applies a ready-made
+  set (the same ones as in the window). `--renderer standard|rtx` picks the game renderer.
+- Game renderers (Standard, GMod RTX) now describe their own limits and preparation: how many game
+  copies they allow, where the game window can go, timeouts, launch options, and RTX's `rtx.conf`.
+  Saved settings store the renderer by name. Older files with `"rtx": true` are converted
+  automatically, and the settings file now has a `configuration_version`.
 - **Frames through a pipe instead of files, where the game allows it.** The program offers the game's `startmovie` a Windows named pipe opened for each frame number (a FIFO on Linux) instead of a TGA/JPEG file in a temporary folder, so frames could go straight into the encoder with nothing written to disk; order, quality and frame rate stay the same (the fake game gives bit-identical video both ways), and the game audio takes the same route into the usual WAV. Nothing is injected into the game. The pipe is named `\??\pipe\…`: the first name, `\\?\pipe\…`, did not work in the current GMod (regular and RTX), because the Source file system reads a name that starts with two slashes as its own `//PATHID/file` syntax ("Couldn't write movie snapshot to file \\?\pipe\…" in the game console). The new name is not yet confirmed with the real game. If the game does not write into the pipe, the render restarts the game from the same point with files. The log then shows this launch's game console lines about the movie and whether the game opened the pipe at all, and the program remembers the result for this game and this pipe name (for 30 days or until the game updates). Game page → **Frame transfer**; console: `--frame-transport auto|pipe|files`.
 - **RTX: no black frames while Remix compiles shaders.** During the render Remix compiles its shaders before drawing a frame (`rtx.shader.enableAsyncCompilation = False`) instead of in the background, when it draws nothing. The game may then freeze for a while at the start (minutes without a shader cache); the program tells a busy game from a hung one by its CPU use and waits (up to 20 min with RTX, 5 min without), and the demo loading timeout is longer with RTX.
 - Fixed: an AVI with AAC or MP3 audio and video without B-frames (AV1 from any encoder, H.264/HEVC without B-frames) started with the first frame held for three frame times. The file was 2 frames longer than the render (the file check said, for example, "181 frames instead of 179"), and the video was about 12 ms behind the sound. AVI cannot tell a player to skip the audio encoder's start-up delay, so FFmpeg shifted the video by whole frames to make up for it. The delay is now taken out of the audio itself, and the video stays in place.

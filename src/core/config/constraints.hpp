@@ -144,7 +144,7 @@ struct ValidationContext {
     bool    demo_known = false;
     double  tick_interval = 0;
     int32_t last_tick = 0;
-    int     speakers = 0;            // гравців із голосом
+    int     speakers = -1;           // гравців із голосом (-1 — невідомо)
     int     local_speaker = -1;      // є голос того, хто записав (-1 — невідомо)
 };
 
@@ -175,8 +175,9 @@ struct RuleInfo {
 };
 std::vector<RuleInfo> rule_list();
 
-// Рядок для журналу і консолі: «Помилка: … Чому: … Виправлення: …»
-std::string format_issue(const Issue& i);
+// Рядок для журналу і консолі: «Помилка: … Чому: … Виправлення: …» (без рівня — для журналу,
+// де рівень уже видно)
+std::string format_issue(const Issue& i, bool with_severity = true);
 // Коротко: «1 помилка, 2 попередження»
 std::string summary_text(const ValidationResult& r);
 

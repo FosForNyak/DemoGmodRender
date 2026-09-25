@@ -28,11 +28,13 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <optional>
 #include <set>
 
 extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
+#include <libavutil/opt.h>
 }
 
 namespace gmdr::config::detail {
@@ -58,13 +60,49 @@ void range_check(RuleContext& c, S id, double v, double lo, double hi, double fi
     }
 }
 
+// Параметр кодека FFmpeg, у який іде пресет швидкості (media::VideoEncoder::open)
+const char* preset_option(const std::string& codec) {
+    if (codec == "libaom-av1") return "cpu-used";
+    if (codec == "librav1e") return "speed";
+    if (codec == "libvpx-vp9" || codec == "libvpx") return "deadline";
+    if (codec.find("_amf") != std::string::npos) return "quality";
+    return "preset";
+}
+
+// Чи прийме кодек це значення параметра: true/false — FFmpeg перелічує значення (іменовані константи
+// чи числовий діапазон), nullopt — довільний рядок, перевірить лише сам кодек
+std::optional<bool> ffmpeg_accepts(const std::string& codec, const char* option, const std::string& value) {
+    const AVCodec* c = avcodec_find_encoder_by_name(codec.c_str());
+    if (!c || !c->priv_class) return std::nullopt;
+    const AVClass* cls = c->priv_class;
+    const AVOption* o = av_opt_find(&cls, option, nullptr, 0, AV_OPT_SEARCH_FAKE_OBJ);
+    if (!o) return false;
+    if (o->type == AV_OPT_TYPE_STRING) return std::nullopt;
+    if (o->unit)
+        for (const AVOption* k = nullptr; (k = av_opt_next(&cls, k));)
+            if (k->type == AV_OPT_TYPE_CONST && k->unit && std::string(k->unit) == o->unit && value == k->name) return true;
+    if (const auto v = parse_double(value)) return *v >= o->min && *v <= o->max;
+    return false;
+}
+
+// Назва без пояснення після тире: «H.264 (x264) — найсумісніший» → «H.264 (x264)»
+std::string short_label(std::string label) {
+    const size_t dash = label.find(" — ");
+    if (dash != std::string::npos) label.resize(dash);
+    return label;
+}
+
+// Пояснення зі стану середовища («немає в цій збірці FFmpeg») — окремим реченням
+std::string reason(const std::string& detail) { return detail.empty() ? detail : trf("Причина: {}.", detail); }
+
 std::string codec_label(const std::string& name) {
-    if (const VideoEncoderInfo* e = find_video_encoder(name)) return tr(e->label.c_str());
+    // У GPU-кодеків після тире — виробник (H.264 — NVIDIA NVENC), його лишаємо
+    if (const VideoEncoderInfo* e = find_video_encoder(name)) return e->gpu ? tr(e->label.c_str()) : short_label(tr(e->label.c_str()));
     return name;
 }
 
 std::string audio_label(const std::string& name) {
-    if (const AudioEncoderInfo* e = find_audio_encoder(name)) return tr(e->label.c_str());
+    if (const AudioEncoderInfo* e = find_audio_encoder(name)) return short_label(tr(e->label.c_str()));
     return name;
 }
 
@@ -246,7 +284,7 @@ void r_game_transport(RuleContext& c) {
         i.fixes.push_back(fix(tr("напряму, без файлів"), {change(S::frame_transport, str("auto"))}));
     } else if (t == "pipe" && c.env.game.frame_pipes.state == Availability::Unavailable) {
         auto& i = c.add(Sev::Error, K::Platform, S::frame_transport, tr("Передача кадрів каналом тут недоступна."),
-                        c.env.game.frame_pipes.detail);
+                        reason(c.env.game.frame_pipes.detail));
         i.fixes.push_back(fix(tr("напряму, без файлів"), {change(S::frame_transport, str("auto"))}));
     }
     if (c.s.manual_mode) c.disable(S::frame_transport, tr("у ручному режимі кадри йдуть файлами"));
@@ -488,13 +526,13 @@ void r_video_codec(RuleContext& c) {
     };
     if (cap.state == Availability::Unavailable) {
         auto& i = c.add(Sev::Error, K::Availability, S::video_codec, trf("Відеокодек {} недоступний.", codec_label(c.s.video_codec)),
-                        cap.detail);
+                        reason(cap.detail));
         cpu_fix(i);
         return;
     }
     if (cap.state == Availability::Failed) {
         auto& i = c.add(Sev::Error, K::Availability, S::video_codec,
-                        trf("{} не працює на цій відеокарті.", codec_label(c.s.video_codec)), cap.detail);
+                        trf("{} не працює на цій відеокарті.", codec_label(c.s.video_codec)), reason(cap.detail));
         cpu_fix(i);
         return;
     }
@@ -636,18 +674,42 @@ void r_video_quality(RuleContext& c) {
         else if (c.d().video_seconds <= 0)
             c.add(Sev::Info, K::Consequence, S::target_size_mb, tr("Бітрейт розрахується під довжину фрагмента."));
     }
-    // Пресет швидкості
+    // Пресет швидкості (ProRes його не має: якість — профіль)
     auto& p = c.state(S::preset);
-    for (const auto& x : qi.presets) p.options.push_back({x.substr(0, x.find(' ')), x});
-    if (qi.presets.empty()) c.hide(S::preset, tr("кодек без пресетів швидкості"));
-    if (!c.s.preset.empty()) {
-        const bool known = std::any_of(qi.presets.begin(), qi.presets.end(),
+    if (qi.param == "profile" || qi.presets.empty()) {
+        c.hide(S::preset, qi.param == "profile" ? tr("ProRes: якість задає профіль") : tr("кодек без пресетів швидкості"));
+    } else {
+        for (const auto& x : qi.presets) p.options.push_back({x.substr(0, x.find(' ')), x});
+        const bool known = c.s.preset.empty() ||
+                           std::any_of(qi.presets.begin(), qi.presets.end(),
                                        [&](const std::string& x) { return x.substr(0, x.find(' ')) == c.s.preset; });
         if (!known) {
-            auto& i = c.add(Sev::Error, K::Conflict, S::preset,
-                            trf("Пресет «{}» не підходить для {}.", c.s.preset, codec_label(c.s.video_codec)), {}, {S::video_codec});
-            i.fixes.push_back(fix(tr("Типовий"), {change(S::preset, str(""))}));
+            // Не з нашого списку: де FFmpeg перелічує значення — перевіряємо точно, інакше лише застереження
+            std::optional<bool> accepted = ffmpeg_accepts(c.s.video_codec, preset_option(c.s.video_codec), c.s.preset);
+            // x264/x265: рядок, але список пресетів у них вичерпний
+            if (!accepted && (c.s.video_codec == "libx264" || c.s.video_codec == "libx264rgb" || c.s.video_codec == "libx265"))
+                accepted = false;
+            if (accepted == false) {
+                auto& i = c.add(Sev::Error, K::Conflict, S::preset,
+                                trf("Пресет «{}» не підходить для {}.", c.s.preset, codec_label(c.s.video_codec)), {},
+                                {S::video_codec});
+                i.fixes.push_back(fix(tr("Типовий"), {change(S::preset, str(""))}));
+            } else if (!accepted) {
+                auto& i = c.add(when_executing(c, Sev::Warning, Sev::Info), K::Runtime, S::preset,
+                                trf("Пресет «{}» не з відомого списку для {} — кодек може його не прийняти.", c.s.preset,
+                                    codec_label(c.s.video_codec)),
+                                tr("Якщо кодек не відкриється, рендер зупиниться на першому кадрі — спершу зробіть тестовий прогін."),
+                                {S::video_codec});
+                i.fixes.push_back(fix(tr("Типовий"), {change(S::preset, str(""))}));
+            }
         }
+    }
+    // ProRes 4:4:4 — лише профілі 4444 і 4444 XQ (кодер інакше підняв би профіль сам)
+    if (qi.param == "profile" && c.d().chroma == 444 && c.s.quality >= 0 && c.s.quality < 4) {
+        auto& i = c.add(Sev::Error, K::Conflict, S::quality,
+                        trf("ProRes 4:4:4 — лише профілі 4444 і 4444 XQ, а вибрано {}.", c.s.quality), {}, {S::chroma});
+        i.fixes.push_back(fix("4 — 4444", {change(S::quality, num(4))}));
+        i.fixes.push_back(fix("4:2:2", {change(S::chroma, num(422))}));
     }
 }
 
@@ -715,7 +777,7 @@ void r_audio_codec(RuleContext& c) {
     const CapabilityState cap = c.env.audio_encoder(c.s.audio_codec);
     if (!cap.ok()) {
         auto& i = c.add(Sev::Error, K::Availability, S::audio_codec, trf("Аудіокодек {} недоступний.", audio_label(c.s.audio_codec)),
-                        cap.detail);
+                        reason(cap.detail));
         if (const std::string a = alt(); !a.empty()) i.fixes.push_back(fix(audio_label(a), {change(S::audio_codec, str(a))}));
         return;
     }
@@ -1236,7 +1298,7 @@ void r_app_graphics(RuleContext& c) {
     if (it == apis.end() || it->state != Availability::Available) {
         auto& i = c.add(Sev::Warning, K::Platform, S::ui_graphics_api,
                         trf("Графічний API вікна «{}» тут недоступний — вікно малюватиме автоматично вибраний.", c.s.ui_graphics_api),
-                        it != apis.end() ? it->detail : std::string());
+                        it != apis.end() ? reason(it->detail) : std::string());
         i.fixes.push_back(fix(tr("Автоматично"), {change(S::ui_graphics_api, str("auto"))}));
     }
 }

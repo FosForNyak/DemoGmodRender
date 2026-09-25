@@ -219,11 +219,12 @@ std::vector<RuleInfo> rule_list() {
     return out;
 }
 
-std::string format_issue(const Issue& i) {
-    std::string s = std::string(i.severity == Severity::Error     ? tr("Помилка")
-                                : i.severity == Severity::Warning ? tr("Попередження")
-                                                                  : tr("Інформація")) +
-                    ": " + i.message;
+std::string format_issue(const Issue& i, bool with_severity) {
+    std::string s = with_severity ? std::string(i.severity == Severity::Error     ? tr("Помилка")
+                                                : i.severity == Severity::Warning ? tr("Попередження")
+                                                                                  : tr("Інформація")) +
+                                        ": " + i.message
+                                  : i.message;
     if (!i.explanation.empty()) s += " " + i.explanation;
     if (!i.fixes.empty()) {
         s += tr(" Виправлення: ");

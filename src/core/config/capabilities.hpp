@@ -145,6 +145,7 @@ struct ScanOptions {
     bool hardware = true;      // CPU, RAM, відеокарти
     bool game = true;          // копії гри, запущена гра
     bool processes = true;     // чи запущена гра (перелік процесів)
+    bool all_renderers = true; // копії гри для всіх рендерерів (false — лише вибраного: перед рендером)
 };
 
 // Швидкі перевірки. Шляхи з налаштувань (папки гри, whisper, мікрофон, вихід) — з s.

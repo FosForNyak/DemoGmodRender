@@ -9,6 +9,11 @@
 //    gmdr-cli encode "C:\...\garrysmod" --prefix movie -o out.mkv --codec ffv1
 //    gmdr-cli encoders --test
 // =============================================================================
+#include "core/config/constraints.hpp"
+#include "core/config/dependencies.hpp"
+#include "core/config/formats.hpp"
+#include "core/config/preflight.hpp"
+#include "core/config/presets.hpp"
 #include "core/demo/analysis.hpp"
 #include "core/game/gmod_install.hpp"
 #include "core/game/game_renderer.hpp"
@@ -87,6 +92,8 @@ static void print_usage() {
                                                OmniVoice (~5 ГБ: Python, PyTorch, модель)
   gmdr-cli render <demo.dem> [параметри]       відрендерити демо через гру
   gmdr-cli render <demo.dem> --test-run         тестовий прогін: 3 с, звіт по кроках і прогноз часу
+  gmdr-cli check <demo.dem> [параметри]        перевірити налаштування без рендеру: що вийде, помилки
+                                               з виправленнями (--json — для скриптів; код виходу 1 — є помилки)
   gmdr-cli render a.dem b.dem ... -o <папка>   черга: кілька демо підряд, гра запускається один раз
   gmdr-cli queue <список.txt> [параметри]      черга з файлу: у рядку — демо і його параметри
                                                ("match.dem" --start 5:00 --end 7:30 -o "бій.mp4")
@@ -103,6 +110,8 @@ static void print_usage() {
   gmdr-cli driver install|uninstall|status     драйвер у меню GMod
 
 Відео:
+  --profile НАБІР        готовий набір (інші параметри його уточнюють): youtube-1080p60, youtube-4k60,
+                         edit-prores, discord-10mb, discord-50mb, discord-500mb, archive-ffv1
   -o, --output ФАЙЛ      вихідний файл (.mp4 .mkv .mov .webm .avi ... або кадри_%06d.png)
   --size ШxВ             роздільна здатність відео (типово 1920x1080)
   --render-size ШxВ      розмір вікна гри (типово = --size; більше — суперсемплінг)
@@ -164,7 +173,8 @@ static void print_usage() {
   --start-tick N  --end-tick N  --start ЧАС  --end ЧАС (секунди або год:хв:сек)  --keep-game-open  --manual
   --window offscreen|behind|normal   де вікно гри (типово — за межами екрана)
   --no-mute              не вимикати звук гри в мікшері Windows
-  --rtx                  копія GMod RTX від RTXLauncher (її параметри запуску)
+  --renderer standard|rtx   чим рендерити: звичайна гра або копія GMod RTX від RTXLauncher
+  --rtx                  те саме, що --renderer rtx (параметри запуску RTXLauncher)
   --rtx-dir ПАПКА        папка копії GMod RTX (типово — з налаштувань RTXLauncher); вмикає --rtx
   --parallel N           рендерити фрагмент частинами в N копіях гри одночасно (2..4, -multirun)
   --frame-transport auto|pipe|files   як кадри йдуть з гри: auto — каналом, без файлів на диску
@@ -249,6 +259,28 @@ static bool apply_options(const Cli& c, render::RenderSettings& s, const demo::D
         field = static_cast<std::remove_reference_t<decltype(field)>>(*v);
         return true;
     };
+    // Готовий набір — першим: решта параметрів командного рядка його уточнює
+    if (c.has("--profile")) {
+        const config::PresetInfo* p = config::find_preset(c.get("--profile"));
+        if (!p) {
+            std::string ids;
+            for (const auto& x : config::presets()) ids += (ids.empty() ? "" : ", ") + x.id;
+            err = trf("--profile: {}", ids);
+            return false;
+        }
+        // GPU-кодек — лише той, що справді відкрився на цій відеокарті
+        config::EnvironmentCapabilities env;
+        if (!p->gpu_family.empty())
+            for (const auto& e : config::video_encoders())
+                if (e.gpu && e.family == p->gpu_family) config::set_encoder_probe(env, e.name, config::probe_video_encoder(e.name));
+        const bool no_output = s.output_path.empty();
+        s = config::apply_preset(s, p->id, env);
+        // Файл не вибрано (черга з -o папкою, поруч із демо) — пресет задає лише формат
+        if (no_output) {
+            s.container = config::container_of(s);
+            s.output_path.clear();
+        }
+    }
     if (c.has("--output")) s.output_path = c.get("--output");
     if (c.has("--game-dir")) s.game_dir = c.get("--game-dir");
     if (c.has("--game-exe")) s.game_exe = c.get("--game-exe");
@@ -504,7 +536,7 @@ static int run_job(render::Job& job) {
     std::fprintf(stderr, "\n");
     const auto final_progress = job.progress();
     if (!job.report().empty()) std::printf("\n%s\n\n", job.report().c_str());
-    else if (job.state() == render::JobState::Failed && !final_progress.checks.empty()) {
+    else if (job.state() == render::JobState::Failed && !job.settings_error() && !final_progress.checks.empty()) {
         for (const auto& ch : final_progress.checks)
             std::printf("  %s %s%s\n", ch.state == render::CheckItem::Ok ? "+" : ch.state == render::CheckItem::Skipped ? "-" : "x",
                         ch.name.c_str(), ch.detail.empty() ? "" : (" — " + ch.detail).c_str());
@@ -708,6 +740,124 @@ static bool load_base_settings(const Cli& c, render::RenderSettings& s, std::str
         s.output_path.clear();
     }
     return true;
+}
+
+// Зауваження перевірки для консолі: помилки й попередження (інформація — лише з -v)
+static void print_issues(const config::ValidationResult& r, bool verbose, const std::string& indent = "  ") {
+    for (const auto& i : r.issues)
+        if (i.severity != config::Severity::Info || verbose) std::printf("%s%s\n", indent.c_str(), config::format_issue(i).c_str());
+}
+
+static json::Value issue_json(const config::Issue& i) {
+    json::Value j = json::Value::object();
+    j.set("rule", json::Value::string(i.rule));
+    j.set("severity", json::Value::string(config::severity_id(i.severity)));
+    j.set("kind", json::Value::string(config::kind_id(i.kind)));
+    if (i.setting != config::SettingId::Count) j.set("setting", json::Value::string(config::setting_key(i.setting)));
+    json::Value rel = json::Value::array();
+    for (auto id : i.related) rel.push(json::Value::string(config::setting_key(id)));
+    j.set("related", std::move(rel));
+    j.set("message", json::Value::string(i.message));
+    if (!i.explanation.empty()) j.set("explanation", json::Value::string(i.explanation));
+    if (i.action != config::ActionId::None) j.set("action", json::Value::string(config::action_id(i.action)));
+    json::Value fixes = json::Value::array();
+    for (const auto& f : i.fixes) {
+        json::Value fj = json::Value::object();
+        fj.set("label", json::Value::string(f.label));
+        json::Value ch = json::Value::object();
+        for (const auto& c : f.changes) ch.set(config::setting_key(c.id), c.value);
+        fj.set("changes", std::move(ch));
+        fixes.push(std::move(fj));
+    }
+    j.set("fixes", std::move(fixes));
+    return j;
+}
+
+// Перевірити налаштування без рендеру: ті самі правила, що перед запуском гри
+static int cmd_check(const Cli& c) {
+    if (c.positional.empty()) {
+        std::puts(tr("Використання: gmdr-cli check <demo.dem> [параметри рендеру] [--test-run] [--json] [-v]"));
+        return 1;
+    }
+    render::RenderSettings s;
+    std::string err;
+    if (!load_base_settings(c, s, err)) {
+        std::printf(tr("Не вдалося прочитати конфіг: %s\n"), err.c_str());
+        return 1;
+    }
+    const std::string demo_path = c.positional[0];
+    std::shared_ptr<demo::DemoAnalysis> analysis;
+    try {
+        analysis = std::make_shared<demo::DemoAnalysis>(demo::analyze_demo(path_from_utf8(demo_path)));
+    } catch (const std::exception& e) {
+        std::printf(tr("Помилка: %s\n"), e.what());
+        return 1;
+    }
+    s.demo_path = demo_path;
+    if (!apply_options(c, s, analysis.get(), err)) {
+        std::printf(tr("Помилка: %s\n"), err.c_str());
+        return 1;
+    }
+    if (s.output_path.empty()) s.output_path = render::default_output_path(demo_path, config::container_of(s));
+    const auto voices = voice::decode_voice(*analysis);
+    config::PreflightOptions po;
+    po.purpose = c.has("--test-run") ? config::ValidationContext::Purpose::TestRun : config::ValidationContext::Purpose::Render;
+    po.analysis = analysis.get();
+    po.speakers = static_cast<int>(voices.speakers.size());
+    const config::Preflight pf = config::preflight(s, po);
+    const config::ValidationResult& r = pf.result;
+    const config::Derived& d = r.derived;
+    if (c.has("--json")) {
+        json::Value j = json::Value::object();
+        j.set("executable", json::Value::boolean(r.executable()));
+        j.set("errors", json::Value::number(r.count(config::Severity::Error)));
+        j.set("warnings", json::Value::number(r.count(config::Severity::Warning)));
+        json::Value dj = json::Value::object();
+        dj.set("renderer", json::Value::string(d.renderer));
+        dj.set("container", json::Value::string(d.container));
+        dj.set("width", json::Value::number(d.width));
+        dj.set("height", json::Value::number(d.height));
+        dj.set("pix_fmt", json::Value::string(d.pix_fmt));
+        dj.set("bit_depth", json::Value::number(d.bit_depth));
+        dj.set("chroma", json::Value::number(d.chroma));
+        dj.set("fps", json::Value::number(d.fps));
+        dj.set("game_fps", json::Value::number(d.game_fps));
+        dj.set("video_seconds", json::Value::number(d.video_seconds));
+        dj.set("video_frames", json::Value::number(static_cast<double>(d.video_frames)));
+        dj.set("game_frames", json::Value::number(static_cast<double>(d.game_frames)));
+        dj.set("parallel", json::Value::number(d.parallel));
+        dj.set("parallel_max", json::Value::number(d.parallel_max));
+        if (!d.parallel_reason.empty()) dj.set("parallel_reason", json::Value::string(d.parallel_reason));
+        dj.set("window", json::Value::string(d.window_mode));
+        dj.set("video_bitrate", json::Value::number(static_cast<double>(d.video_bitrate)));
+        dj.set("estimated_bytes", json::Value::number(static_cast<double>(d.estimated_bytes)));
+        j.set("derived", std::move(dj));
+        json::Value issues = json::Value::array();
+        for (const auto& i : r.issues) issues.push(issue_json(i));
+        j.set("issues", std::move(issues));
+        json::Value deps = json::Value::array();
+        for (const auto& dep : config::dependencies(s, pf.env)) {
+            json::Value x = json::Value::object();
+            x.set("id", json::Value::string(dep.id));
+            x.set("state", json::Value::string(config::dependency_state_id(dep.state)));
+            x.set("required", json::Value::boolean(dep.required));
+            if (!dep.detail.empty()) x.set("detail", json::Value::string(dep.detail));
+            deps.push(std::move(x));
+        }
+        j.set("dependencies", std::move(deps));
+        std::puts(j.dump().c_str());
+        return r.executable() ? 0 : 1;
+    }
+    const game::GameRenderer& R = render::renderer_of(s);
+    std::printf(tr("Рендерер: %s · копій гри: %d%s · вікно гри: %s\n"), R.label().c_str(), d.parallel,
+                d.parallel_reason.empty() ? "" : (" (" + d.parallel_reason + ")").c_str(), d.window_mode.c_str());
+    std::printf(tr("Відео: %d×%d, %s кадрів/с, %s (%d біт) · %s · кадрів %lld (гра рендерить %lld)\n"), d.width, d.height,
+                s.fps.c_str(), d.pix_fmt.c_str(), d.bit_depth, format_duration(d.video_seconds).c_str(),
+                static_cast<long long>(d.video_frames), static_cast<long long>(d.game_frames));
+    std::printf(tr("Файл: %s\n"), s.output_path.c_str());
+    print_issues(r, c.has("-v") || c.has("--verbose"));
+    std::printf("%s\n", config::summary_text(r).c_str());
+    return r.executable() ? 0 : 1;
 }
 
 // Розпізнати мовлення гравців і показати/зберегти репліки
@@ -1028,6 +1178,7 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
         }
     }
     std::vector<render::RenderSettings> items;
+    std::vector<std::shared_ptr<demo::DemoAnalysis>> analyses;
     std::map<std::string, int> used_outputs;
     for (size_t i = 0; i < lines.size(); ++i) {
         Cli merged = common;
@@ -1081,10 +1232,30 @@ static int cmd_queue(const Cli& common, const std::vector<std::string>& demos) {
                         : tr("усе демо"),
                     s.output_path.c_str());
         items.push_back(std::move(s));
+        analyses.push_back(analysis);
     }
     if (items.empty()) {
         std::puts(tr("Черга порожня"));
         return 1;
+    }
+    // Усі пункти — до запуску гри: нічого не виправляється мовчки, черга з помилкою не починається
+    {
+        config::PreflightCache cache;
+        config::PreflightOptions po;
+        po.purpose = config::ValidationContext::Purpose::QueueItem;
+        int bad = 0;
+        for (size_t i = 0; i < items.size(); ++i) {
+            po.analysis = analyses[i].get();
+            const auto r = cache.check(items[i], po);
+            if (r.count(config::Severity::Error) + r.count(config::Severity::Warning) == 0) continue;
+            std::printf(tr("Пункт %zu:\n"), i + 1);
+            print_issues(r, false, "    ");
+            if (!r.executable()) ++bad;
+        }
+        if (bad > 0) {
+            std::printf(tr("Черга не почалась: пунктів з помилками — %d. Виправте їх і запустіть знову.\n"), bad);
+            return 1;
+        }
     }
     render::QueueJob job(std::move(items));
     return run_job(job);
@@ -1181,6 +1352,7 @@ int main(int argc, char** argv) {
     }
 
     if (c.command == "info") return cmd_info(c);
+    if (c.command == "check") return cmd_check(c);
     if (c.command == "report") return cmd_report(c);
     if (c.command == "update") {
         std::string err;
