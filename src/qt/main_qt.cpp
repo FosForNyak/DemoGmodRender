@@ -6,7 +6,7 @@
 //    2. друга копія програми — передати файл першій і вийти;
 //    3. графічний API вікна: з налаштувань (--graphics-api перебиває). Якщо минулий
 //       запуск з цим API не дійшов до першого кадру — «Автоматично» і пояснення;
-//    4. сервіси для QML (Config, Env, Project, Jobs, Queue, Library, Log, Shell),
+//    4. сервіси для QML (Config, Env, Project, Jobs, Queue, Library, Log, Shell, Voices),
 //       інтерфейс — src/qt/qml.
 //  Тести: GMDR_SCREENSHOT=файл.png — знімок вікна після завантаження і вихід
 //  (разом із QT_QPA_PLATFORM=offscreen), GMDR_TEST_PAGE — робочий простір.
@@ -34,6 +34,7 @@
 #include "shell_service.hpp"
 #include "timeline_item.hpp"
 #include "translator.hpp"
+#include "voices_service.hpp"
 
 #include "core/game/audio_mute.hpp"
 #include "core/media/ffmpeg_util.hpp"
@@ -119,6 +120,7 @@ int main(int argc, char** argv) {
         log_warn("{}", trf("Минулого разу вікно не запустилось з графічним API «{}» — повернуто «Автоматично»",
                            qt::graphics_api_label(recovered)));
     }
+    const std::string requested = api;   // з чим запущено (для «потрібен перезапуск» у налаштуваннях)
     if (std::getenv("QT_QPA_PLATFORM") && std::string(std::getenv("QT_QPA_PLATFORM")) == "offscreen" && api == "auto")
         api = "software";   // знімки вікна в CI: без відеокарти
     const std::string applied = qt::apply_graphics_api(api);
@@ -154,14 +156,23 @@ int main(int argc, char** argv) {
     if (!recovered.empty()) config->set("ui_graphics_api", "auto");
     auto* shell = new qt::ShellService(&app);
     shell->setMinimizeToTray(config->settings().minimize_to_tray);
-    auto* env = new qt::EnvService(config, applied, recovered, &app);
+    shell->set_startup_language(qt::qs(early.ui_language));
+    auto* env = new qt::EnvService(config, requested, recovered, &app);
     auto* project = new qt::ProjectService(config, &app);
     auto* queue = new qt::QueueModel(config, project, &app);
     auto* jobs = new qt::JobService(config, project, queue, shell, &app);
     auto* library = new qt::LibraryModel(config, env, &app);
     auto* logs = new qt::LogModel(&app);
+    auto* voices = new qt::VoicesService(config, env, &app);
     QObject::connect(env, &qt::EnvService::changed, queue, &qt::QueueModel::revalidate);
     QObject::connect(shell, &qt::ShellService::openRequested, project, &qt::ProjectService::open);
+    // Після завдання: встановлено рушій чи модель — огляд сервісів; бібліотека голосів могла поповнитись
+    QObject::connect(jobs, &qt::JobService::finished, env, [jobs, env, voices] {
+        const QString kind = jobs->lastResult().value("kind").toString();
+        if (kind == "voiceEngine" || kind == "download") env->refreshServices();
+        voices->refreshProfiles();
+    });
+    QObject::connect(shell, &qt::ShellService::restarting, config, [config] { config->save_now(); });
     QObject::connect(config, &qt::ConfigModel::settingChanged, shell, [config, shell](const QString& key) {
         if (key == "minimize_to_tray") shell->setMinimizeToTray(config->settings().minimize_to_tray);
     });
@@ -176,6 +187,7 @@ int main(int argc, char** argv) {
     qmlRegisterSingletonInstance("Gmdr", 1, 0, "Library", library);
     qmlRegisterSingletonInstance("Gmdr", 1, 0, "Log", logs);
     qmlRegisterSingletonInstance("Gmdr", 1, 0, "Shell", shell);
+    qmlRegisterSingletonInstance("Gmdr", 1, 0, "Voices", voices);
     qmlRegisterType<qt::IconItem>("Gmdr", 1, 0, "Icon");
     qmlRegisterType<qt::LogoItem>("Gmdr", 1, 0, "Logo");
     qmlRegisterType<qt::PreviewItem>("Gmdr", 1, 0, "Preview");

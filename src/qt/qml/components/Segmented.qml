@@ -20,8 +20,8 @@ Item {
             id: row
             anchors.centerIn: parent
             spacing: 2
-            Repeater {
-                model: seg.options
+            Each {
+                items: seg.options
                 B.AbstractButton {
                     id: sb
                     required property var modelData

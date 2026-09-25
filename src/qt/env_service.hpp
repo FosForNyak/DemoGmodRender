@@ -69,10 +69,15 @@ public:
     Q_INVOKABLE void probeGpuEncoders();       // GPU-кодеки ще раз
     Q_INVOKABLE void probeGraphicsApis();      // графічні API вікна
     Q_INVOKABLE void checkGameRunning();       // чи запущена гра (перед рендером, при поверненні у вікно)
+    Q_INVOKABLE void refreshServices() { services_timer_.start(); }   // після встановлення чи видалення рушія, моделі
     Q_INVOKABLE QString graphicsApiLabel(const QString& id) const;
+    // Garry's Mod: знайти копію гри автоматично (результат — gameSearchFinished) і драйвер у меню гри
+    Q_INVOKABLE void    findGame(const QString& renderer);
+    Q_INVOKABLE QString setDriverInstalled(const QString& renderer, bool install);   // "" — готово
 
 signals:
     void changed();
+    void gameSearchFinished(const QString& renderer, bool found, const QString& message);
 
 private:
     void on_setting_changed(const QString& key);
@@ -88,6 +93,7 @@ private:
     std::string                             startup_api_, recovered_api_;
     QQuickWindow*                           window_ = nullptr;
     bool                                    scanning_ = false, probing_gpu_ = false, probing_graphics_ = false;
+    bool                                    leftovers_checked_ = false;
     QTimer                                  services_timer_, game_timer_;
     struct Worker {
         std::thread                        thread;

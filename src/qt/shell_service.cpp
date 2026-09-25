@@ -303,7 +303,22 @@ bool    ShellService::exists(const QString& path) const { return !path.isEmpty()
 bool    ShellService::isDirectory(const QString& path) const { return QFileInfo(path).isDir(); }
 
 void ShellService::openAppFolder() { openPath(QCoreApplication::applicationDirPath()); }
-void ShellService::openLogFile() { openPath(qs(path_to_utf8(app_data_dir() / "gmdr_log.txt"))); }
+void ShellService::openLogFile() { openPath(logPath()); }
+
+QString ShellService::logPath() const { return qs(path_to_utf8(app_data_dir() / "gmdr_log.txt")); }
+QString ShellService::settingsPath() const { return qs(path_to_utf8(app_data_dir() / "gmdr_settings.json")); }
+
+QVariantList ShellService::uiLanguages() const {
+    QVariantList out;
+    for (const auto& l : ui_languages()) {
+        QVariantMap m;
+        m["code"] = qs(l.code);
+        m["native"] = qs(l.native);
+        m["english"] = qs(l.english);
+        out << m;
+    }
+    return out;
+}
 
 QString ShellService::formatBytes(double bytes) const { return qs(format_bytes(static_cast<uint64_t>(std::max(0.0, bytes)))); }
 
@@ -313,8 +328,18 @@ QString ShellService::formatDate(double unix_seconds) const {
 }
 
 void ShellService::restartApp(const QStringList& extra) {
-    QStringList args = QCoreApplication::arguments().mid(1);
+    // Графічний API з минулого перезапуску не перебиває новий вибір у налаштуваннях
+    QStringList args;
+    const QStringList was = QCoreApplication::arguments().mid(1);
+    for (int i = 0; i < was.size(); ++i) {
+        if (was[i] == "--graphics-api") {
+            ++i;
+            continue;
+        }
+        args << was[i];
+    }
     args << extra;
+    emit restarting();   // зберегти налаштування до запуску нової копії
     QProcess p;
     p.setProgram(QCoreApplication::applicationFilePath());
     p.setArguments(args);

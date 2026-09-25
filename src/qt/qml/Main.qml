@@ -22,7 +22,8 @@ B.ApplicationWindow {
     font.pixelSize: Theme.fontBody
 
     readonly property bool busy: Jobs.busy
-    readonly property bool sidebarCollapsed: (Config.revision, Config.value("ui_sidebar_collapsed") === true)
+    // Згорнута за бажанням або коли вікно вузьке для такого масштабу
+    readonly property bool sidebarCollapsed: (Config.revision, Config.value("ui_sidebar_collapsed") === true) || width < Theme.px(1000)
 
     // ---- робочі простори ----
     readonly property var pages: [
@@ -43,7 +44,10 @@ B.ApplicationWindow {
     }
 
     Component.onCompleted: {
-        const p = startupPage !== "" ? startupPage : String(Config.value("ui_page") || "project")
+        // Для знімків у тестах: GMDR_TEST_PAGE=settings/graphics — робочий простір і категорія
+        const parts = startupPage.split("/")
+        if (parts.length > 1) Ui.settingsCategory = parts[1]
+        const p = startupPage !== "" ? parts[0] : String(Config.value("ui_page") || "project")
         Ui.page = pages.some(x => x.id === p) ? p : "project"
         if (Object.keys(Jobs.resumeOffer).length > 0) resumeDialog.open()
         if (Env.recoveredGraphicsApi !== "") graphicsRecovered.open()
@@ -56,6 +60,9 @@ B.ApplicationWindow {
         function onConsentRequested(forLibrary) { consentDialog.forLibrary = forLibrary; consentDialog.open() }
         function onModelInstallRequested() { modelDialog.open() }
         function onVoiceEngineInstallRequested() { engineDialog.open() }
+        function onReportRequested() { reportDialog.open() }
+        function onResetRequested() { resetDialog.open() }
+        function onAboutRequested() { aboutDialog.open() }
     }
 
     // ---- дії ----
@@ -149,7 +156,7 @@ B.ApplicationWindow {
                     label: qsTr("Згорнути панель")
                     collapsed: win.sidebarCollapsed
                     shortcut: "Ctrl+B"
-                    onClicked: Config.set("ui_sidebar_collapsed", !win.sidebarCollapsed)
+                    onClicked: win.toggleSidebar()
                 }
             }
         }
@@ -204,8 +211,21 @@ B.ApplicationWindow {
 
     // ---- гарячі клавіші ----
     Shortcut { sequence: StandardKey.Open; onActivated: openDemoDialog.open() }
-    Shortcut { sequence: "Ctrl+B"; onActivated: Config.set("ui_sidebar_collapsed", !win.sidebarCollapsed) }
+    function toggleSidebar() { Config.set("ui_sidebar_collapsed", Config.value("ui_sidebar_collapsed") !== true) }
+    Shortcut { sequence: "Ctrl+B"; onActivated: win.toggleSidebar() }
     Shortcut { sequence: "Ctrl+,"; onActivated: Ui.goTo("settings") }
+    // Масштаб інтерфейсу 80–200 %
+    function zoomBy(step) {
+        const steps = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
+        let i = steps.findIndex(v => v >= Theme.scale - 0.001)
+        if (i < 0) i = steps.length - 1
+        i = Math.max(0, Math.min(steps.length - 1, i + step))
+        Config.set("ui_scale", steps[i])
+        toast.show(qsTr("Масштаб: %1%").arg(Math.round(steps[i] * 100)), "info")
+    }
+    Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; onActivated: win.zoomBy(1) }
+    Shortcut { sequence: "Ctrl+-"; onActivated: win.zoomBy(-1) }
+    Shortcut { sequence: "Ctrl+0"; onActivated: { Config.set("ui_scale", 1.0); toast.show(qsTr("Масштаб: %1%").arg(100), "info") } }
     Repeater {
         model: 9
         Item {

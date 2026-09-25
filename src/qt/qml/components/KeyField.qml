@@ -1,4 +1,4 @@
-// API-ключ сервісу: зберігається лише зашифрованим (ядро), тут видно лише «збережено».
+// API-ключ сервісу: у налаштуваннях — лише зашифрований (ядро), на екрані — крапки.
 import QtQuick
 import QtQuick.Layouts
 import Gmdr
@@ -15,25 +15,32 @@ SettingRow {
             Layout.fillWidth: true
             visible: r.editing || !r.stored
             echoMode: TextInput.Password
-            placeholderText: qsTr("Вставте ключ API")
+            placeholderText: qsTr("вставте ключ")
             onAccepted: save()
+            Accessible.name: r.label
             function save() {
-                if (text !== "") Config.setSecret(r.key, text)
-                text = ""
+                if (text.trim() !== "") Config.setSecret(r.key, text.trim())
+                text = ""   // не тримати відкритий ключ у полі довше, ніж треба
                 r.editing = false
             }
         }
         Label {
             visible: !f.visible
             Layout.fillWidth: true
-            text: qsTr("Ключ збережено (зашифровано)")
+            text: qsTr("••••••••  збережено (зашифровано)")
             color: Theme.success
         }
         Btn {
             visible: f.visible
             text: qsTr("Зберегти")
-            enabled: f.text !== ""
+            enabled: f.text.trim() !== ""
             onClicked: f.save()
+        }
+        Btn {
+            visible: f.visible && r.stored
+            kind: "ghost"
+            text: qsTr("Скасувати")
+            onClicked: { f.text = ""; r.editing = false }
         }
         Btn {
             visible: !f.visible
@@ -42,9 +49,9 @@ SettingRow {
             onClicked: { r.editing = true; f.forceActiveFocus() }
         }
         Btn {
-            visible: r.stored
+            visible: !f.visible
             kind: "ghost"
-            text: qsTr("Видалити")
+            text: qsTr("Прибрати")
             onClicked: Config.setSecret(r.key, "")
         }
     }

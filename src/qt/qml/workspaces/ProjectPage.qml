@@ -81,6 +81,7 @@ Page {
             iconName: "file"
             collapsible: false
             Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: 1   // стовпці порівну, незалежно від вмісту
             KeyValue { name: qsTr("Карта"); value: Project.info.map || "—" }
             KeyValue { name: qsTr("Сервер"); value: Project.info.server || "—" }
             KeyValue { name: qsTr("Записав"); value: Project.info.recordedBy || "—" }
@@ -107,6 +108,7 @@ Page {
         ColumnLayout {
             Layout.alignment: Qt.AlignTop
             Layout.fillWidth: true
+            Layout.preferredWidth: 1
             spacing: Theme.s4
             Section {
                 title: qsTr("Фрагмент")

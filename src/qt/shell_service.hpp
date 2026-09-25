@@ -26,6 +26,10 @@ class ShellService final : public QObject {
     Q_PROPERTY(bool isWindows READ isWindows CONSTANT)
     Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY trayChanged)
     Q_PROPERTY(bool systemLight READ systemLight CONSTANT)   // у системі — світла тема застосунків
+    Q_PROPERTY(QVariantList uiLanguages READ uiLanguages CONSTANT)   // {code, native, english}
+    Q_PROPERTY(QString startupLanguage READ startupLanguage CONSTANT)   // ui_language, з яким запущено вікно
+    Q_PROPERTY(QString settingsPath READ settingsPath CONSTANT)
+    Q_PROPERTY(QString logPath READ logPath CONSTANT)
 
 public:
     explicit ShellService(QObject* parent = nullptr);
@@ -48,6 +52,12 @@ public:
     bool minimizeToTray() const { return minimize_to_tray_; }
     void setMinimizeToTray(bool on);
 
+    QVariantList uiLanguages() const;
+    QString      startupLanguage() const { return startup_language_; }
+    void         set_startup_language(const QString& code) { startup_language_ = code; }
+    QString      settingsPath() const;
+    QString      logPath() const;
+
     Q_INVOKABLE void    openPath(const QString& path);
     Q_INVOKABLE void    showInFolder(const QString& path);
     Q_INVOKABLE void    copyText(const QString& text);
@@ -68,6 +78,7 @@ signals:
     void openRequested(const QString& path);   // друга копія передала файл
     void associationChanged();
     void trayChanged();
+    void restarting();
 
 private:
     void on_window_state();
@@ -76,6 +87,7 @@ private:
     bool     minimize_to_tray_ = false;
     struct Native;
     Native*  native_ = nullptr;
+    QString startup_language_;
 };
 
 } // namespace gmdr::qt

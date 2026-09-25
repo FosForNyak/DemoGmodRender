@@ -7,6 +7,7 @@ import Gmdr
 QtObject {
     id: ui
     property string page: "project"
+    property string settingsCategory: "appearance"   // вибрана категорія в «Налаштуваннях»
     property string selection: ""          // "", "marker", "player", "fragment"
     property int selectedMarker: -1
     property string selectedPlayer: ""
@@ -18,8 +19,17 @@ QtObject {
     signal consentRequested(bool forLibrary)
     signal modelInstallRequested()
     signal voiceEngineInstallRequested()
+    signal reportRequested()
+    signal resetRequested()
+    signal aboutRequested()
 
     function goTo(p) { page = p }
+    // Підстановка в перекладений рядок з «{}» (як trf у ядрі): Ui.fmt(qsTr("Вибрано: {}"), names)
+    function fmt(s) {
+        let i = 1
+        const a = arguments
+        return s.replace(/\{\}/g, () => i < a.length ? String(a[i++]) : "")
+    }
     function select(kind, value) {
         selection = kind
         if (kind === "marker") selectedMarker = value
@@ -29,7 +39,7 @@ QtObject {
     function runAction(action) {
         switch (action) {
         case "openDemo": openDemoRequested(); break
-        case "detectGame": Env.rescan(); goTo("settings"); break
+        case "detectGame": Env.rescan(); settingsCategory = "game"; goTo("settings"); break
         case "installWhisperModel": modelInstallRequested(); break
         case "installWhisperCli": goTo("ai"); break
         case "installVoiceEngine": voiceEngineInstallRequested(); break

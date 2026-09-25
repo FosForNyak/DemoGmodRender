@@ -10,15 +10,19 @@ Rectangle {
     property var issue: ({})
     property bool compactView: false
     readonly property color tone: Theme.severityColor(issue.severity)
-    implicitHeight: col.implicitHeight + Theme.s3 * 2
+    implicitHeight: row.implicitHeight + Theme.s3 * 2
     radius: Theme.r2
     color: Theme.tint(tone, Theme.light ? 0.07 : 0.09)
     border.color: Theme.tint(tone, 0.35)
     Accessible.role: Accessible.StaticText
     Accessible.name: (issue.message || "") + " " + (issue.explanation || "")
+    // Ширина — від рамки, висота — від вмісту (без anchors.fill: висота рамки сама залежить від
+    // переносу тексту, і розкладка Qt 6.4 падає на такому циклі)
     RowLayout {
-        anchors.fill: parent
-        anchors.margins: Theme.s3
+        id: row
+        x: Theme.s3
+        y: Theme.s3
+        width: it.width - Theme.s3 * 2
         spacing: Theme.s3
         Icon {
             Layout.alignment: Qt.AlignTop

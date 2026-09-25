@@ -12,7 +12,9 @@
 #include "core/config/dependencies.hpp"
 #include "core/config/formats.hpp"
 #include "core/game/game_renderer.hpp"
+#include "core/game/lua_driver.hpp"
 #include "core/game/process.hpp"
+#include "core/render/jobs.hpp"
 #include "core/util/i18n.hpp"
 #include "core/util/log.hpp"
 #include "core/util/strings.hpp"
@@ -110,7 +112,13 @@ void EnvService::start_scan() {
     scanning_ = true;
     emit changed();
     const render::RenderSettings s = config_->settings();
-    run_async([this, s] {
+    const bool recover = !leftovers_checked_;
+    leftovers_checked_ = true;
+    run_async([this, s, recover] {
+        // Минулий рендер перервався (збій, вимкнення світла): повернути файли гри, як було.
+        // Не чіпаємо, якщо гра запущена (можливо, зараз рендерить консольна версія)
+        if (recover && game::GameProcess::find_by_name({"gmod.exe", "hl2.exe", "gmod", "hl2_linux"}, true).empty())
+            if (auto g = render::locate_game(s); g && g->valid()) render::recover_leftovers(*g);
         config::EnvironmentCapabilities e = config::scan_environment(s);
         return [this, e]() mutable {
             // Проби GPU-кодеків, що вже є, не губимо
@@ -210,6 +218,40 @@ void EnvService::checkGameRunning() {
             publish();
         };
     });
+}
+
+void EnvService::findGame(const QString& renderer) {
+    const game::GameRenderer* r = game::find_game_renderer(ss(renderer));
+    if (!r) return;
+    run_async([this, r] {
+        std::vector<std::string> log;
+        const auto found = r->detect(&log);
+        for (const auto& l : log) log_debug("{}", l);
+        const bool ok = found && found->valid();
+        const std::string root = ok ? path_to_utf8(found->root) : std::string();
+        return [this, r, ok, root] {
+            if (ok) {
+                log_info("{}: {}", r->label(), root);
+                config_->set(qs(r->traits().dir_setting), qs(root));
+                game_timer_.start();
+            } else {
+                log_warn("{}", r->not_found_message());
+            }
+            emit gameSearchFinished(qs(r->id()), ok, qs(ok ? trf("Знайдено: {}", root) : r->not_found_message()));
+        };
+    });
+}
+
+QString EnvService::setDriverInstalled(const QString& renderer, bool install) {
+    render::RenderSettings probe = config_->settings();
+    probe.game_renderer = ss(renderer);
+    const auto g = render::locate_game(probe);
+    if (!g || !g->valid()) return qs(gmdr::tr("Garry's Mod не знайдено — вкажіть папку гри вручну"));
+    std::string err;
+    const bool ok = install ? game::install_driver(*g, &err) : game::uninstall_driver(*g, &err);
+    if (!ok) log_error("{}", err);
+    game_timer_.start();
+    return ok ? QString() : qs(err);
 }
 
 QString EnvService::graphicsApiLabel(const QString& id) const { return qs(graphics_api_label(ss(id))); }

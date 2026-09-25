@@ -542,6 +542,23 @@ void test_rules_ai() {
     // Поля ключів — лише вибраного сервісу
     auto r = evaluate(base_settings(), env);
     CHECK(r.state(SettingId::deepl_key).visible && !r.state(SettingId::openai_key).visible);
+    // Озвучення вимкнене: варіанти «куди» видно (поле лише неактивне), формат аудіо — лише для аудіофайлів
+    s = base_settings();
+    s.dub = false;
+    s.dub_outputs = "tracks";
+    r = evaluate(s, env);
+    CHECK(r.state(SettingId::dub_outputs).options.size() == 3 && !r.state(SettingId::dub_outputs).enabled);
+    CHECK(!r.state(SettingId::dub_audio_format).visible);
+    s.dub_outputs = "tracks,audio";
+    CHECK(evaluate(s, env).state(SettingId::dub_audio_format).visible);
+    // Мова розмов і модель ElevenLabs — з переліку; невідоме значення лишається варіантом (без тихої заміни)
+    s = base_settings();
+    s.whisper_language = "ja";
+    s.elevenlabs_model = "eleven_future";
+    r = evaluate(s, env);
+    CHECK(option(r, SettingId::whisper_language, "auto") && option(r, SettingId::whisper_language, "ja"));
+    CHECK(option(r, SettingId::elevenlabs_model, "eleven_v3") && option(r, SettingId::elevenlabs_model, "eleven_future"));
+    CHECK(evaluate(base_settings(), env).state(SettingId::whisper_language).options.size() == 6);
 }
 
 void test_graphics_api_rule() {

@@ -100,7 +100,8 @@ QVariant LogModel::data(const QModelIndex& index, int role) const {
     const Line& l = lines_[i];
     switch (role) {
     case TimeRole: return qs(l.time);
-    case LevelRole: return qs(log_level_name(l.level));
+    case LevelRole:   // стабільний ідентифікатор (назви рівнів у журналі перекладаються)
+        return l.level == LogLevel::Error ? "error" : l.level == LogLevel::Warn ? "warning" : l.level == LogLevel::Debug ? "debug" : "info";
     case TextRole: return qs(l.text);
     default: return {};
     }

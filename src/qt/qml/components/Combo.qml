@@ -9,11 +9,23 @@ import Gmdr.Ui
 B.ComboBox {
     id: c
     property var options: []
+    // Варіанти приходять новими з кожною перевіркою; модель змінюється лише зі змістом
+    // (інакше відкритий список закривається і скидається)
+    property var shown: []
+    property string shownJson: "[]"
+    function syncOptions() {
+        const json = JSON.stringify(c.options || [])
+        if (json === c.shownJson) return
+        c.shownJson = json
+        c.shown = JSON.parse(json)   // копія: список із C++ «живий»
+    }
+    onOptionsChanged: syncOptions()
+    Component.onCompleted: syncOptions()
     property var selected
     property string severity: ""
     property string placeholder: ""
     signal chosen(var value)
-    model: options || []
+    model: shown
     textRole: "label"
     valueRole: "value"
     implicitHeight: Theme.controlHeight
@@ -21,15 +33,15 @@ B.ComboBox {
     font.pixelSize: Theme.fontBody
     hoverEnabled: true
     readonly property int valueIndex: {
-        const o = options || []
+        const o = shown
         for (let i = 0; i < o.length; ++i)
             if (String(o[i].value) === String(selected)) return i
         return -1
     }
     currentIndex: valueIndex
-    displayText: valueIndex >= 0 ? options[valueIndex].label : (selected !== undefined && selected !== "" ? String(selected) : placeholder)
+    displayText: valueIndex >= 0 ? shown[valueIndex].label : (selected !== undefined && selected !== "" ? String(selected) : placeholder)
     onActivated: (i) => {
-        if (i >= 0 && i < options.length && options[i].available !== false) chosen(options[i].value)
+        if (i >= 0 && i < shown.length && shown[i].available !== false) chosen(shown[i].value)
         currentIndex = Qt.binding(() => valueIndex)
     }
     background: Rectangle {
@@ -61,7 +73,7 @@ B.ComboBox {
         required property var modelData
         required property int index
         readonly property bool header: index === 0 ? modelData.group !== undefined && modelData.group !== ""
-                                                   : (modelData.group || "") !== (c.options[index - 1].group || "")
+                                                   : (modelData.group || "") !== (c.shown[index - 1].group || "")
         width: ListView.view ? ListView.view.width : c.width
         enabled: modelData.available !== false
         hoverEnabled: true

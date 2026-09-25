@@ -17,6 +17,8 @@ ColumnLayout {
     spacing: Theme.s1
     Flow {
         Layout.fillWidth: true
+        // Ширина Flow залежить від переносу рядків — не віддаємо її розкладці (інакше цикл розкладки)
+        Layout.preferredWidth: Theme.px(120)
         spacing: Theme.s2
         Repeater {
             model: [

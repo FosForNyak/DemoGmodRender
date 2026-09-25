@@ -251,6 +251,15 @@ void IconItem::paint(QPainter* painter) {
     } else if (n == "user") {
         d.circle(0, -0.3f, 0.32f, t);
         d.arc(0, 0.78f, 0.66f, kPi * 1.1f, kPi * 1.9f, t);
+    } else if (n == "bell") {
+        d.arc(0, -0.2f, 0.42f, kPi, kPi * 2.0f, t);
+        d.poly({{-0.42, -0.2}, {-0.42, 0.28}, {-0.66, 0.5}, {0.66, 0.5}, {0.42, 0.28}, {0.42, -0.2}}, t);
+        d.line(-0.14f, 0.72f, 0.14f, 0.72f, t);
+        d.line(0, -0.62f, 0, -0.76f, t);
+    } else if (n == "code") {
+        d.poly({{-0.3, -0.5}, {-0.75, 0}, {-0.3, 0.5}}, t);
+        d.poly({{0.3, -0.5}, {0.75, 0}, {0.3, 0.5}}, t);
+        d.line(0.12f, -0.62f, -0.12f, 0.62f, t);
     } else if (n == "clock") {
         d.circle(0, 0, 0.74f, t);
         d.poly({{0, -0.42}, {0, 0}, {0.3, 0.2}}, t);

@@ -64,7 +64,7 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true
-                    Layout.leftMargin: Theme.labelWidth + Theme.s3
+                    Layout.leftMargin: parent.width < Theme.labelWidth + Theme.px(300) ? 0 : Theme.labelWidth + Theme.s3
                     role: "meta"
                     wrapMode: Text.WordWrap
                     elide: Text.ElideNone
@@ -336,8 +336,8 @@ Item {
                 iconName: "copy"
                 readonly property var vs: (Config.revision, Config.state("extra_versions"))
                 readonly property var chosen: (Config.revision, String(Config.value("extra_versions") || "").split(",").map(x => x.trim()).filter(x => x !== ""))
-                Repeater {
-                    model: versions.vs.options || []
+                Each {
+                    items: versions.vs.options || []
                     RowLayout {
                         required property var modelData
                         Layout.fillWidth: true
@@ -379,7 +379,7 @@ Item {
         // ---- підсумок і дії ----
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: Theme.px(360)
+            Layout.preferredWidth: Math.max(Theme.px(250), Math.min(Theme.px(360), page.width * 0.36))
             color: Theme.surface
             Rectangle { width: 1; height: parent.height; color: Theme.border }
             B.ScrollView {

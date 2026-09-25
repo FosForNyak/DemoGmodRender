@@ -16,8 +16,9 @@
 лишається англійська довідка.
 
 Що вважається ключем: перший аргумент-літерал tr(...)/trf(...)/N_(...) (сусідні літерали склеюються,
-суфікс ImGui "##id" відкидається), усі кириличні літерали в src/gui/app_ui.hpp (таблиці пресетів, кодеків)
-і масиви kCheckNames/kCheckHints у src/core/render/jobs.cpp.
+суфікс ImGui "##id" відкидається), перший аргумент qsTr("...") у QML (src/qt/qml), усі кириличні
+літерали в src/gui/app_ui.hpp (таблиці пресетів, кодеків) і масиви kCheckNames/kCheckHints у
+src/core/render/jobs.cpp.
 """
 import json
 import os
@@ -199,6 +200,14 @@ def used_keys():
                             add(literal_group(tokens, q)[0])
                 k += 1
 
+    # Інтерфейс Qt Quick: qsTr("...") у src/qt/qml (перекладач Qt віддає їх у той самий каталог)
+    for dirpath, dirs, files in os.walk(os.path.join(SRC, 'qt', 'qml')):
+        dirs.sort()
+        for fn in sorted(files):
+            if fn.endswith('.qml'):
+                for v in qml_strings(open(os.path.join(dirpath, fn), encoding='utf-8').read()):
+                    add(v)
+
     # Назви і підказки кроків тестового прогону — масиви поза функціями, tr() на місці показу
     src = open(os.path.join(SRC, 'core', 'render', 'jobs.cpp'), encoding='utf-8').read()
     a = src.index('const char* const kCheckNames')
@@ -210,6 +219,36 @@ def used_keys():
             add(v)
         k += 1
     return keys
+
+
+QSTR = re.compile(r'\bqsTr\s*\(\s*')
+
+
+def qml_strings(src):
+    """Перші аргументи qsTr("...") у QML (рядок JavaScript у лапках чи апострофах)."""
+    out = []
+    simple = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', '"': '"', "'": "'", 'b': '\b', 'f': '\f', 'v': '\v', '0': '\0'}
+    for m in QSTR.finditer(src):
+        i = m.end()
+        if i >= len(src) or src[i] not in '"\'':
+            continue
+        q = src[i]
+        j = i + 1
+        v = []
+        while j < len(src) and src[j] != q:
+            if src[j] == '\\':
+                e = src[j + 1]
+                if e == 'u':
+                    v.append(chr(int(src[j + 2:j + 6], 16)))
+                    j += 6
+                    continue
+                v.append(simple.get(e, e))
+                j += 2
+                continue
+            v.append(src[j])
+            j += 1
+        out.append(''.join(v))
+    return out
 
 
 def load_inc(lang='en'):

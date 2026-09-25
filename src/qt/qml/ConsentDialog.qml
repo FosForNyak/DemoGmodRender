@@ -8,21 +8,28 @@ import Gmdr.Ui
 Dialog {
     id: cd
     property bool forLibrary: false
-    title: qsTr("Згода гравців на клонування голосу")
+    title: qsTr("Клонування голосів гравців")
     iconName: "user"
     onOpened: agree.checked = false
     ColumnLayout {
         anchors.fill: parent
-        spacing: Theme.s4
+        spacing: Theme.s3
         Label {
             Layout.fillWidth: true
-            text: qsTr("Клон голосу гравця можна використовувати лише з його дозволу. Підтвердьте, що всі гравці, чиї голоси будуть клоновані (або збережені в бібліотеку голосів), на це згодні. Зразки голосів лишаються на цьому комп'ютері, бібліотеку можна будь-коли очистити.")
+            text: qsTr("Голос — особисті дані. Клон звучить як сама людина, тому озвучувати ним переклад можна лише з її дозволу, і глядач має знати, що голос синтезований (доріжки підписуються «озвучення ШІ»).")
+            wrapMode: Text.WordWrap
+            elide: Text.ElideNone
+        }
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("Зразки голосів зберігаються лише на цьому ПК; з ElevenLabs вони надсилаються в їхній сервіс для створення клону. Бібліотеку можна будь-коли очистити.")
             wrapMode: Text.WordWrap
             elide: Text.ElideNone
         }
         Check {
             id: agree
-            text: qsTr("Я підтверджую згоду гравців")
+            Layout.fillWidth: true
+            text: qsTr("Гравці в моїх демо погодились на клонування своїх голосів")
         }
         RowLayout {
             Layout.alignment: Qt.AlignRight
@@ -33,7 +40,7 @@ Dialog {
                 text: qsTr("Підтвердити")
                 onClicked: {
                     Config.set("tts_clone_ack", true)
-                    if (cd.forLibrary) Config.set("voice_library_auto", true)
+                    Config.set(cd.forLibrary ? "voice_library_auto" : "tts_clone", true)
                     cd.close()
                 }
             }

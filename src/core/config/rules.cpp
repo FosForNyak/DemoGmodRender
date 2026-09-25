@@ -918,6 +918,13 @@ bool speech_needed(const render::RenderSettings& s) {
 }
 
 void r_speech(RuleContext& c) {
+    // Мова розмов: «визначити» або одна з поширених; інше значення (з файлу чи командного рядка) лишається як є
+    auto& wl = c.state(S::whisper_language);
+    wl.options = {{"auto", tr("визначити")}, {"uk", tr("українська")}, {"ru", tr("російська")},
+                  {"en", tr("англійська")},  {"pl", tr("польська")},    {"de", tr("німецька")}};
+    const std::string lang = c.s.whisper_language.empty() ? "auto" : c.s.whisper_language;
+    if (std::none_of(wl.options.begin(), wl.options.end(), [&](const OptionState& o) { return o.value == lang; }))
+        wl.options.push_back({lang, lang});
     if (!c.s.subtitles_srt) c.hide(S::speech_subtitles, tr("лише разом із субтитрами «хто говорить»"));
     if (c.s.speech_subtitles && !c.s.subtitles_srt) {
         auto& i = c.add(Sev::Warning, K::Dependency, S::speech_subtitles, tr("Текст розмов потребує субтитрів «хто говорить»."), {},
@@ -1032,6 +1039,20 @@ void r_ai_translator(RuleContext& c) {
 }
 
 void r_ai_dub(RuleContext& c) {
+    // Варіанти видно й тоді, коли озвучення вимкнене (поля лише неактивні)
+    auto& st = c.state(S::dub_outputs);
+    st.options = {{"tracks", tr("Доріжки в цьому відео (з мітками мови)")},
+                  {"videos", tr("Окреме відео для кожної мови")},
+                  {"audio", tr("Окремі аудіофайли")}};
+    if (c.d().image_sequence)
+        for (auto& o : st.options)
+            if (o.value != "audio") {
+                o.available = false;
+                o.reason = tr("кадри — окремими файлами");
+            }
+    auto& fmt = c.state(S::dub_audio_format);
+    for (const auto& f : dub::audio_formats()) fmt.options.push_back({f.id, f.id});
+    if (!render::dub_output(c.s, "audio")) c.hide(S::dub_audio_format, tr("лише для окремих аудіофайлів"));
     if (!c.s.dub) {
         for (S id : {S::dub_outputs, S::dub_audio_format, S::dub_original_volume, S::tts_engine, S::tts_device, S::tts_python,
                      S::tts_clone, S::elevenlabs_key, S::elevenlabs_model, S::elevenlabs_voice})
@@ -1052,16 +1073,6 @@ void r_ai_dub(RuleContext& c) {
         if (o != "tracks" && o != "videos" && o != "audio") bad = true;
         else outs.push_back(o);
     }
-    auto& st = c.state(S::dub_outputs);
-    st.options = {{"tracks", tr("Доріжки в цьому відео (з мітками мови)")},
-                  {"videos", tr("Окреме відео для кожної мови")},
-                  {"audio", tr("Окремі аудіофайли")}};
-    if (c.d().image_sequence)
-        for (auto& o : st.options)
-            if (o.value != "audio") {
-                o.available = false;
-                o.reason = tr("кадри — окремими файлами");
-            }
     if (bad || outs.empty()) {
         auto& i = c.add(Sev::Error, K::Range, S::dub_outputs, tr("Не вибрано, куди озвучення (доріжки, окремі відео чи аудіофайли)."));
         i.fixes.push_back(fix(tr("Доріжки в цьому відео (з мітками мови)"), {change(S::dub_outputs, str("tracks"))}));
@@ -1070,10 +1081,7 @@ void r_ai_dub(RuleContext& c) {
                         {S::container});
         i.fixes.push_back(fix(tr("Окремі аудіофайли"), {change(S::dub_outputs, str("audio"))}));
     }
-    auto& fmt = c.state(S::dub_audio_format);
-    for (const auto& f : dub::audio_formats()) fmt.options.push_back({f.id, f.id});
-    if (std::find(outs.begin(), outs.end(), "audio") == outs.end()) c.hide(S::dub_audio_format, tr("лише для окремих аудіофайлів"));
-    else if (std::none_of(dub::audio_formats().begin(), dub::audio_formats().end(),
+    if (render::dub_output(c.s, "audio") && std::none_of(dub::audio_formats().begin(), dub::audio_formats().end(),
                           [&](const dub::AudioFormat& f) { return c.s.dub_audio_format == f.id; })) {
         auto& i = c.add(Sev::Error, K::Range, S::dub_audio_format, trf("Невідомий формат аудіофайлів «{}».", c.s.dub_audio_format));
         i.fixes.push_back(fix("mp3", {change(S::dub_audio_format, str("mp3"))}));
@@ -1102,6 +1110,14 @@ void r_ai_tts(RuleContext& c) {
     if (c.s.tts_engine != "elevenlabs")
         for (S id : {S::elevenlabs_key, S::elevenlabs_model, S::elevenlabs_voice}) c.hide(id, tr("лише для ElevenLabs"));
     c.state(S::tts_device).options = {{"auto", tr("Авто")}, {"cuda", "GPU (CUDA)"}, {"cpu", tr("Процесор")}};
+    // Моделі ElevenLabs: у дужках — скільки мов
+    auto& em = c.state(S::elevenlabs_model);
+    em.options = {{"eleven_multilingual_v2", "Multilingual v2 (29)"},
+                  {"eleven_v3", "Eleven v3 (70+)"},
+                  {"eleven_turbo_v2_5", "Turbo v2.5 (32)"},
+                  {"eleven_flash_v2_5", "Flash v2.5 (32)"}};
+    if (std::none_of(em.options.begin(), em.options.end(), [&](const OptionState& o) { return o.value == c.s.elevenlabs_model; }))
+        em.options.push_back({c.s.elevenlabs_model, c.s.elevenlabs_model});
     if (c.env.dubbing.nvidia_gpu.state == Availability::Unavailable)
         for (auto& o : c.state(S::tts_device).options)
             if (o.value == "cuda") {
