@@ -588,14 +588,16 @@ void test_presets() {
     // Зміна формату: лише шлях (кодек не підміняється мовчки), послідовність кадрів і назад
     render::RenderSettings c = base_settings();
     set_container(c, "webm");
-    CHECK(c.output_path == "C:/videos/match.webm" && c.video_codec == "libx264");
+    // Роздільники шляхів — як у системі (у Windows склеєні частини йдуть через «\\»)
+    auto slashes = [](std::string p) { return replace_all(std::move(p), "\\", "/"); };
+    CHECK(slashes(c.output_path) == "C:/videos/match.webm" && c.video_codec == "libx264");
     CHECK(has(evaluate(c, full_env()), "video.codec", Severity::Error));
     set_container(c, "png");
     CHECK(c.video_codec == "png");
-    CHECK(c.output_path == "C:/videos/match_frames/frame_%06d.png");
+    CHECK(slashes(c.output_path) == "C:/videos/match_frames/frame_%06d.png");
     CHECK(is_image_sequence(c));
     set_container(c, "mkv");
-    CHECK(c.output_path == "C:/videos/match.mkv");
+    CHECK(slashes(c.output_path) == "C:/videos/match.mkv");
     CHECK(replace_ext("C:/a/b.mp4", "mkv") == "C:/a/b.mkv");
     CHECK(replace_ext("", "mkv").empty());
 }
@@ -627,7 +629,8 @@ void test_dependencies() {
     CHECK(d && d->required);
     CHECK(!find(deps, "translate.fake"));
     env.translation.providers["deepl"] = {Availability::Unavailable, "немає ключа API"};
-    d = find(dependencies(s, env), "translate.deepl");
+    deps = dependencies(s, env);   // покажчик — у вектор, що живе далі
+    d = find(deps, "translate.deepl");
     CHECK(d && d->state == DependencyState::NotConfigured && d->required);
 }
 
