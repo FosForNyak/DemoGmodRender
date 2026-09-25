@@ -16,8 +16,9 @@ PAGES = ['project', 'edit', 'render', 'audio', 'ai', 'library', 'queue', 'log',
          'settings/rendering', 'settings/storage', 'settings/notifications', 'settings/system']
 LANGS = ['en', 'uk']
 # Повідомлення Qt у журналі програми (main_qt.cpp пише їх як «Qt: [категорія] ...»); рівень — будь-якою
-# мовою. Не рахуються лише повідомлення платформи (qt.qpa.*: шрифти, offscreen) — це оточення, а не програма
-QT_PROBLEM = re.compile(r'\[(WARNING|ERROR|УВАГА|ПОМИЛКА)\] Qt: (?!\[qt\.qpa\.)')
+# мовою. Не рахуються лише повідомлення про оточення, а не про програму: платформа (qt.qpa.*) і шрифти
+# без таблиць OpenType на CI-машині (Qt 6.4 пише це без категорії)
+QT_PROBLEM = re.compile(r'\[(WARNING|ERROR|УВАГА|ПОМИЛКА)\] Qt: (?!\[qt\.qpa\.|\s*OpenType support missing for )')
 
 
 def main():
@@ -36,6 +37,10 @@ def main():
         os.makedirs(runtime, mode=0o700, exist_ok=True)
         os.chmod(runtime, 0o700)
         base_env['XDG_RUNTIME_DIR'] = runtime
+    if sys.platform == 'win32' and not base_env.get('QT_QPA_FONTDIR'):
+        # Платформа offscreen на Windows шукає шрифти в теці Qt (там їх немає) — дати системні,
+        # інакше на знімках не буде тексту. Звичайне вікно (qwindows) бере шрифти системи саме
+        base_env['QT_QPA_FONTDIR'] = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'Fonts')
     for lang in LANGS:
         for page in PAGES:
             shot = os.path.abspath(os.path.join(out, f'{lang}_{page.replace("/", "_")}.png'))
