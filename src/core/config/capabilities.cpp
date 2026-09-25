@@ -177,6 +177,12 @@ void scan_services(EnvironmentCapabilities& env, const render::RenderSettings& s
 
 } // namespace
 
+void rescan_game(EnvironmentCapabilities& env, const render::RenderSettings& s, bool processes) {
+    scan_game(env, s, processes, true);
+}
+
+void rescan_services(EnvironmentCapabilities& env, const render::RenderSettings& s) { scan_services(env, s); }
+
 void rescan_paths(EnvironmentCapabilities& env, const render::RenderSettings& s) {
     std::error_code ec;
     auto& f = env.filesystem;

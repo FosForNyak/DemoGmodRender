@@ -1,0 +1,36 @@
+# =============================================================================
+#  Програма з вікном на Qt 6 (Qt Quick / QML). Логіка — у ядрі (gmdr_core) і
+#  C++-сервісах тут; QML лише показує стан і передає дії.
+#  Модулі Qt — лише потрібні: Core, Gui, Qml, Quick, QuickControls2.
+# =============================================================================
+qt_standard_project_setup()
+
+file(GLOB GMDR_QT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+file(GLOB_RECURSE GMDR_QML_FILES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/qml/*.qml")
+
+set(_extra)
+if(WIN32)
+    set(_extra app_qt.rc)
+endif()
+qt_add_executable(gmdr-qt WIN32 ${GMDR_QT_SOURCES} ${_extra}
+    "${CMAKE_SOURCE_DIR}/src/gui/voice_player.cpp" "${CMAKE_SOURCE_DIR}/src/gui/voice_player.hpp")
+set_source_files_properties(qml/Theme.qml qml/Ui.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+qt_add_qml_module(gmdr-qt
+    URI Gmdr.Ui
+    VERSION 1.0
+    RESOURCE_PREFIX /
+    QML_FILES ${GMDR_QML_FILES})
+qt_add_resources(gmdr-qt gmdr_assets PREFIX /gmdr FILES app_icon.png)
+
+target_include_directories(gmdr-qt PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(gmdr-qt PRIVATE gmdr_core Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+if(WIN32)
+    target_link_libraries(gmdr-qt PRIVATE ole32 shell32 user32 winmm)
+    if(MSVC)
+        target_link_options(gmdr-qt PRIVATE /MANIFEST:NO)   # маніфест — у app_qt.rc
+    endif()
+endif()
+# Поруч із gmdr-cli і DLL FFmpeg
+set_target_properties(gmdr-qt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+gmdr_copy_ffmpeg_dlls(gmdr-qt)
+gmdr_copy_voice_model(gmdr-qt)

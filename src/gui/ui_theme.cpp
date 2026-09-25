@@ -38,7 +38,8 @@ ImU32 with_alpha(ImU32 c, int a) { return (c & ~IM_COL32_A_MASK) | (static_cast<
 
 const std::vector<AccentPreset>& accent_presets() {
     static const std::vector<AccentPreset> k = {
-        {"violet", N_("Фіолетовий"), rgb(123, 97, 255)}, {"blue", N_("Синій"), rgb(59, 130, 246)},
+        {"sky", N_("Блакитний"), rgb(76, 194, 255)},     {"violet", N_("Фіолетовий"), rgb(123, 97, 255)},
+        {"blue", N_("Синій"), rgb(59, 130, 246)},
         {"teal", N_("Бірюзовий"), rgb(20, 184, 166)},    {"green", N_("Зелений"), rgb(34, 179, 94)},
         {"orange", N_("Помаранчевий"), rgb(249, 115, 22)}, {"pink", N_("Рожевий"), rgb(236, 72, 153)},
         {"red", N_("Червоний"), rgb(239, 68, 68)},

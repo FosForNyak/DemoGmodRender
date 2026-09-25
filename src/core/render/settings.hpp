@@ -116,7 +116,7 @@ struct RenderSettings {
     std::string ui_language;              // мова інтерфейсу: "uk", "en"; порожньо — за мовою або регіоном Windows
     bool        ui_advanced = false;      // режим інтерфейсу: розширений (усі параметри) чи стандартний
     std::string ui_theme = "dark";        // тема: dark / light / system
-    std::string ui_accent = "violet";     // колір акценту (ui::accent_presets)
+    std::string ui_accent = "sky";        // колір акценту: sky, violet, blue, teal, green, orange, pink, red
     double      ui_scale = 1.0;           // масштаб інтерфейсу поверх DPI монітора (0.8..2)
     bool        ui_compact = false;       // щільніше: менші відступи
     bool        ui_sidebar_collapsed = false;   // бічна навігація — лише значки

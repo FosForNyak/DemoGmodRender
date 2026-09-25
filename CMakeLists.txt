@@ -26,6 +26,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 option(GMDR_BUILD_GUI   "Збирати програму з вікном" ON)
+option(GMDR_BUILD_QT    "Збирати програму з вікном на Qt 6 (якщо Qt знайдено)" ON)
 option(GMDR_BUILD_CLI   "Збирати консольну програму" ON)
 option(GMDR_BUILD_TESTS "Збирати тести" OFF)
 option(GMDR_BUILD_FUZZERS "Збирати фазер парсера демо (libFuzzer; Clang або MSVC)" OFF)
@@ -157,6 +158,16 @@ if(GMDR_BUILD_GUI)
     target_include_directories(gmdr PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends ${IMGUI_DIR}/misc/cpp)
     gmdr_copy_ffmpeg_dlls(gmdr)
     gmdr_copy_voice_model(gmdr)
+endif()
+
+# ---- Програма з вікном на Qt 6 (нова) --------------------------------------------
+if(GMDR_BUILD_QT)
+    find_package(Qt6 6.4 QUIET COMPONENTS Core Gui Qml Quick QuickControls2)
+    if(Qt6_FOUND)
+        add_subdirectory(src/qt)
+    else()
+        message(STATUS "Qt 6 не знайдено — програма з вікном на Qt не збирається (див. README, «Збирання»)")
+    endif()
 endif()
 
 # ---- Тести --------------------------------------------------------------------

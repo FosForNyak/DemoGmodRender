@@ -1,0 +1,28 @@
+#pragma code_page(65001)
+// Ресурси програми з вікном на Qt: іконка (101 — її бере й значок у треї), маніфест, версія.
+#include <winver.h>
+
+101 ICON "../gui/app.ico"
+1 24 "../gui/app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION GMDR_VERSION_MAJOR,GMDR_VERSION_MINOR,GMDR_VERSION_PATCH,0
+PRODUCTVERSION GMDR_VERSION_MAJOR,GMDR_VERSION_MINOR,GMDR_VERSION_PATCH,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "042204B0"
+        BEGIN
+            VALUE "FileDescription", "GMod Demo Render"
+            VALUE "ProductName", "GMod Demo Render"
+            VALUE "FileVersion", GMDR_VERSION
+            VALUE "ProductVersion", GMDR_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0422, 1200
+    END
+END

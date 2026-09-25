@@ -558,6 +558,10 @@ void test_graphics_api_rule() {
     if (i && !i->fixes.empty()) CHECK(apply_fix(s, i->fixes.front()).ui_graphics_api == "auto");
     s.ui_graphics_api = "d3d11";
     CHECK(!evaluate(s, env).find("app.graphics_api"));
+    // Ще не перевірений API — не «недоступний»
+    env.graphics.apis[2].state = Availability::Unknown;
+    s.ui_graphics_api = "d3d12";
+    CHECK(!evaluate(s, env).find("app.graphics_api"));
 }
 
 void test_presets() {

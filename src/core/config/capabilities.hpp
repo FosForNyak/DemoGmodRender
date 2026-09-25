@@ -152,6 +152,10 @@ struct ScanOptions {
 EnvironmentCapabilities scan_environment(const render::RenderSettings& s, const ScanOptions& opt = {});
 // Лише те, що залежить від шляхів у налаштуваннях (після зміни папки, файлу мікрофона...)
 void rescan_paths(EnvironmentCapabilities& env, const render::RenderSettings& s);
+// Копії гри (після зміни папки гри чи рендерера); processes — ще й чи запущена гра
+void rescan_game(EnvironmentCapabilities& env, const render::RenderSettings& s, bool processes);
+// Розпізнавання, ключі сервісів, рушій озвучення (після зміни ключа, шляху whisper...)
+void rescan_services(EnvironmentCapabilities& env, const render::RenderSettings& s);
 
 // Проба GPU-кодека: відкрити його (1280×720). Повільно (сотні мс) — не в потоці інтерфейсу.
 CapabilityState probe_video_encoder(const std::string& name);

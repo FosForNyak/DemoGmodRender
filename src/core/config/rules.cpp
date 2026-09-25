@@ -1288,14 +1288,15 @@ void r_app_graphics(RuleContext& c) {
     auto& st = c.state(S::ui_graphics_api);
     for (const auto& a : apis) {
         OptionState o{a.id, a.label};
-        if (a.state != Availability::Available) {
+        if (a.state == Availability::Unavailable || a.state == Availability::Failed) {
             o.available = false;
             o.reason = a.detail;
         }
         st.options.push_back(std::move(o));
     }
     const auto it = std::find_if(apis.begin(), apis.end(), [&](const GraphicsApiInfo& a) { return a.id == c.s.ui_graphics_api; });
-    if (it == apis.end() || it->state != Availability::Available) {
+    // Не перевірений API — не «недоступний»: попередження лише коли його немає або він не ініціалізувався
+    if (it == apis.end() || it->state == Availability::Unavailable || it->state == Availability::Failed) {
         auto& i = c.add(Sev::Warning, K::Platform, S::ui_graphics_api,
                         trf("Графічний API вікна «{}» тут недоступний — вікно малюватиме автоматично вибраний.", c.s.ui_graphics_api),
                         it != apis.end() ? reason(it->detail) : std::string());
