@@ -11,9 +11,13 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #endif
-#if QT_CONFIG(vulkan)
-#include <QVulkanFunctions>
+// QVulkanInstance є, лише коли під час збирання знайдено vulkan/vulkan.h (Vulkan SDK або
+// Vulkan-Headers — див. src/qt/CMakeLists.txt); без них Vulkan показується «не перевірено»
+#if QT_CONFIG(vulkan) && __has_include(<vulkan/vulkan.h>)
+#define GMDR_VULKAN_PROBE 1
 #include <QVulkanInstance>
+#else
+#define GMDR_VULKAN_PROBE 0
 #endif
 
 #include "core/util/file_util.hpp"
@@ -94,15 +98,18 @@ bool probe_d3d12(std::string* detail) {
 }
 #endif
 
-#if QT_CONFIG(vulkan)
+#if GMDR_VULKAN_PROBE
 bool probe_vulkan(std::string* detail) {
     QVulkanInstance inst;
     if (!inst.create()) {
         *detail = gmdr::tr("не вдалося створити екземпляр Vulkan (немає драйвера чи vulkan-1)");
         return false;
     }
+    // vkEnumeratePhysicalDevices без заголовків Vulkan: VkResult — int32, VkPhysicalDevice* — лише nullptr
+    using EnumerateFn = int32_t (*)(VkInstance, uint32_t*, void*);
+    auto enumerate = reinterpret_cast<EnumerateFn>(inst.getInstanceProcAddr("vkEnumeratePhysicalDevices"));
     uint32_t count = 0;
-    inst.functions()->vkEnumeratePhysicalDevices(inst.vkInstance(), &count, nullptr);
+    if (enumerate) enumerate(inst.vkInstance(), &count, nullptr);
     if (count == 0) {
         *detail = gmdr::tr("Vulkan є, але відеокарт з ним немає");
         return false;
@@ -181,8 +188,10 @@ std::vector<GraphicsApiInfo> probe_graphics_apis() {
         else if (a.id == "d3d11") ok = probe_d3d11(&detail);
         else if (a.id == "d3d12") ok = probe_d3d12(&detail);
 #endif
-#if QT_CONFIG(vulkan)
+#if GMDR_VULKAN_PROBE
         else if (a.id == "vulkan") ok = probe_vulkan(&detail);
+#else
+        else if (a.id == "vulkan") continue;   // збірка без заголовків Vulkan: лишається «не перевірено»
 #endif
 #if QT_CONFIG(opengl)
         else if (a.id == "opengl") ok = probe_opengl(&detail);

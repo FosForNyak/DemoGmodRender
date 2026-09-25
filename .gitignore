@@ -3,6 +3,7 @@ build-*/
 out/
 .vs/
 third_party/ffmpeg/
+third_party/vulkan-headers/
 bin/
 *.user
 

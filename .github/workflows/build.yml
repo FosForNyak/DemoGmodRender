@@ -1,9 +1,11 @@
 # =============================================================================
 #  Every push and pull request is built and tested:
 #   * Windows / Visual Studio: build, unit tests and end-to-end renders through the
-#     fake game (tests/fake_game.cpp); the ready .exe files are uploaded as an artifact;
-#   * Linux / GCC: build against the system FFmpeg (also covers the old swscale path),
-#     tests plain and under ASan + UBSan;
+#     fake game (tests/fake_game.cpp); the Qt window (gmdr-qt, Qt 6.8) opens every
+#     workspace offscreen with no Qt/QML warnings; the ready .exe files (and the Qt
+#     window deployed with windeployqt) are uploaded as an artifact;
+#   * Linux / GCC: build against the system FFmpeg and Qt 6.4 (also covers the old
+#     swscale path), tests plain and under ASan + UBSan, the same Qt window check;
 #   * Linux / Clang: 2 minutes of demo parser fuzzing (libFuzzer).
 #  A pushed v* tag also publishes a GitHub release with the Windows build, once all
 #  jobs have passed. The tag must match the version in CMakeLists.txt.
@@ -27,10 +29,21 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Qt 6.8 (window)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Vulkan headers (Vulkan check in "Settings → Graphics")
+        run: git clone --depth 1 --branch v1.3.296 https://github.com/KhronosGroup/Vulkan-Headers third_party/vulkan-headers
+
       - name: Build
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
           cmake --build build
+          if (-not (Test-Path build\gmdr-qt.exe)) { throw "gmdr-qt.exe was not built (Qt not found?)" }
 
       - name: whisper-cli (speech recognition)
         shell: pwsh
@@ -289,15 +302,41 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "перегляд не вдався" }
           if (-not ($watch -match "--start-tick \d+ --end-tick \d+")) { $watch; throw "позначки з гри не дійшли" }
 
+      - name: Qt window — every workspace offscreen, no Qt/QML warnings
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:QT_ROOT_DIR\bin;$PWD\third_party\ffmpeg\bin;$env:PATH"
+          python scripts/qt_smoke_test.py build\gmdr-qt.exe build\td\test24.dem build\qt-shots
+          if ($LASTEXITCODE -ne 0) { Get-Content build\gmdr_log.txt -Tail 60; throw "Qt window check failed" }
+
+      - name: Qt window — deploy (windeployqt)
+        shell: pwsh
+        run: |
+          $d = "build\qt-deploy"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Copy-Item build\gmdr-qt.exe $d
+          windeployqt --release --qmldir src\qt\qml --no-translations --no-opengl-sw --no-system-d3d-compiler $d\gmdr-qt.exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          Remove-Item "$d\gmdr-qt.exe"
+          Get-ChildItem $d -Recurse | Measure-Object -Property Length -Sum | ForEach-Object { "deployed: {0} files, {1:N1} MB" -f $_.Count, ($_.Sum / 1MB) }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt-window-screenshots
+          path: build/qt-shots/
+
       - uses: actions/upload-artifact@v4
         with:
           name: gmod-demo-render-windows
           path: |
             build/gmdr.exe
+            build/gmdr-qt.exe
             build/gmdr-cli.exe
             build/*.dll
             build/rnnoise-voice.rnnn
             build/whisper/
+            build/qt-deploy/
             third_party/ffmpeg/LICENSE.txt
 
   linux-gcc:
@@ -313,7 +352,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libswresample-dev libavfilter-dev libglfw3-dev libgl-dev ffmpeg python3 lua5.1
+            libswresample-dev libavfilter-dev libglfw3-dev libgl-dev ffmpeg python3 lua5.1 \
+            qt6-base-dev qt6-declarative-dev libvulkan-dev qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtquick-dialogs \
+            qml6-module-qtquick-window qml6-module-qtqml-workerscript
 
       - name: Build
         run: |
@@ -341,6 +383,12 @@ jobs:
           grep -q '"executable":false' /tmp/check.json
           mkdir -p /tmp/gm/garrysmod && touch /tmp/gm/garrysmod/gameinfo.txt /tmp/gm/hl2.exe
           ./build/gmdr-cli check build/td/test24.dem -o /tmp/x.mkv --game-dir /tmp/gm --profile youtube-1080p60
+
+      - name: Qt window — every workspace offscreen, no Qt/QML warnings
+        if: matrix.sanitize == ''
+        run: |
+          test -x build/gmdr-qt || { echo "gmdr-qt was not built (Qt not found?)"; exit 1; }
+          python3 scripts/qt_smoke_test.py build/gmdr-qt build/td/test24.dem build/qt-shots || { tail -60 build/gmdr_log.txt; exit 1; }
 
       - name: Lua driver (mocked GMod menu)
         if: matrix.sanitize == ''

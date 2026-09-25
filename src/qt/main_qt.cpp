@@ -80,6 +80,21 @@ void open_log_file() {
     });
 }
 
+// Повідомлення Qt і QML (помилки в інтерфейсі, попередження розкладки) — теж у журнал:
+// потрапляють у звіт про проблему, а тест вікна в CI падає на будь-якому з них
+QtMessageHandler g_prev_handler = nullptr;
+void qt_message(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+    const std::string text = qt::ss(msg);
+    switch (type) {
+    case QtDebugMsg:
+    case QtInfoMsg: log_debug("Qt: {}", text); break;
+    case QtWarningMsg: log_warn("Qt: {}", text); break;
+    case QtCriticalMsg:
+    case QtFatalMsg: log_error("Qt: {}", text); break;
+    }
+    if (g_prev_handler) g_prev_handler(type, ctx, msg);
+}
+
 std::vector<std::string> utf8_args(int argc, char** argv) {
     std::vector<std::string> out;
     const QStringList list = QCoreApplication::arguments();
@@ -96,6 +111,7 @@ int main(int argc, char** argv) {
     install_crash_handler(app_data_dir());
     set_min_log_level(LogLevel::Debug);
     open_log_file();
+    g_prev_handler = qInstallMessageHandler(qt_message);
     media::install_ffmpeg_log_bridge(AV_LOG_ERROR);
 
     // ---- налаштування і мова (до першого тексту) ----

@@ -23,6 +23,13 @@ qt_add_qml_module(gmdr-qt
 qt_add_resources(gmdr-qt gmdr_assets PREFIX /gmdr FILES app_icon.png)
 
 target_include_directories(gmdr-qt PRIVATE "${CMAKE_SOURCE_DIR}/src")
+# Перевірка Vulkan у «Налаштування → Графіка» потребує лише заголовків: Vulkan SDK або Khronos
+# Vulkan-Headers у third_party/vulkan-headers (CI). Без них Vulkan показується «не перевірено».
+find_path(GMDR_VULKAN_INCLUDE_DIR vulkan/vulkan.h
+    HINTS "$ENV{VULKAN_SDK}/Include" "$ENV{VULKAN_SDK}/include" "${CMAKE_SOURCE_DIR}/third_party/vulkan-headers/include")
+if(GMDR_VULKAN_INCLUDE_DIR)
+    target_include_directories(gmdr-qt PRIVATE "${GMDR_VULKAN_INCLUDE_DIR}")
+endif()
 target_link_libraries(gmdr-qt PRIVATE gmdr_core Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 if(WIN32)
     target_link_libraries(gmdr-qt PRIVATE ole32 shell32 user32 winmm)
