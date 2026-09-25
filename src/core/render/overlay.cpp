@@ -9,11 +9,10 @@
 #include <cstring>
 #include <filesystem>
 
-// stb_truetype — той самий, що в Dear ImGui (third_party/imgui); статичний, щоб не
-// конфліктувати з копією всередині ImGui
+// stb_truetype (third_party/stb); статичний — лише для цього файлу
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
-#include "imstb_truetype.h"
+#include "stb_truetype.h"
 #include "../util/i18n.hpp"
 
 namespace gmdr::render {

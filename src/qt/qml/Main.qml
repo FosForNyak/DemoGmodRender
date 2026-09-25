@@ -24,6 +24,8 @@ B.ApplicationWindow {
     readonly property bool busy: Jobs.busy
     // Згорнута за бажанням або коли вікно вузьке для такого масштабу
     readonly property bool sidebarCollapsed: (Config.revision, Config.value("ui_sidebar_collapsed") === true) || width < Theme.px(1000)
+    // Ширина вікна не змінюється під час розкладки — від неї безпечно залежати структурі сторінок
+    Binding { target: Ui; property: "narrow"; value: win.width < Theme.px(900) }
 
     // ---- робочі простори ----
     readonly property var pages: [

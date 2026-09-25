@@ -1,9 +1,9 @@
 # =============================================================================
 #  Every push and pull request is built and tested:
 #   * Windows / Visual Studio: build, unit tests and end-to-end renders through the
-#     fake game (tests/fake_game.cpp); the Qt window (gmdr-qt, Qt 6.8) opens every
-#     workspace offscreen with no Qt/QML warnings; the ready .exe files (and the Qt
-#     window deployed with windeployqt) are uploaded as an artifact;
+#     fake game (tests/fake_game.cpp); the window program (gmdr, Qt 6.8) opens every
+#     workspace offscreen with no Qt/QML warnings; the ready .exe files and the Qt
+#     libraries deployed with windeployqt are uploaded as an artifact;
 #   * Linux / GCC: build against the system FFmpeg and Qt 6.4 (also covers the old
 #     swscale path), tests plain and under ASan + UBSan, the same Qt window check;
 #   * Linux / Clang: 2 minutes of demo parser fuzzing (libFuzzer).
@@ -43,7 +43,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGMDR_BUILD_TESTS=ON -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
           cmake --build build
-          if (-not (Test-Path build\gmdr-qt.exe)) { throw "gmdr-qt.exe was not built (Qt not found?)" }
+          if (-not (Test-Path build\gmdr.exe)) { throw "gmdr.exe was not built (Qt not found?)" }
 
       - name: whisper-cli (speech recognition)
         shell: pwsh
@@ -306,7 +306,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:QT_ROOT_DIR\bin;$PWD\third_party\ffmpeg\bin;$env:PATH"
-          python scripts/qt_smoke_test.py build\gmdr-qt.exe build\td\test24.dem build\qt-shots
+          python scripts/qt_smoke_test.py build\gmdr.exe build\td\test24.dem build\qt-shots
           if ($LASTEXITCODE -ne 0) { Get-Content build\gmdr_log.txt -Tail 60; throw "Qt window check failed" }
 
       - name: Qt window — deploy (windeployqt)
@@ -314,10 +314,10 @@ jobs:
         run: |
           $d = "build\qt-deploy"
           New-Item -ItemType Directory -Force $d | Out-Null
-          Copy-Item build\gmdr-qt.exe $d
-          windeployqt --release --qmldir src\qt\qml --no-translations --no-opengl-sw --no-system-d3d-compiler $d\gmdr-qt.exe
+          Copy-Item build\gmdr.exe $d
+          windeployqt --release --qmldir src\qt\qml --no-translations --no-opengl-sw --no-system-d3d-compiler $d\gmdr.exe
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
-          Remove-Item "$d\gmdr-qt.exe"
+          Remove-Item "$d\gmdr.exe"
           Get-ChildItem $d -Recurse | Measure-Object -Property Length -Sum | ForEach-Object { "deployed: {0} files, {1:N1} MB" -f $_.Count, ($_.Sum / 1MB) }
 
       - uses: actions/upload-artifact@v4
@@ -331,7 +331,6 @@ jobs:
           name: gmod-demo-render-windows
           path: |
             build/gmdr.exe
-            build/gmdr-qt.exe
             build/gmdr-cli.exe
             build/*.dll
             build/rnnoise-voice.rnnn
@@ -352,7 +351,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libswresample-dev libavfilter-dev libglfw3-dev libgl-dev ffmpeg python3 lua5.1 \
+            libswresample-dev libavfilter-dev libgl-dev ffmpeg python3 lua5.1 \
             qt6-base-dev qt6-declarative-dev libvulkan-dev qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-templates qml6-module-qtquick-dialogs \
             qml6-module-qtquick-window qml6-module-qtqml-workerscript
@@ -387,8 +386,8 @@ jobs:
       - name: Qt window — every workspace offscreen, no Qt/QML warnings
         if: matrix.sanitize == ''
         run: |
-          test -x build/gmdr-qt || { echo "gmdr-qt was not built (Qt not found?)"; exit 1; }
-          python3 scripts/qt_smoke_test.py build/gmdr-qt build/td/test24.dem build/qt-shots || { tail -60 build/gmdr_log.txt; exit 1; }
+          test -x build/gmdr || { echo "gmdr was not built (Qt not found?)"; exit 1; }
+          python3 scripts/qt_smoke_test.py build/gmdr build/td/test24.dem build/qt-shots || { tail -60 build/gmdr_log.txt; exit 1; }
 
       - name: Lua driver (mocked GMod menu)
         if: matrix.sanitize == ''
@@ -458,10 +457,14 @@ jobs:
           dir="GModDemoRender-$ver"
           mkdir -p "$dir/licenses"
           cp artifact/build/gmdr.exe artifact/build/gmdr-cli.exe artifact/build/*.dll artifact/build/rnnoise-voice.rnnn "$dir/"
+          cp -r artifact/build/qt-deploy/. "$dir/"   # бібліотеки Qt, плагіни й модулі QML (windeployqt)
           cp -r artifact/build/whisper "$dir/whisper"
           cp LICENSE "$dir/LICENSE.txt"
           cp artifact/third_party/ffmpeg/LICENSE.txt "$dir/licenses/FFmpeg.txt"
-          cp third_party/imgui/LICENSE.txt "$dir/licenses/Dear-ImGui.txt"
+          cp third_party/stb/README.md "$dir/licenses/stb_truetype.md"
+          # Qt — LGPL v3, підключений динамічно (DLL поруч можна замінити своїми)
+          curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o "$dir/licenses/Qt-LGPL-3.0.txt"
+          curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt -o "$dir/licenses/GPL-3.0.txt"
           cp third_party/rnnoise-models/README.md "$dir/licenses/RNNoise-model.md"
           curl -fsSL https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/LICENSE -o "$dir/licenses/whisper.cpp.txt"
           zip -r9q "$dir-win64.zip" "$dir"

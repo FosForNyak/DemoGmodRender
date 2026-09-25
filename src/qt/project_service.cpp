@@ -10,7 +10,7 @@
 #include "core/util/i18n.hpp"
 #include "core/util/log.hpp"
 #include "core/util/strings.hpp"
-#include "gui/voice_player.hpp"
+#include "voice_player.hpp"
 
 #include <QFileInfo>
 #include <QUrl>
@@ -54,7 +54,7 @@ std::vector<std::string> key_list(const std::string& csv) {
 } // namespace
 
 ProjectService::ProjectService(ConfigModel* config, QObject* parent)
-    : QObject(parent), config_(config), player_(std::make_unique<gui::VoicePlayer>()) {
+    : QObject(parent), config_(config), player_(std::make_unique<VoicePlayer>()) {
     poll_timer_.setInterval(100);
     connect(&poll_timer_, &QTimer::timeout, this, &ProjectService::poll);
     connect(config_, &ConfigModel::changed, this, [this] { emit fragmentChanged(); });
@@ -495,7 +495,7 @@ void ProjectService::togglePlayerDenoise(const QString& key) {
     emit playersChanged();
 }
 
-bool ProjectService::canListen() const { return gui::VoicePlayer::supported(); }
+bool ProjectService::canListen() const { return VoicePlayer::supported(); }
 
 void ProjectService::listen(const QString& qkey) {
     if (!voices_ || !analysis_ || clip_future_.valid()) return;

@@ -2,9 +2,37 @@
 
 ## Unreleased
 
+- **A new window, built with Qt 6 (Qt Quick), replaces the Dear ImGui one.** It is organized by
+  task instead of by settings page: **Project** (the demo, what the render will produce, what is
+  happening now, recent demos), **Edit** (monitor, inspector with properties, markers, chat and
+  recognized speech, and a timeline with a track per player), **Render**, **Audio**,
+  **Translation & dubbing**, **Library**, **Queue**, **Settings** and, in Advanced mode, **Log**.
+  - Every field shows whether it is available and why not, from the same checks the render uses;
+    problems appear next to the setting with a button that fixes them. Nothing is changed silently.
+  - Dark and light themes (or follow Windows), eight accent colors, 80–200 % scale (Ctrl+= / Ctrl+−
+    / Ctrl+0), compact density. In a narrow window or at a large scale the sidebar shows icons only
+    and setting labels move above their fields. Keyboard focus is visible, and states are never
+    shown by color alone.
+  - *Settings → Graphics* shows the graphics APIs the window can really start with on this computer
+    (each is tried, not guessed from a DLL), the graphics cards and the GPU codecs. A new API applies
+    after a restart; if the window cannot start with it, the next launch returns to *Automatic* and
+    says so (`gmdr.exe --graphics-api auto` does it by hand).
+  - *Settings → System* lists the components the features depend on (game copies, whisper, the
+    voice engine, translation services, RNNoise) with their state and what to do.
+  - The chat can be saved to `.txt`; a right-click on a line starts the fragment 3 s before it,
+    ends it 3 s after, watches the game from there or adds a marker.
+  - Qt and QML messages go to `gmdr_log.txt`, so problem reports include them. The problem report
+    still masks your user folder and is never sent anywhere by itself.
+  - English and Ukrainian are complete. Other interface languages cover what they covered before;
+    the new window's strings show in English there for now.
+  - Releases include the Qt libraries next to `gmdr.exe`. Building needs Qt 6.4 or newer (6.8 on
+    Windows); see *Building from source*.
+- An interrupted render's game files (such as the RTX config) are also restored when the program
+  starts, not only before the next render, unless the game is running.
+
 - **One settings check everywhere, and no silent changes.** Every setting now has an id, and the
   rules about which settings can work together live in one place. The command line, the queue and
-  the render itself (before the game starts) all use them, and the new window will too. A problem
+  the render itself (before the game starts) and the window all use them. A problem
   comes with its reason and, where possible, a fix to apply. These combinations used to be changed
   quietly or to fail only after the game had loaded the demo; now they stop the render before the
   game starts, with a fix:
@@ -19,7 +47,7 @@
   - a test run in manual mode;
   - a GPU encoder that does not open on this graphics card (it is now tried before the game starts).
 - A queue checks every item before it starts. From the command line, a queue with a broken item does
-  not start at all, and the window's queue logs such items at the start.
+  not start at all, and the window shows each item's problems before the queue starts.
 - `gmdr-cli check demo.dem [options]` shows what a render would produce and every problem found,
   without rendering (`--json` for scripts; exit code 1 on errors). `--profile NAME` applies a ready-made
   set (the same ones as in the window). `--renderer standard|rtx` picks the game renderer.
@@ -27,7 +55,7 @@
   copies they allow, where the game window can go, timeouts, launch options, and RTX's `rtx.conf`.
   Saved settings store the renderer by name. Older files with `"rtx": true` are converted
   automatically, and the settings file now has a `configuration_version`.
-- **Frames through a pipe instead of files, where the game allows it.** The program offers the game's `startmovie` a Windows named pipe opened for each frame number (a FIFO on Linux) instead of a TGA/JPEG file in a temporary folder, so frames could go straight into the encoder with nothing written to disk; order, quality and frame rate stay the same (the fake game gives bit-identical video both ways), and the game audio takes the same route into the usual WAV. Nothing is injected into the game. The pipe is named `\??\pipe\…`: the first name, `\\?\pipe\…`, did not work in the current GMod (regular and RTX), because the Source file system reads a name that starts with two slashes as its own `//PATHID/file` syntax ("Couldn't write movie snapshot to file \\?\pipe\…" in the game console). The new name is not yet confirmed with the real game. If the game does not write into the pipe, the render restarts the game from the same point with files. The log then shows this launch's game console lines about the movie and whether the game opened the pipe at all, and the program remembers the result for this game and this pipe name (for 30 days or until the game updates). Game page → **Frame transfer**; console: `--frame-transport auto|pipe|files`.
+- **Frames through a pipe instead of files, where the game allows it.** The program offers the game's `startmovie` a Windows named pipe opened for each frame number (a FIFO on Linux) instead of a TGA/JPEG file in a temporary folder, so frames could go straight into the encoder with nothing written to disk; order, quality and frame rate stay the same (the fake game gives bit-identical video both ways), and the game audio takes the same route into the usual WAV. Nothing is injected into the game. The pipe is named `\??\pipe\…`: the first name, `\\?\pipe\…`, did not work in the current GMod (regular and RTX), because the Source file system reads a name that starts with two slashes as its own `//PATHID/file` syntax ("Couldn't write movie snapshot to file \\?\pipe\…" in the game console). The new name is not yet confirmed with the real game. If the game does not write into the pipe, the render restarts the game from the same point with files. The log then shows this launch's game console lines about the movie and whether the game opened the pipe at all, and the program remembers the result for this game and this pipe name (for 30 days or until the game updates). **Render → Frame transfer** (Advanced); console: `--frame-transport auto|pipe|files`.
 - **RTX: no black frames while Remix compiles shaders.** During the render Remix compiles its shaders before drawing a frame (`rtx.shader.enableAsyncCompilation = False`) instead of in the background, when it draws nothing. The game may then freeze for a while at the start (minutes without a shader cache); the program tells a busy game from a hung one by its CPU use and waits (up to 20 min with RTX, 5 min without), and the demo loading timeout is longer with RTX.
 - Fixed: an AVI with AAC or MP3 audio and video without B-frames (AV1 from any encoder, H.264/HEVC without B-frames) started with the first frame held for three frame times. The file was 2 frames longer than the render (the file check said, for example, "181 frames instead of 179"), and the video was about 12 ms behind the sound. AVI cannot tell a player to skip the audio encoder's start-up delay, so FFmpeg shifted the video by whole frames to make up for it. The delay is now taken out of the audio itself, and the video stays in place.
 - Fixed: a render to AVI with FLAC audio failed at the very end ("Could not finish the file" with no reason): FLAC's final header-only packet landed on the same timestamp as the last audio packet. Such packets are skipped now, and a muxer error always comes with its reason.

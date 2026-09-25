@@ -21,6 +21,10 @@ QT_PROBLEM = re.compile(r'\[(WARNING|ERROR|УВАГА|ПОМИЛКА)\] Qt: (?!\
 
 
 def main():
+    # Консоль Windows у CI — cp1252: українські рядки журналу інакше не надрукуються
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     exe, demo, out = sys.argv[1:4]
     os.makedirs(out, exist_ok=True)
     log = os.path.join(os.path.dirname(os.path.abspath(exe)), 'gmdr_log.txt')

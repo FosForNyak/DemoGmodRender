@@ -64,7 +64,7 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true
-                    Layout.leftMargin: parent.width < Theme.labelWidth + Theme.px(300) ? 0 : Theme.labelWidth + Theme.s3
+                    Layout.leftMargin: Ui.narrow ? 0 : Theme.labelWidth + Theme.s3
                     role: "meta"
                     wrapMode: Text.WordWrap
                     elide: Text.ElideNone
@@ -130,7 +130,10 @@ Item {
                     RowLayout {
                         spacing: Theme.s2
                         Combo {
-                            Layout.preferredWidth: Theme.px(230)
+                            // стискається у вузькому вікні, щоб поля розміру лишались видні
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: Theme.px(110)
+                            Layout.maximumWidth: Theme.px(230)
                             options: (Config.revision, Config.state("width").options || [])
                             selected: sizeRow.cur
                             placeholder: qsTr("свій розмір")
@@ -206,7 +209,9 @@ Item {
                         spacing: Theme.s2
                         Combo {
                             visible: (qualityRow.qs.options || []).length > 0
-                            Layout.preferredWidth: Theme.px(200)
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: Theme.px(110)
+                            Layout.maximumWidth: Theme.px(200)
                             options: qualityRow.qs.options || []
                             selected: (Config.revision, String(Config.value("quality")))
                             onChosen: (v) => Config.set("quality", Number(v))
@@ -367,7 +372,9 @@ Item {
                     name: qsTr("У файлі")
                     value: page.d.audioInFile ? qsTr("звук %1").arg((Config.revision, String(Config.value("audio_codec")))) : qsTr("звук окремим файлом")
                 }
-                RowLayout {
+                Flow {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: Theme.px(100)   // ширина — від сторінки; у вузькому вікні кнопки переносяться
                     spacing: Theme.s2
                     Btn { text: qsTr("Звук і голоси…"); iconName: "wave"; onClicked: Ui.goTo("audio") }
                     Btn { text: qsTr("Субтитри, переклад, озвучення…"); iconName: "translate"; onClicked: Ui.goTo("ai") }

@@ -16,9 +16,8 @@
 лишається англійська довідка.
 
 Що вважається ключем: перший аргумент-літерал tr(...)/trf(...)/N_(...) (сусідні літерали склеюються,
-суфікс ImGui "##id" відкидається), перший аргумент qsTr("...") у QML (src/qt/qml), усі кириличні
-літерали в src/gui/app_ui.hpp (таблиці пресетів, кодеків) і масиви kCheckNames/kCheckHints у
-src/core/render/jobs.cpp.
+суфікс "##id" відкидається), перший аргумент qsTr("...") у QML (src/qt/qml) і масиви
+kCheckNames/kCheckHints у src/core/render/jobs.cpp.
 """
 import json
 import os
@@ -185,14 +184,10 @@ def used_keys():
             if not fn.endswith(('.cpp', '.hpp')) or fn == 'i18n.cpp':
                 continue
             tokens = lex(open(os.path.join(dirpath, fn), encoding='utf-8').read())
-            everything = fn == 'app_ui.hpp'
             k = 0
             while k < len(tokens):
                 kind, text = tokens[k]
-                if everything and kind == 'str':
-                    v, k = literal_group(tokens, k)
-                    add(v)
-                elif kind == 'id' and text in ('tr', 'trf', 'N_'):
+                if kind == 'id' and text in ('tr', 'trf', 'N_'):
                     p = significant(tokens, k)
                     if p < len(tokens) and tokens[p][1] == '(':
                         q = significant(tokens, p)

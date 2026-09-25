@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace gmdr::gui {
+namespace gmdr::qt {
 
 class VoicePlayer {
 public:
@@ -30,4 +30,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace gmdr::gui
+} // namespace gmdr::qt

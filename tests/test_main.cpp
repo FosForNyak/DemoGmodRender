@@ -1919,10 +1919,10 @@ static void test_i18n() {
     CHECK(ui_language() == "en");
     CHECK(std::string(tr("Звук гри")) == "Game audio");
     CHECK(trf("Знайдено: {}", "C:/x") == "Found: C:/x");
-    CHECK(std::string(tr("Огляд...##mic")) == "Browse...##mic");
+    CHECK(std::string(tr("Скинути##reset")) == "Reset##reset");
     CHECK(trf("Почати чергу ({})", 3) == "Start the queue (3)");
-    CHECK(std::string(tr("Монітор###program")) == "Monitor###program");
-    CHECK(tr(std::string("Огляд")) == "Overview");
+    CHECK(std::string(tr("Журнал###log")) == "Log###log");
+    CHECK(tr(std::string("Відкрити демо")) == "Open demo");
     // Немає перекладу — лишається як є (імена гравців, шляхи тощо)
     CHECK(std::string(tr("Невідомий рядок##x")) == "Невідомий рядок##x");
     CHECK(std::string(tr("")).empty());

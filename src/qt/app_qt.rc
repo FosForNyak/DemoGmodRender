@@ -2,8 +2,8 @@
 // Ресурси програми з вікном на Qt: іконка (101 — її бере й значок у треї), маніфест, версія.
 #include <winver.h>
 
-101 ICON "../gui/app.ico"
-1 24 "../gui/app.manifest"
+101 ICON "app.ico"
+1 24 "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION GMDR_VERSION_MAJOR,GMDR_VERSION_MINOR,GMDR_VERSION_PATCH,0

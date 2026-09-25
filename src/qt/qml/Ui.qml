@@ -8,6 +8,7 @@ QtObject {
     id: ui
     property string page: "project"
     property string settingsCategory: "appearance"   // вибрана категорія в «Налаштуваннях»
+    property bool narrow: false            // вікно вузьке для такого масштабу: підписи налаштувань над полями
     property string selection: ""          // "", "marker", "player", "fragment"
     property int selectedMarker: -1
     property string selectedPlayer: ""

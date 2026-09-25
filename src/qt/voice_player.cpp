@@ -16,7 +16,7 @@
 #include <mmsystem.h>
 #endif
 
-namespace gmdr::gui {
+namespace gmdr::qt {
 
 constexpr int kRate = 48000;
 
@@ -103,4 +103,4 @@ double VoicePlayer::position() const { return 0; }
 double VoicePlayer::duration() const { return 0; }
 #endif
 
-} // namespace gmdr::gui
+} // namespace gmdr::qt

@@ -1,4 +1,4 @@
-"""Іконка програми (src/gui/app.ico) — той самий логотип, що малює ui::draw_logo у вікні:
+"""Іконка програми (src/qt/app.ico) — той самий логотип, що малює LogoItem у вікні:
 заокруглений квадрат із діагональним градієнтом акценту, кадр плівки зі стрілкою і
 перфораціями. Без сторонніх бібліотек: кожен розмір малюється окремо зі згладжуванням
 (4×4 вибірки на піксель) і кладеться в .ico як PNG.
@@ -115,7 +115,7 @@ def ico(images):
 
 def main():
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo, "src", "gui", "app.ico")
+    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(repo, "src", "qt", "app.ico")
     images = [(s, render(s)) for s in SIZES]
     open(out, "wb").write(ico(images))
     print(out, ", ".join(f"{s}px" for s, _ in images))

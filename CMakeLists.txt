@@ -3,11 +3,12 @@
 #
 #  Збірка (Windows, Visual Studio 2022):
 #     1) Завантажте FFmpeg:  powershell -ExecutionPolicy Bypass -File scripts\get_ffmpeg.ps1
-#     2) Відкрийте папку проекту у Visual Studio ("Відкрити локальну папку")
+#     2) Встановіть Qt 6.8 (msvc2022_64) і вкажіть його CMake: CMAKE_PREFIX_PATH=C:\Qt\6.8.3\msvc2022_64
+#     3) Відкрийте папку проекту у Visual Studio ("Відкрити локальну папку")
 #        або виконайте build.bat
 #
 #  Цілі:
-#     gmdr       — програма з вікном (Dear ImGui)
+#     gmdr       — програма з вікном (Qt 6 / Qt Quick, src/qt; без Qt не збирається)
 #     gmdr-cli   — консольна версія (для автоматизації та тестів)
 #     gmdr_core  — ядро (статична бібліотека)
 # =============================================================================
@@ -18,15 +19,14 @@ endif()
 project(GModDemoRender VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
-# Версія — лише тут: у програмі (GMDR_VERSION), у звіті і в ресурсі .exe (app.rc)
+# Версія — лише тут: у програмі (GMDR_VERSION), у звіті і в ресурсі .exe (src/qt/app_qt.rc)
 add_compile_definitions(GMDR_VERSION="${PROJECT_VERSION}" GMDR_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
                         GMDR_VERSION_MINOR=${PROJECT_VERSION_MINOR} GMDR_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
-option(GMDR_BUILD_GUI   "Збирати програму з вікном" ON)
-option(GMDR_BUILD_QT    "Збирати програму з вікном на Qt 6 (якщо Qt знайдено)" ON)
+option(GMDR_BUILD_GUI   "Збирати програму з вікном (Qt 6, якщо знайдено)" ON)
 option(GMDR_BUILD_CLI   "Збирати консольну програму" ON)
 option(GMDR_BUILD_TESTS "Збирати тести" OFF)
 option(GMDR_BUILD_FUZZERS "Збирати фазер парсера демо (libFuzzer; Clang або MSVC)" OFF)
@@ -87,7 +87,7 @@ set(GMDR_DRIVER_LUA "${CMAKE_SOURCE_DIR}/src/core/game/gmdr_driver.lua")
 gmdr_embed_text("${GMDR_DRIVER_LUA}" gmdr_driver_lua.inc)
 gmdr_embed_text("${CMAKE_SOURCE_DIR}/src/core/dub/gmdr_voice.py" gmdr_voice_py.inc)
 target_include_directories(gmdr_core PRIVATE "${CMAKE_BINARY_DIR}/generated"
-                           "${CMAKE_SOURCE_DIR}/third_party/imgui")   # stb_truetype для підписів на кадрі
+                           "${CMAKE_SOURCE_DIR}/third_party/stb")   # stb_truetype для підписів на кадрі
 target_link_libraries(gmdr_core PUBLIC
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample FFmpeg::avutil
     Threads::Threads)
@@ -123,50 +123,13 @@ if(GMDR_BUILD_CLI)
     gmdr_copy_voice_model(gmdr-cli)
 endif()
 
-# ---- Програма з вікном --------------------------------------------------------
+# ---- Програма з вікном (Qt 6 / Qt Quick) -------------------------------------------
 if(GMDR_BUILD_GUI)
-    set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
-    set(GMDR_IMGUI_SOURCES
-        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
-        ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp)
-    file(GLOB GMDR_GUI_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/gui/*.cpp" "${CMAKE_SOURCE_DIR}/src/gui/*.hpp")
-    if(WIN32)
-        list(APPEND GMDR_IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp)
-        add_executable(gmdr WIN32 ${GMDR_GUI_SOURCES} ${GMDR_IMGUI_SOURCES} src/gui/app.rc)
-        target_link_libraries(gmdr PRIVATE gmdr_core d3d11 dxgi d3dcompiler dwmapi uuid comdlg32 shell32 ole32 imm32 winmm)
-        if(MSVC)
-            # Маніфест уже вбудовано через app.rc
-            target_link_options(gmdr PRIVATE /MANIFEST:NO)
-        else()
-            # MinGW: точка входу wWinMain (Unicode)
-            target_link_options(gmdr PRIVATE -municode)
-        endif()
-    else()
-        find_package(glfw3 QUIET)
-        find_package(OpenGL REQUIRED)
-        if(NOT glfw3_FOUND)
-            find_package(PkgConfig REQUIRED)
-            pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
-            set(_glfw PkgConfig::GLFW)
-        else()
-            set(_glfw glfw)
-        endif()
-        list(APPEND GMDR_IMGUI_SOURCES ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
-        add_executable(gmdr ${GMDR_GUI_SOURCES} ${GMDR_IMGUI_SOURCES})
-        target_link_libraries(gmdr PRIVATE gmdr_core ${_glfw} OpenGL::GL ${CMAKE_DL_LIBS})
-    endif()
-    target_include_directories(gmdr PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends ${IMGUI_DIR}/misc/cpp)
-    gmdr_copy_ffmpeg_dlls(gmdr)
-    gmdr_copy_voice_model(gmdr)
-endif()
-
-# ---- Програма з вікном на Qt 6 (нова) --------------------------------------------
-if(GMDR_BUILD_QT)
     find_package(Qt6 6.4 QUIET COMPONENTS Core Gui Qml Quick QuickControls2)
     if(Qt6_FOUND)
         add_subdirectory(src/qt)
     else()
-        message(STATUS "Qt 6 не знайдено — програма з вікном на Qt не збирається (див. README, «Збирання»)")
+        message(STATUS "Qt 6.4+ не знайдено — програма з вікном не збирається, лише gmdr-cli (див. README, «Збирання»)")
     endif()
 endif()
 

@@ -21,8 +21,10 @@ GridLayout {
     default property alias editor: holder.data
     visible: (forceVisible || st.visible !== false) && (!advancedOnly || Config.advanced || showAlways)
     Layout.fillWidth: true
-    // Вузько (великий масштаб, мале вікно) — підпис над редактором
-    readonly property bool stacked: width > 0 && width < Theme.labelWidth + Theme.px(300)
+    // Вузьке вікно (чи великий масштаб) — підпис над редактором. Рішення — від ширини вікна (Ui.narrow),
+    // а не від ширини рядка: та залежить від кількості стовпців, і розкладка перераховувалась би
+    // рекурсивно (Qt 6.8 зависав, Qt 6.4 мовчки лишав старі розміри)
+    readonly property bool stacked: Ui.narrow
     columns: stacked ? 1 : 2
     columnSpacing: Theme.s3
     rowSpacing: Theme.s1
@@ -55,13 +57,17 @@ GridLayout {
     ColumnLayout {
         Layout.fillWidth: true
         spacing: 2
-        Item {
+        // Редактор — у розкладці, що сама дає йому ширину (без прив'язок ширини вручну: висота
+        // тоді залежала б від ширини в обхід розкладки, і Qt 6.8 бачить рекурсивне перерозташування)
+        ColumnLayout {
             id: holder
             Layout.fillWidth: true
-            implicitHeight: children.length > 0 ? children[0].implicitHeight : Theme.controlHeight
+            Layout.minimumWidth: 0   // найменша ширина редактора не розширює сторінку — він стискається
+            Layout.minimumHeight: Theme.controlHeight
+            spacing: 0
             enabled: row.settingEnabled
             onChildrenChanged: {
-                for (let i = 0; i < children.length; ++i) children[i].width = Qt.binding(() => holder.width)
+                for (let i = 0; i < children.length; ++i) children[i].Layout.fillWidth = true
             }
         }
         Label {

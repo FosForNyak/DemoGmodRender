@@ -27,13 +27,10 @@
 #include "core/speech/transcribe.hpp"
 #include "core/voice/voice_decoder.hpp"
 
-namespace gmdr::gui {
-class VoicePlayer;
-}
-
 namespace gmdr::qt {
 
 class ConfigModel;
+class VoicePlayer;
 
 // Доріжка голосу гравця на шкалі: відрізки мовлення в секундах демо
 struct TimelineLane {
@@ -159,7 +156,7 @@ private:
     std::optional<speech::Transcript>               transcript_;
     double                                          playhead_ = 0;
     QTimer                                          poll_timer_;
-    std::unique_ptr<gui::VoicePlayer>               player_;
+    std::unique_ptr<VoicePlayer>               player_;
     std::future<audio::VoiceClip>                   clip_future_;
     std::string                                     clip_key_, playing_key_;
 };

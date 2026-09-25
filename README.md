@@ -59,8 +59,9 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
   named `\??\pipe\…`, which is the same pipe written as a plain absolute path. This is not yet
   confirmed with the real game. If the game still does not write into the pipe, the program
   switches to files by itself and shows the game's console lines in the log.
-- **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The Game
-  page switches between **Standard** and **RTX**, and each mode keeps its own game folder. During
+- **GMod RTX** support through [RTXLauncher](https://github.com/Xenthio/RTXLauncher). The
+  **Render** workspace switches the game renderer between **Standard** and **GMod RTX**, and each
+  keeps its own game folder (*Settings → Garry's Mod*). During
   the render the program sets Remix to video-friendly settings (DLAA, no frame generation, shaders
   compiled before the frame instead of in the background, so no black frames) and restores your
   config afterwards.
@@ -99,14 +100,17 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
 
 **Workflow**
 
-- A workspace with side navigation: Overview (everything about the demo and the render
-  result on one screen), Video, Audio & voices, Game, Translation & dubbing, Library, Queue and
-  Settings, next to a monitor with a live preview and a timeline with a track per player,
-  mute/solo, playhead and markers.
+- Task-oriented workspaces (Qt Quick): Project, Edit (monitor, inspector and a timeline with
+  a track per player, mute/solo, playhead and markers), Render, Audio, Translation & dubbing,
+  Library, Queue and Settings.
+- **One set of rules for every setting.** What is unavailable, and why, comes from the same
+  checks the render uses; conflicts are shown next to the setting with a button that fixes
+  them, and nothing is changed silently. The queue, the command line (`gmdr-cli check`) and
+  the Test 3 s use the same checks.
 - **Standard and Advanced modes.** Standard shows only the main settings; Advanced adds every
-  codec, game and audio option plus the Fragment & markers, Chat & speech and Log pages.
-- Dark and light themes (or follow Windows), seven accent colors, 80–200% interface scale and
-  a compact density.
+  codec, game and audio option and the Log.
+- Dark and light themes (or follow Windows), eight accent colors, 80–200% interface scale and
+  a compact density; English and Ukrainian interface.
 - **Fragments and markers** with I / O / M, like in Premiere. Markers become chapters in
   MP4/MOV/MKV and a `.chapters.txt` with timestamps for a YouTube description.
 - **Chat and events** from the demo: messages, joins and leaves (with kick/ban reasons),
@@ -142,50 +146,57 @@ can switch it in **Settings → Language** or **Tools → Мова / Language**.
 1. Make sure Steam is running and Garry's Mod is closed.
 2. Run `gmdr.exe` and drop a `.dem` file onto the window, or click **Open demo...**.
    Demos recorded with `record` are in `…\steamapps\common\GarrysMod\garrysmod\` or its
-   `demos` subfolder. The **Library** page lists them all, and the demo name at the top of the
-   window opens a list of recent demos.
-3. Choose a preset, or set the resolution, FPS and codec on the **Video** page.
-4. Optionally mark a fragment on the timeline: click the ruler, then press **I** and **O**.
+   `demos` subfolder. The **Project** page lists recent demos when none is open, and the
+   **Library** lists them all.
+3. On **Render**, choose a preset, or set the resolution, FPS and codec.
+4. Optionally mark a fragment in **Edit**: drag across the tracks, or put the playhead on the
+   ruler and press **I** and **O**.
 5. Click **Test 3 s** to check every step and see how long the render will take.
 6. Click **Start render**. The program finds GMod, launches it in the background and records
    the demo.
 
-The video appears next to the demo. The **Output file** card on the Video page (and on the
-Overview) shows the path: click the file name to pick another one, or the pencil to type a path.
+The video appears next to the demo; the **Render** page shows the output path and lets you pick
+another one. Settings that cannot work together are explained right where they are, with a
+button that fixes them: the program never changes a setting without saying so.
 
 ## The window
 
-The top bar holds the menus, the current demo (click it for recent demos), the
-**Standard / Advanced** switch and the action buttons. The sidebar switches pages:
+The top bar holds the menu, the current demo, the **Standard / Advanced** switch, the settings
+check and the **Test 3 s** / **Start render** buttons. The sidebar switches workspaces:
 
-| Page | What it holds |
+| Workspace | What it holds |
 |---|---|
-| Overview | The demo at a glance: duration, players, voice chat, messages and markers; server, protocol and warnings; the player list; what the render will produce |
-| Video | Output file, preset, resolution, frame rate, motion blur, speed, codec, quality, extra versions |
-| Audio & voices | Game audio, players' voices with volume and preview, voice processing, subtitles and labels, your microphone |
-| Game | Standard / RTX game copy and its folder, the driver, how the game renders |
-| Fragment & markers | Precise fragment times and the marker list (Advanced) |
-| Chat & speech | Chat, events and recognized speech with search and filters (Advanced) |
-| Library, Queue | All demos; several renders in a row |
-| Settings | Theme, accent color, scale, density, language, notifications, tray, `.dem` files |
+| Project | The demo at a glance (map, server, recorder, duration, players, voice chat, chat), the fragment, what the render will produce with any problems and their fixes, the current job; recent demos when nothing is open |
+| Edit | Monitor and inspector (properties, markers, chat and recognized speech), transport, a timeline with a track per player, a chat track, the fragment and markers |
+| Render | Source and game renderer, output file and format, video, performance, extra versions; on the right the summary, the settings check and the render buttons |
+| Audio | Game audio, players' voices with volume, mute, solo, noise reduction and preview, voice processing, subtitles and labels, tracks for editing, your microphone |
+| Translation & dubbing | Languages, publishing templates, translated subtitles, dubbing outputs, translation service, voice engine, voice cloning (only after the players' consent) and the voice library |
+| Library, Queue | All demos with search and sorting; several renders in a row, each checked like a render |
+| Settings | Appearance (theme, accent, 80–200 % scale, density), language, graphics (window graphics API, graphics cards, GPU codecs), game copies and the in-game driver, render performance, program files, behavior, system components, problem report |
+| Log | Everything the program writes to `gmdr_log.txt` (Advanced) |
 
-Next to the settings pages sits the **monitor**: before a render it shows the demo's map,
-server, recorder and length; during a render, a live preview and the checks. Under them is the
-**timeline**: a track per player with M (mute) and S (solo), a chat track, the ruler, the
-playhead and markers. Drag the gutters to resize them, or hide them with the buttons at the
-right of the status bar. Accent-colored values such as the resolution, speed or volume can be
-dragged left and right, or clicked to type a number.
+The workspaces' areas are resized by dragging their borders. In a narrow window or at a large
+scale the sidebar shows icons only and setting labels move above their fields.
 
 | Key | Action |
 |---|---|
 | **I** / **O** | Set the fragment start / end at the playhead |
-| **M** | Add a marker at the playhead (or Ctrl+click the timeline) |
+| **M** | Add a marker at the playhead |
 | **Shift+I** / **Shift+O** | Go to the fragment start / end |
 | **Home** / **End** | Go to the start / end of the demo |
+| **← / →** | Move the playhead by a second |
 | **Ctrl+O** | Open a demo |
-| **Ctrl+1…9** | Switch pages |
+| **Ctrl+1…9** | Switch workspaces |
 | **Ctrl+B** | Sidebar with icons only / with labels |
 | **Ctrl+,** | Settings |
+| **Ctrl+= / Ctrl+− / Ctrl+0** | Interface scale up / down / 100 % |
+
+**Graphics API of the window.** The window is drawn with Qt Quick. *Settings → Graphics* lists
+the graphics APIs this computer can actually start (Direct3D 11/12, Vulkan, OpenGL, software)
+and lets you pick one; the change applies after a restart. If the window fails to start with
+the chosen API, the next launch goes back to *Automatic* and says so; `gmdr.exe --graphics-api
+auto` does the same by hand. This is only how the window is drawn: it has nothing to do with
+how the game renders the demo.
 
 ## How it works
 
@@ -228,13 +239,12 @@ There are two ways around that:
 
 - type `voice_loopback 1` in the GMod console before recording the demo. Your voice ends up in
   the demo and is marked "(you)";
-- or record your microphone separately and add the file under **Audio & voices → Own
-  microphone**. The offset sets the second of video where the file starts; it can be negative.
+- or record your microphone separately and add the file under **Audio → Own microphone**. The offset sets the second of video where the file starts; it can be negative.
 
 ## Translation and dubbing
 
-The **Translation & dubbing** page works on top of speech recognition, so download a whisper
-model on the Chat & speech page first. Then:
+The **Translation & dubbing** workspace works on top of speech recognition, so download a
+whisper model first (the workspace offers it when it is missing). Then:
 
 1. Pick the languages.
 2. Pick a publishing template, or choose the outputs yourself: translated subtitles, a dub as
@@ -351,7 +361,8 @@ ZIP. You can look inside before sending it.
 - **"Garry's Mod is already running".** Close the game; the program launches it itself with
   the right options.
 - **The game closes at once, or "the driver does not respond".** Make sure Steam is running.
-  If GMod was just updated and replaced `menu.lua`, use **Tools → Install the driver into GMod**.
+  If GMod was just updated and replaced `menu.lua`, use **Settings → Garry's Mod → Install the
+  driver into GMod**.
 - **"The demo did not start".** The demo was recorded by another GMod version, or the server
   used maps or addons you don't have. Check that the demo plays in the game itself
   (`playdemo demos/name`). Joining that server once usually downloads the content.
@@ -359,7 +370,7 @@ ZIP. You can look inside before sending it.
   console.
 - **The background game stops producing frames.** The program moves the window back on screen,
   behind other windows, and logs it. If it happens every time, choose **Behind other windows**
-  on the Game page. Don't minimize the game: a minimized game does not draw.
+  in **Render → Source → Game window**. Don't minimize the game: a minimized game does not draw.
 - **The game menu flashes into a frame.** Demos also record the player pressing Esc. The
   program hides the menu at once, but a single frame can sometimes slip into the video.
 - **The video size differs from the settings.** The game cannot open a window larger than the
@@ -369,7 +380,7 @@ ZIP. You can look inside before sending it.
 - **Garry's Mod stays muted.** This happens if the game or the PC crashed mid-render. Unmute
   it in the Windows volume mixer, or just start the next render.
 - **Low disk space.** Below 1 GiB free the game pauses until space is freed. Frames going
-  through pipes take no disk space; if they go through files (Game page → **Frame transfer**,
+  through pipes take no disk space; if they go through files (**Render → Frame transfer**,
   Advanced mode), lower **Frame queue on disk** or switch the frame format to JPEG.
 - **"The game did not write a single frame into the pipe" / "GMod does not let startmovie write
   outside the game folders".** The game refused the pipe name (the log shows the lines of the
@@ -386,26 +397,35 @@ ZIP. You can look inside before sending it.
 ## Building from source
 
 You need **Visual Studio 2022 (17.8+) or 2026** with the *Desktop development with C++*
-workload, which already includes CMake.
+workload, which already includes CMake, and **Qt 6.8** for MSVC 2022 64-bit (from the Qt Online
+Installer, or `aqt install-qt windows desktop 6.8.3 win64_msvc2022_64`). Qt 6.4 or newer works;
+without Qt only `gmdr-cli` is built.
 
-The simplest way is to run `build.bat`. It finds CMake, downloads the FFmpeg development
-libraries into `third_party\ffmpeg` if they are missing, and builds `build\Release\gmdr.exe`
-and `gmdr-cli.exe`. The FFmpeg DLLs are copied next to them.
+The simplest way is to run `build.bat`. It finds CMake and Qt (the `QTDIR` variable, e.g.
+`C:\Qt\6.8.3\msvc2022_64`, or the newest Qt in `C:\Qt`), downloads the FFmpeg development
+libraries into `third_party\ffmpeg` if they are missing, builds `build\Release\gmdr.exe` and
+`gmdr-cli.exe`, and puts the Qt libraries next to them with `windeployqt`. The FFmpeg DLLs are
+copied too.
 
-In Visual Studio, use **File → Open → Folder...** and pick the repository. Choose the *Windows
-x64 Release* configuration and the `gmdr.exe` target. If `third_party\ffmpeg` is missing, fetch
-it first:
+In Visual Studio, use **File → Open → Folder...** and pick the repository, with
+`CMAKE_PREFIX_PATH` pointing to Qt. Choose the *Windows x64 Release* configuration and the
+`gmdr.exe` target. If `third_party\ffmpeg` is missing, fetch it first:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\get_ffmpeg.ps1
 ```
 
 `scripts\get_whisper.ps1` puts `whisper-cli` into `third_party\whisper` for speech recognition.
-The recognition model itself is downloaded by the program when you first need it.
+The recognition model itself is downloaded by the program when you first need it. The Vulkan
+check in *Settings → Graphics* needs the Vulkan headers at build time (the Vulkan SDK, or
+[Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) cloned into
+`third_party/vulkan-headers`); without them Vulkan is shown as "not checked".
 
 Linux builds are for development: install `libavcodec-dev libavformat-dev libavfilter-dev
-libswscale-dev libswresample-dev libglfw3-dev`, then run `cmake --preset linux-release &&
-cmake --build --preset linux-release`.
+libswscale-dev libswresample-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick
+qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-templates
+qml6-module-qtquick-dialogs qml6-module-qtquick-window qml6-module-qtqml-workerscript`, then run
+`cmake --preset linux-release && cmake --build --preset linux-release`.
 
 **Tests:**
 
@@ -414,12 +434,15 @@ cmake --build --preset linux-release`.
   (needs `ffmpeg` with libopus), then run `gmdr-tests <folder with demos>`.
 - Sanitizers: `-DGMDR_SANITIZE=address`, or `address,undefined` with GCC/Clang.
 - Fuzzer: `-DGMDR_BUILD_FUZZERS=ON`.
+- Window: `python scripts/qt_smoke_test.py build/gmdr build/td/test24.dem shots` opens every
+  workspace and settings category offscreen in English and Ukrainian, saves screenshots and
+  fails on any Qt or QML warning.
 
-CI builds and tests every push on Windows (MSVC, with end-to-end renders through a fake game)
-and Linux (GCC, ASan/UBSan), and fuzzes the demo parser.
+CI builds and tests every push on Windows (MSVC, Qt 6.8, with end-to-end renders through a fake
+game) and Linux (GCC, Qt 6.4, ASan/UBSan), checks the window on both, and fuzzes the demo parser.
 
-UI strings are Ukrainian in the source, with translations in `src/core/util/i18n/<lang>.inc`.
-After adding strings, run `python scripts/i18n.py check` (English is required) and
+UI strings are Ukrainian in the source (`tr()` in C++, `qsTr()` in QML), with translations in
+`src/core/util/i18n/<lang>.inc`. After adding strings, run `python scripts/i18n.py check` (English is required) and
 `python scripts/i18n.py check --lang all` to see the coverage of the other languages.
 
 ```
@@ -432,7 +455,9 @@ src/core/game/     GMod discovery, Lua driver, process and window control, mixer
 src/core/speech/   speech recognition via whisper.cpp
 src/core/render/   encode pipeline, background jobs (analysis, render, queue, resume), subtitles
 src/core/util/     logging, JSON, VDF, thread pool, i18n, crash reports, update check
-src/gui/           Dear ImGui interface (Win32 + Direct3D 11; GLFW on Linux)
+src/core/config/   settings catalog, environment capabilities, rules and fixes, presets, dependencies
+src/qt/            the window: C++ services for QML (Config, Env, Project, Jobs, Queue, Library, ...)
+src/qt/qml/        Qt Quick interface: design tokens, components, workspaces
 src/cli/           command-line version
 tests/             unit tests, synthetic demo generator, fake game, fuzzer, A/V comparison
 ```
@@ -443,7 +468,9 @@ GMod Demo Render is released under the [MIT License](LICENSE).
 
 Third-party components:
 
-- [Dear ImGui](https://github.com/ocornut/imgui) (MIT).
+- [Qt](https://www.qt.io) 6 (LGPL v3), linked dynamically; release archives include the
+  Qt DLLs next to `gmdr.exe` and the license texts.
+- [stb_truetype](https://github.com/nothings/stb) (MIT or public domain) for captions on video.
 - [FFmpeg](https://ffmpeg.org). Releases ship the BtbN "gpl" build, which includes x264 and
   x265, so the FFmpeg DLLs in the release archive are covered by the GPL. Their license is
   included in the archive.

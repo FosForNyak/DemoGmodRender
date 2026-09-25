@@ -2,7 +2,8 @@
 chcp 65001 >nul
 rem ============================================================================
 rem  Збірка GMod Demo Render (потрібна Visual Studio 2022/2026 з компонентом
-rem  "Desktop development with C++" - у ньому вже є CMake).
+rem  "Desktop development with C++" - у ньому вже є CMake - і Qt 6.8 для MSVC:
+rem  змінна QTDIR, напр. C:\Qt\6.8.3\msvc2022_64, або Qt у C:\Qt).
 rem  Результат: build\Release\gmdr.exe (з вікном) і gmdr-cli.exe (консоль)
 rem ============================================================================
 setlocal
@@ -13,6 +14,11 @@ if not exist "third_party\ffmpeg\include\libavcodec\avcodec.h" (
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get_ffmpeg.ps1
     if errorlevel 1 goto :error
 )
+
+rem --- Qt 6 для MSVC: змінна QTDIR або найновіший у C:\Qt ---
+if not defined QTDIR for /d %%d in (C:\Qt\6.*) do if exist "%%d\msvc2022_64\bin\windeployqt.exe" set "QTDIR=%%d\msvc2022_64"
+if not defined QTDIR goto :no_qt
+echo Qt: %QTDIR%
 
 rem --- Шукаємо CMake: спершу той, що входить у Visual Studio, потім у PATH ---
 set "CMAKE_EXE="
@@ -25,14 +31,24 @@ popd
 if defined CMAKE_EXE goto :have_cmake
 :cmake_from_path
 where cmake >nul 2>nul
-if errorlevel 1 goto :no_cmake
+if errorlevel 1 goto :no_qt
+echo.
+echo Не знайдено Qt 6 для MSVC. Встановіть Qt 6.8 (компонент MSVC 2022 64-bit) через
+echo Qt Online Installer або aqtinstall і вкажіть шлях: set QTDIR=C:\Qt\6.8.3\msvc2022_64
+pause
+exit /b 1
+
+:no_cmake
 set "CMAKE_EXE=cmake"
 
 :have_cmake
 echo CMake: %CMAKE_EXE%
-"%CMAKE_EXE%" -S . -B build -A x64
+"%CMAKE_EXE%" -S . -B build -A x64 -DCMAKE_PREFIX_PATH="%QTDIR%"
 if errorlevel 1 goto :error
 "%CMAKE_EXE%" --build build --config Release --parallel
+if errorlevel 1 goto :error
+rem Бібліотеки Qt і модулі QML поруч із програмою
+"%QTDIR%\bin\windeployqt.exe" --release --qmldir src\qt\qml --no-translations build\Release\gmdr.exe
 if errorlevel 1 goto :error
 
 echo.
