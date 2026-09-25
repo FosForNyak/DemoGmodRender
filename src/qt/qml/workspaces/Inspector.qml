@@ -11,6 +11,7 @@ Rectangle {
     color: Theme.surface
     Rectangle { width: 1; height: parent.height; color: Theme.border }
     property int tab: 0
+    function badTime(t) { if (String(t).trim() !== "") Ui.toast(Ui.fmt(qsTr("Не розумію час «{}». Приклади: 95.5 — секунди, 1:35 — хв:с, 1:02:03 — год:хв:с"), t), "warning") }
     Connections {
         target: Ui
         function onSelectionChanged() { if (Ui.selection !== "") insp.tab = 0 }
@@ -56,7 +57,7 @@ Rectangle {
                             Layout.fillWidth: true
                             font.family: Theme.monoFamily
                             text: Project.formatTimecode(parent.m.time || 0)
-                            onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.moveMarker(Ui.selectedMarker, t) }
+                            onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.moveMarker(Ui.selectedMarker, t); else insp.badTime(text) }
                         }
                         RowLayout {
                             spacing: Theme.s2
@@ -145,7 +146,7 @@ Rectangle {
                                 font.family: Theme.monoFamily
                                 enabled: !Jobs.busy
                                 text: Project.formatTimecode(Project.fragmentStart)
-                                onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.setFragmentStart(t); text = Qt.binding(() => Project.formatTimecode(Project.fragmentStart)) }
+                                onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.setFragmentStart(t); else insp.badTime(text); text = Qt.binding(() => Project.formatTimecode(Project.fragmentStart)) }
                             }
                             Label { text: qsTr("Кінець"); role: "secondary" }
                             Field {
@@ -153,7 +154,7 @@ Rectangle {
                                 font.family: Theme.monoFamily
                                 enabled: !Jobs.busy
                                 text: Project.formatTimecode(Project.fragmentEnd)
-                                onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.setFragmentEnd(t); text = Qt.binding(() => Project.formatTimecode(Project.fragmentEnd)) }
+                                onEditingFinished: { const t = Project.parseTime(text); if (t >= 0) Project.setFragmentEnd(t); else insp.badTime(text); text = Qt.binding(() => Project.formatTimecode(Project.fragmentEnd)) }
                             }
                             Label { text: qsTr("Тривалість"); role: "secondary" }
                             Label { text: Project.formatTime(Project.fragmentEnd - Project.fragmentStart) }

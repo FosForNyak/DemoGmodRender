@@ -37,6 +37,8 @@
 #include "voices_service.hpp"
 
 #include "core/game/audio_mute.hpp"
+#include "core/game/gmod_install.hpp"
+#include "core/game/rtx.hpp"
 #include "core/media/ffmpeg_util.hpp"
 #include "core/render/jobs.hpp"
 #include "core/util/crash_dump.hpp"
@@ -84,7 +86,9 @@ void open_log_file() {
 // потрапляють у звіт про проблему, а тест вікна в CI падає на будь-якому з них
 QtMessageHandler g_prev_handler = nullptr;
 void qt_message(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
-    const std::string text = qt::ss(msg);
+    // Категорія (qml, qt.qpa.fonts ...) — щоб відрізнити помилки інтерфейсу від шуму платформи
+    const std::string cat = ctx.category && std::string(ctx.category) != "default" ? std::string(ctx.category) : std::string();
+    const std::string text = cat.empty() ? qt::ss(msg) : "[" + cat + "] " + qt::ss(msg);
     switch (type) {
     case QtDebugMsg:
     case QtInfoMsg: log_debug("Qt: {}", text); break;
@@ -170,6 +174,18 @@ int main(int argc, char** argv) {
         config->load(settings_path, nullptr);   // шлях для збереження
     }
     if (!recovered.empty()) config->set("ui_graphics_api", "auto");
+    // Старі налаштування: копію GMod RTX вказано як звичайну папку гри. Тепер у неї своє поле
+    // і рендерер «RTX», а звичайна гра знаходиться автоматично
+    if (const auto& s = config->settings(); s.rtx_game_dir.empty() && !s.game_dir.empty())
+        if (auto g = game::gmod_from_dir(path_from_utf8(s.game_dir)); g && g->valid() && game::is_rtx_install(*g)) {
+            log_info("{}", trf("Папку {} перенесено в режим RTX (це копія GMod RTX)", s.game_dir));
+            config->modify([](render::RenderSettings& x) {
+                x.rtx_game_dir = x.game_dir;
+                x.game_dir.clear();
+                x.game_exe.clear();
+                x.game_renderer = "rtx";
+            });
+        }
     auto* shell = new qt::ShellService(&app);
     shell->setMinimizeToTray(config->settings().minimize_to_tray);
     shell->set_startup_language(qt::qs(early.ui_language));

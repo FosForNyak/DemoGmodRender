@@ -123,6 +123,15 @@ Rectangle {
             B.ToolTip.text: Config.issues.filter(i => i.severity !== "info").map(i => "• " + i.message).join("\n") || qsTr("Налаштування перевірено — помилок немає")
         }
         Btn {
+            // Гра відповідає, але зупинка «з збереженням» чекає її — тут закрити одразу
+            visible: Jobs.busy && Jobs.kind !== "watch" && Jobs.kind !== "download" && Jobs.kind !== "serviceCheck"
+            kind: "ghost"
+            text: qsTr("Перервати")
+            tip: qsTr("Негайно закрити гру і перервати рендер")
+            onClicked: Jobs.kill()
+        }
+        Btn {
+            visible: !Jobs.busy
             text: qsTr("Тест 3 с")
             iconName: "clock"
             enabled: Project.loaded && !Jobs.busy && Config.errorCount === 0
@@ -135,11 +144,12 @@ Rectangle {
             kind: Jobs.busy ? "danger" : "primary"
             iconName: Jobs.busy ? "stop" : "render"
             enabled: Jobs.busy ? true : Project.loaded && Config.errorCount === 0
-            text: Jobs.busy ? qsTr("Зупинити")
+            text: Jobs.busy ? (Jobs.kind === "watch" ? qsTr("Закрити гру") : qsTr("Зупинити"))
                   : !Project.loaded ? qsTr("Почати рендер")
                   : Config.errorCount > 0 ? qsTr("Неможливо: помилок %1").arg(Config.errorCount)
                   : qsTr("Почати рендер")
-            tip: Jobs.busy ? qsTr("Зупинити і зберегти вже записане") : Config.errorCount > 0 ? qsTr("Налаштування не дозволяють рендер — див. «Рендер»") : ""
+            tip: Jobs.busy ? (Jobs.kind === "watch" ? qsTr("Закрити гру (позначки, зроблені в грі, вже збережено)") : qsTr("Зупинити і зберегти вже записане"))
+                 : Config.errorCount > 0 ? qsTr("Налаштування не дозволяють рендер — див. «Рендер»") : ""
             onClicked: Jobs.busy ? Jobs.cancel() : bar.startRender()
         }
     }

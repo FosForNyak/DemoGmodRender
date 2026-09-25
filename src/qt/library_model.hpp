@@ -28,6 +28,7 @@ class LibraryModel final : public QAbstractListModel {
     Q_PROPERTY(bool sortDescending READ sortDescending WRITE setSortDescending NOTIFY listChanged)
     Q_PROPERTY(bool hideBroken READ hideBroken WRITE setHideBroken NOTIFY listChanged)
     Q_PROPERTY(QStringList folders READ folders NOTIFY foldersChanged)
+    Q_PROPERTY(bool scanned READ scanned NOTIFY listChanged)
 
 public:
     enum Role { NameRole = Qt::UserRole + 1, PathRole, FolderRole, SizeRole, ModifiedRole, MapRole, ServerRole, RecordedByRole,
@@ -51,11 +52,14 @@ public:
     bool        hideBroken() const { return hide_broken_; }
     void        setHideBroken(bool on);
     QStringList folders() const;
+    bool        scanned() const { return scanned_; }
 
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void addFolder(const QString& folder);
     Q_INVOKABLE void removeFolder(const QString& folder);
     Q_INVOKABLE QString pathAt(int row) const;
+    // Нещодавні демо (за датою зміни), без пошкоджених: {name, path, map, seconds, modified}
+    Q_INVOKABLE QVariantList recent(int n) const;
 
 signals:
     void scanningChanged();

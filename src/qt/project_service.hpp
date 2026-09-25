@@ -104,6 +104,9 @@ public:
 
     Q_INVOKABLE void open(const QString& path);
     Q_INVOKABLE void close();
+    // Чат, події й розпізнане мовлення в .txt (UTF-8 з BOM — Блокнот одразу показує кирилицю)
+    Q_INVOKABLE QString saveChat(const QString& path) const;   // "" — збережено, інакше помилка
+    Q_INVOKABLE QString defaultChatPath() const;
     Q_INVOKABLE void setFragmentStart(double seconds);
     Q_INVOKABLE void setFragmentEnd(double seconds);
     Q_INVOKABLE void setFragment(double from, double to);

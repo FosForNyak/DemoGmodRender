@@ -159,6 +159,24 @@ QVariant LibraryModel::data(const QModelIndex& index, int role) const {
     }
 }
 
+QVariantList LibraryModel::recent(int n) const {
+    std::vector<const demo::LibraryEntry*> list;
+    for (const auto& e : all_)
+        if (e.error.empty()) list.push_back(&e);
+    std::sort(list.begin(), list.end(), [](auto* a, auto* b) { return a->modified > b->modified; });
+    QVariantList out;
+    for (size_t i = 0; i < list.size() && static_cast<int>(i) < n; ++i) {
+        QVariantMap m;
+        m["name"] = qs(list[i]->name);
+        m["path"] = qs(list[i]->path);
+        m["map"] = qs(list[i]->map);
+        m["seconds"] = list[i]->seconds;
+        m["modified"] = static_cast<double>(list[i]->modified);
+        out << m;
+    }
+    return out;
+}
+
 QString LibraryModel::pathAt(int row) const {
     if (row < 0 || row >= count()) return {};
     return qs(all_[view_[static_cast<size_t>(row)]].path);

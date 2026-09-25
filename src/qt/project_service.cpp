@@ -5,6 +5,7 @@
 
 #include "core/config/formats.hpp"
 #include "core/config/presets.hpp"
+#include "core/demo/chat.hpp"
 #include "core/util/file_util.hpp"
 #include "core/util/i18n.hpp"
 #include "core/util/log.hpp"
@@ -559,6 +560,40 @@ QVariantList ProjectService::transcript() const {
         out << m;
     }
     return out;
+}
+
+QString ProjectService::defaultChatPath() const {
+    if (!analysis_) return {};
+    const fs::path demo = path_from_utf8(config_->settings().demo_path);
+    return qs(path_to_utf8(demo.parent_path() / (path_to_utf8(demo.stem()) + "_chat.txt")));
+}
+
+QString ProjectService::saveChat(const QString& qpath) const {
+    if (!analysis_) return {};
+    std::string path = ss(qpath);
+    if (path.rfind("file:", 0) == 0) path = ss(QUrl(qpath).toLocalFile());
+    struct Row {
+        double      t;
+        std::string text;
+    };
+    std::vector<Row> rows;
+    const double ti = analysis_->tick_interval;
+    for (const auto& e : analysis_->events) rows.push_back({e.tick * ti, demo::format_event(e)});
+    if (transcript_)
+        for (const auto& l : transcript_->lines) rows.push_back({l.start, l.speaker + gmdr::tr(" (голос): ") + l.text});
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.t < b.t; });
+    std::string text;
+    for (const auto& r : rows) {
+        const int h = static_cast<int>(r.t / 3600), m = static_cast<int>(std::fmod(r.t, 3600) / 60), s = static_cast<int>(std::fmod(r.t, 60));
+        text += (h > 0 ? std::format("[{}:{:02}:{:02}] ", h, m, s) : std::format("[{:02}:{:02}] ", m, s)) + r.text + "\n";
+    }
+    std::string err;
+    if (!write_file_text(path_from_utf8(path), "\xEF\xBB\xBF" + text, &err)) {
+        log_warn("{}", trf("Не вдалося зберегти чат: {}", err));
+        return qs(err);
+    }
+    log_info("{}", trf("Чат збережено: {}", path));
+    return {};
 }
 
 QString ProjectService::formatTime(double seconds) const { return qs(format_duration(seconds)); }

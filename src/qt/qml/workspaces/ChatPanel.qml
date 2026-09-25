@@ -3,6 +3,7 @@
 import QtQuick
 import QtQuick.Controls.Basic as B
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import Gmdr
 import Gmdr.Ui
 
@@ -23,10 +24,10 @@ ColumnLayout {
         for (const e of Project.chat) {
             const isChat = e.kind === "chat"
             if (isChat ? !showChat : !showEvents) continue
-            out.push({ time: e.time, who: e.who, text: e.text, kind: e.kind })
+            out.push({ time: e.time, end: e.time, who: e.who, text: e.text, kind: e.kind })
         }
         if (showSpeech)
-            for (const l of Project.transcript) out.push({ time: l.start, who: l.speaker, text: l.text, kind: "speech" })
+            for (const l of Project.transcript) out.push({ time: l.start, end: l.end, who: l.speaker, text: l.text, kind: "speech" })
         out = out.filter(x => (!onlyFragment || (x.time >= Project.fragmentStart && x.time <= Project.fragmentEnd))
                           && (q === "" || (x.who + " " + x.text).toLowerCase().indexOf(q) >= 0))
         out.sort((a, b) => a.time - b.time)
@@ -68,11 +69,22 @@ ColumnLayout {
         }
         Flow {
             Layout.fillWidth: true
+            Layout.preferredWidth: Theme.px(100)   // ширина — від панелі, не від переносу
             spacing: Theme.s2
             Check { text: qsTr("Чат"); checked: cp.showChat; onToggled: cp.showChat = checked }
             Check { text: qsTr("Мовлення"); checked: cp.showSpeech; onToggled: cp.showSpeech = checked }
             Check { text: qsTr("Події"); checked: cp.showEvents; onToggled: cp.showEvents = checked }
             Check { text: qsTr("Лише фрагмент"); checked: cp.onlyFragment; onToggled: cp.onlyFragment = checked; enabled: !Project.wholeDemo }
+        }
+        Btn {
+            kind: "ghost"
+            iconName: "download"
+            text: Project.hasTranscript ? qsTr("Зберегти чат і розмови в .txt") : qsTr("Зберегти чат у .txt")
+            enabled: Project.chat.length > 0 || Project.hasTranscript
+            onClicked: {
+                saveChatDialog.currentFile = Shell.fileUrl(Project.defaultChatPath())
+                saveChatDialog.open()
+            }
         }
     }
     ListView {
@@ -88,6 +100,11 @@ ColumnLayout {
             padding: Theme.s2
             leftPadding: Theme.s3
             onClicked: Project.playhead = modelData.time
+            onDoubleClicked: if (!Jobs.busy) Project.setFragmentStart(Math.max(0, modelData.time - 3))
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: rowMenu.openFor(cd.modelData)
+            }
             background: Rectangle { color: cd.hovered ? Theme.hover : "transparent" }
             contentItem: ColumnLayout {
                 spacing: 1
@@ -117,6 +134,29 @@ ColumnLayout {
             visible: cp.items.length === 0
             text: qsTr("Нічого немає")
             role: "secondary"
+        }
+    }
+
+    // Дії з рядком: фрагмент навколо репліки, перегляд у грі, позначка
+    B.Menu {
+        id: rowMenu
+        property var row: ({ time: 0, end: 0, who: "", text: "" })
+        function openFor(r) { row = r; popup() }
+        B.MenuItem { text: qsTr("Почати фрагмент за 3 с до цього"); enabled: !Jobs.busy; onTriggered: Project.setFragmentStart(Math.max(0, rowMenu.row.time - 3)) }
+        B.MenuItem { text: qsTr("Закінчити фрагмент через 3 с після цього"); enabled: !Jobs.busy; onTriggered: Project.setFragmentEnd(Math.min(Project.duration, rowMenu.row.end + 3)) }
+        B.MenuItem { text: qsTr("Переглянути в грі звідси"); enabled: !Jobs.busy; onTriggered: Jobs.watchInGame(Math.max(0, rowMenu.row.time - 3)) }
+        B.MenuSeparator {}
+        B.MenuItem { text: qsTr("Додати позначку"); onTriggered: Project.addMarker(rowMenu.row.time, (rowMenu.row.who !== "" ? rowMenu.row.who + ": " : "") + rowMenu.row.text) }
+        B.MenuItem { text: qsTr("Копіювати"); onTriggered: Shell.copyText((rowMenu.row.who !== "" ? rowMenu.row.who + ": " : "") + rowMenu.row.text) }
+    }
+    FileDialog {
+        id: saveChatDialog
+        title: qsTr("Зберегти чат")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Текст (*.txt)"), qsTr("Усі файли (*)")]
+        onAccepted: {
+            const err = Project.saveChat(Shell.localPath(selectedFile))
+            Ui.toast(err === "" ? qsTr("Чат збережено") : Ui.fmt(qsTr("Не вдалося зберегти чат: {}"), err), err === "" ? "success" : "error")
         }
     }
 }

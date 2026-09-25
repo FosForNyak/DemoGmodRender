@@ -13,6 +13,7 @@ ColumnLayout {
     property string actionIcon: ""
     signal action()
     spacing: Theme.s3
+    Layout.alignment: Qt.AlignHCenter   // у розкладці — посередині (ширина обмежена текстом)
     Rectangle {
         Layout.alignment: Qt.AlignHCenter
         width: Theme.px(52)

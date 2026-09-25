@@ -15,8 +15,9 @@ PAGES = ['project', 'edit', 'render', 'audio', 'ai', 'library', 'queue', 'log',
          'settings/appearance', 'settings/language', 'settings/graphics', 'settings/game',
          'settings/rendering', 'settings/storage', 'settings/notifications', 'settings/system']
 LANGS = ['en', 'uk']
-# Повідомлення Qt у журналі програми (main_qt.cpp пише їх як «Qt: ...»); рівень — будь-якою мовою
-QT_PROBLEM = re.compile(r'\[(WARNING|ERROR|УВАГА|ПОМИЛКА)\] Qt: ')
+# Повідомлення Qt у журналі програми (main_qt.cpp пише їх як «Qt: [категорія] ...»); рівень — будь-якою
+# мовою. Не рахуються лише повідомлення платформи (qt.qpa.*: шрифти, offscreen) — це оточення, а не програма
+QT_PROBLEM = re.compile(r'\[(WARNING|ERROR|УВАГА|ПОМИЛКА)\] Qt: (?!\[qt\.qpa\.)')
 
 
 def main():

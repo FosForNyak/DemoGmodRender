@@ -43,7 +43,6 @@ Page {
     // ---- немає демо ----
     EmptyState {
         visible: !Project.loaded && !Project.loading
-        Layout.fillWidth: true
         Layout.topMargin: Theme.s6 * 2
         iconName: "file"
         title: qsTr("Демо не відкрито")
@@ -52,13 +51,54 @@ Page {
         actionIcon: "folder"
         onAction: Ui.openDemoRequested()
     }
-    Btn {
+    // Нещодавні демо з теки гри і ваших тек (огляд бібліотеки — коли сторінка порожня)
+    Section {
+        id: recentBox
         visible: !Project.loaded && !Project.loading
+        Layout.fillWidth: true
+        Layout.maximumWidth: Theme.px(720)
         Layout.alignment: Qt.AlignHCenter
-        kind: "ghost"
-        text: qsTr("Бібліотека демо")
-        iconName: "library"
-        onClicked: Ui.goTo("library")
+        title: qsTr("Нещодавні демо")
+        subtitle: qsTr("З теки гри і ваших тек — клацніть, щоб відкрити")
+        iconName: "clock"
+        collapsible: false
+        readonly property var items: Library.scanned ? Library.recent(8) : []
+        onVisibleChanged: if (visible && !Library.scanned && !Library.scanning) Library.rescan()
+        Component.onCompleted: if (visible && !Library.scanned && !Library.scanning) Library.rescan()
+        Label {
+            visible: recentBox.items.length === 0
+            role: "secondary"
+            text: Library.scanning ? qsTr("Шукаю демо...") : qsTr("Демо не знайдено. Записати демо в грі: консоль → record назва, зупинити → stop.")
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+        Repeater {
+            model: recentBox.items
+            B.ItemDelegate {
+                id: rd
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: Theme.rowHeight + Theme.px(6)
+                hoverEnabled: true
+                onClicked: Project.open(modelData.path)
+                Accessible.name: modelData.name
+                background: Rectangle { radius: Theme.r1; color: rd.hovered ? Theme.hover : "transparent" }
+                contentItem: RowLayout {
+                    spacing: Theme.s3
+                    Icon { Layout.preferredWidth: Theme.px(14); Layout.preferredHeight: Theme.px(14); name: "file"; color: Theme.textSecondary }
+                    Label { Layout.fillWidth: true; text: rd.modelData.name }
+                    Label { text: rd.modelData.map; role: "secondary"; Layout.preferredWidth: Theme.px(150) }
+                    Label { text: rd.modelData.seconds > 0 ? Project.formatTime(rd.modelData.seconds) : ""; role: "secondary"; font.family: Theme.monoFamily; Layout.preferredWidth: Theme.px(70) }
+                    Label { text: Shell.formatDate(rd.modelData.modified); role: "meta"; Layout.preferredWidth: Theme.px(130) }
+                }
+            }
+        }
+        Btn {
+            kind: "ghost"
+            text: qsTr("Уся бібліотека")
+            iconName: "library"
+            onClicked: Ui.goTo("library")
+        }
     }
     ColumnLayout {
         visible: Project.loading
