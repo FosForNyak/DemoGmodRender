@@ -1,36 +1,24 @@
-import struct, sys
-sys.path.insert(0, sys.argv[0].rsplit('/',1)[0])
-from bits import *
-fn = sys.argv[1]; data = open(fn,'rb').read()
-pos = 1072
-packets = []
-while True:
-    cmd = data[pos]; tick = struct.unpack_from('<i', data, pos+1)[0]; pos += 5
-    if cmd in (1,2):
-        pos += 84; ln = struct.unpack_from('<i', data, pos)[0]; pos += 4
-        packets.append((cmd, tick, pos, ln)); pos += ln
-        if len(packets) >= int(sys.argv[2]): break
-    elif cmd == 3: pass
-    elif cmd in (4,6,8): ln = struct.unpack_from('<i', data, pos)[0]; pos += 4+ln
-    elif cmd == 5: pos += 4; ln = struct.unpack_from('<i', data, pos)[0]; pos += 4+ln
-    else: break
-for (cmd, tick, p, ln) in packets[:int(sys.argv[3])]:
-    b = BitReader(data, p, p+ln)
-    print('== packet cmd', cmd, 'tick', tick, 'len', ln)
-    n = 0
-    while b.left() >= 6 and n < 40:
-        t = b.ubit(6); n += 1
-        print('  msg', t, 'at bit', b.pos - p*8 - 6)
-        if t == 0: continue
-        if t == 3: print('   net_Tick', b.long(), b.ubit(16), b.ubit(16)); continue
-        if t == 4: print('   StringCmd', repr(b.string())); continue
-        if t == 5:
-            c = b.byte(); kv = [(b.string(), b.string()) for _ in range(c)]; print('   SetConVar', c, kv[:8]); continue
-        if t == 6: print('   SignonState', b.byte(), b.long()); continue
-        if t == 7: print('   Print', repr(b.string()[:200])); continue
-        if t == 8:
-            print('   ServerInfo proto', b.word(), 'count', b.long(), 'hltv', b.bit(), 'ded', b.bit(), 'crc', hex(b.ubit(32)&0xffffffff), 'maxclasses', b.word())
-            print('    md5', b.bytes_(16).hex(), 'slot', b.byte(), 'maxcl', b.byte(), 'interval', b.float(), 'os', chr(b.byte()))
-            print('    gamedir', b.string(), 'map', b.string(), 'sky', b.string(), 'host', b.string())
-            print('    next bits', [b.bit() for _ in range(16)], 'left', b.left()); break
-        print('   (unhandled, stop)'); break
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+exec(open('flatvar2.py').read().split('def decode_ok')[0])
+def cls(p):
+    t, f, bits = p['type'], p['flags'], p.get('bits')
+    if t == 0: return 'vi' if f & 0x20 else f'i{bits}'
+    if t == 1: return 'f32' if f & 0x4 else f'f{bits}'
+    if t == 2: return 'cvec' if f & 0x2 else ('v96' if f & 0x4 else f'v{bits}')
+    return f't{t}'
+SIG = {
+ 'CPhysicsProp': {0:'i8',1:'f15',2:'i8',3:'cvec',4:'v24',5:'vi',6:'f32',7:'f32',8:'f32',9:'v96',10:'v96',11:'v96',12:'v96',21:'i1',52:'i1'},
+ 'CBaseEntity': {4:'i8',5:'cvec',6:'v24',7:'vi',8:'f32',9:'f32',10:'f32',11:'i8',12:'v96',15:'v96',24:'i1',55:'i1'},
+ 'CDynamicProp': {8:'i8',9:'cvec',10:'v24',11:'vi',12:'f32',14:'f32',15:'v96',18:'v96',27:'i1',58:'i1'},
+ 'CBaseTrigger': {4:'i8',5:'i8',14:'cvec',15:'v24',16:'vi',17:'f32',19:'f32',20:'i8',21:'v96',24:'v96',33:'i1',64:'i1'},
+}
+name2dt = {c[1]: c[2] for c in classes}
+for mode in ('tf2', 'stable'):
+    for drop in ((), ('DT_PredictableId',)):
+        print('== mode', mode, 'drop', drop)
+        for cn, sig in SIG.items():
+            flat = sort(unsorted(name2dt[cn], drop), mode)
+            got = {i: cls(flat[i]) for i in sig}
+            miss = [f'{i}:{sig[i]}!={got[i]}({flat[i]["name"]})' for i in sig if sig[i] != got[i]]
+            print(f'   {cn:14s} mismatches {len(miss)}: {miss[:5]}')

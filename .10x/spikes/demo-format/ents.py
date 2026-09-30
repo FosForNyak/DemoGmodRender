@@ -137,10 +137,15 @@ def dec(b, p):
         return [dec(b, p['elem']) for _ in range(n)]
     raise ValueError('type %d' % t)
 
+def read_prop_delta(b):
+    # SDK 2013 CDeltaBitsWriter::WritePropIndex: 1 has-more bit (read by caller), 2-bit width selector, then diff-1 in 4/8/12 bits
+    s = b.ubit(2)
+    return b.ubit(4 + 4 * s)
+
 def read_props(b, flat, state):
     idx = -1
     while b.bit():
-        idx += 1 + read_ubitvar(b)
+        idx += 1 + read_prop_delta(b)
         if idx >= len(flat): raise ValueError('prop index %d >= %d' % (idx, len(flat)))
         p = flat[idx]
         state[idx] = dec(b, p)

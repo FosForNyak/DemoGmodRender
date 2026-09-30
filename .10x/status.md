@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 3 — Planning complete; Phase 4 not started (spike on demo format in progress)
+**Phase:** 4 — Implementation (starting T1); phases 0–3 complete
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -24,16 +24,14 @@
 - Phase 1: cto/, product-manager/ · Phase 2: ADR-001…004, architect/, staff-engineer/ · Phase 3: engineering-manager/ (T1–T24), senior-engineer/
 - Spike scripts: `.10x/spikes/demo-format/` (Python, run against local demos; no demo data in repo)
 
-## Spike findings (GMod protocol 24)
-- Command framing, ServerInfo (+loadingurl, gamemode, 16 bits), CreateStringTable (**5-bit log2 max**, numEntries, varint length), PacketEntities 13/24 bits, msg 33 (20-bit len): confirmed; demo 2 walks 215 740 packets with 0 errors.
-- All signon string tables decode to the exact bit; compressed tables are Valve LZSS; `dem_stringtables` is truncated at 512 KB (last table only).
-- SendTables: 16-bit flags, 311 tables, 250 classes, exact.
-- Prop indices: TF2 style `while bit: idx += 1 + UBitVar`. Ints with flag 0x20 are **varints** (CS:GO SPROP_VARINT).
-- **Open:** 8/34 baselines decode exactly. `DT_BaseEntity` has prop `m_GMOD_DataTable` of **type 7** (bits 0) right before the `m_GMOD_*` var tables — it is decoded as Int64 now and is the prime suspect for the remaining misalignment (needs its own decoder, likely length-prefixed). Verify flatten order after fixing it (`trace2.py`, `run.py`, `flatvar.py`).
+## Spike findings (GMod protocol 24) — COMPLETE
+Both local demos decode fully to entity state with `.10x/spikes/demo-format/ref.py` (reference decoder):
+- 29_08_2026.dem: 215 740 packets, 15 530 enters, 7.57 M deltas, 0 errors.
+- 25_07_2025.dem: 148 767 packets, 9 145 enters, 6.28 M deltas, 1 error (known odd signon packet 3).
+All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-bit userdata length, varint ints, type 3 = double, type 7 = NW2 table, truncated dem_stringtables).
 
 ## Next
-1. Finish the spike: decoder for prop type 7, all 34 baselines exact, then `ents.py` over 3000 packets (player positions sane).
-2. Update spec §4 with the findings, then Phase 4 from T1.
+- Phase 4: T1 repo scaffolding → T2/T3 core → T4–T10 demo (port ref.py) → T11–T13 state base + importer → T14–T15 assets → T16–T17 api/cli → T18–T22 app → T23–T24 hardening + CI.
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)

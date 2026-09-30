@@ -2,6 +2,8 @@
 
 **Date:** 2026-09-30
 
+> **Superseded details (2026-09-30, after the spike):** the format facts below T5–T9 are corrected by spec §4 and by `.10x/spikes/demo-format/ref.py`, which is the reference the C++ must match. Key corrections: SDK 2013 `ReadUBitVar` has the 2-bit encoding in the LOW bits (values in 4/8/12/32 bits); CreateStringTable uses 5-bit log2(max) and varint length; string-table userdata length is 19 bits; ints with flag 0x20 are varints; SendProp type 3 is a 64-bit double time; type 7 is the GMod NW2 table; `dem_stringtables` is truncated at 512 KB.
+
 ## Approach per task
 - **T2 BitReader:** 64-bit refill window over a `std::span<const uint8_t>`; `ubit(n)` for n ≤ 32 in O(1); reading past the end returns 0 and sets `overflow_`; `varint32` max 5 bytes; strings with explicit max length (truncate + flag). Coord/CoordMP/Normal decoders are free functions over BitReader, mirroring SDK 2013 behavior (spec §4).
 - **T4 command walk:** header 1072 bytes; each command: u8 cmd, i32 tick; packet: 76 + 8 + i32 len. Validate `len ≥ 0` and `len ≤ remaining`. Unknown cmd → stop with `demo.unknown_command` and keep what was read.
