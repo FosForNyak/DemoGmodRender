@@ -38,6 +38,11 @@ else()
     set(GMDR_ZSTD zstd::libzstd)
 endif()
 
+# libFuzzer coverage for every library when building the fuzzers with Clang.
+if(GMDR_BUILD_FUZZ AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 add_subdirectory(core)
 foreach(module demo assets api)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${module}/CMakeLists.txt)
@@ -58,6 +63,6 @@ if(GMDR_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-if(GMDR_BUILD_FUZZ)
+if(GMDR_BUILD_FUZZ OR GMDR_BUILD_TESTS)
     add_subdirectory(fuzz)
 endif()

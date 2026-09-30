@@ -11,6 +11,8 @@
 | T14 | `assets`: VDF (escapes only for Steam-written files), locator (registry → libraryfolders → appmanifest_4000 → GarrysMod; manual path; mount.cfg + mountdepots.txt with dedupe) | unit tests on a fake install; `gmdr-cli gmod` on this PC |
 | T16 | `api`: Engine, command table, sessions (importer supervision, events, watchdog, cancel), settings, GMod/VFS cache, demo cache with LRU limit, C ABI `gmdr.h` | `api_engine_test.cpp` (synthetic demo through gmdr-import, cached reopen, C ABI); `gmdr-cli run` on both demos |
 | T17 | `gmdr-cli call / run [--no-wait] / info` over the same command table | corpus runs, cancel during import |
+| T18 | Tauri 2 shell (`app/src-tauri`): `build.rs` builds the engine via `scripts/build-engine.cmd`, links the static libs, ships `gmdr-import` as a sidecar; FFI over `gmdr.h`; `engine_call` command + `engine` event; frameless window, CSP, minimal capabilities | `cargo build`, `tauri build --no-bundle`, `ui/scripts/smoke-app.mjs` |
+| T19–T22 | UI (`app/ui`): Vite + React 18 + TS, vendored Anvil + `tokens.css` generator, Workspace with TitleBar/menus, toolbar with transport, Outliner, top-down view, Inspector, Scrubber + Timeline, Content table, Log, StatusBar, Settings, command palette, toasts, drag & drop, shortcuts, Ukrainian text | typecheck, vitest, browser run on both demos through the dev bridge (screenshots in both themes) |
 | T15 | `assets`: VPK v1/v2, GMA v1–3 (header read in growing chunks), ZIP central directory, BSP lump 40, VFS (folder → addons → Workshop GMAs → VPKs → mounts → download → pakfile), content check | unit tests + corruption runs; `gmdr-cli content` on both demos |
 
 ## Deviations from the plan
@@ -18,6 +20,14 @@
 - `TimelineClock`: signon → tick 0, monotonic timeline (found by `verify`).
 - STRINGTABLES snapshots are incremental per table; `instancebaseline` userdata not stored (ADR-005 notes).
 - `gmdr-import` sets process mitigation policies (no dynamic code, no remote/low-IL images, no extension points, strict handle checks after validating the inherited handles). AppContainer remains T23.
+
+## UI notes
+- **Dev bridge** (`gmdr-cli serve` + `app/ui/scripts/dev-bridge.mjs`, dev only, 127.0.0.1): the same UI runs in a browser tab against the real engine, so it can be checked with screenshots outside the Tauri window.
+- **Anvil TreeView keeps `items` from its first render**: the Outliner remounts it (key = hash of the visible nodes). Other components only snapshot `default*` props.
+- **Viewport grid** is decorative and centred on the box, so the top-down view hides it and draws a world-aligned grid and axes (tokens `grid-*`, `axis-*`); colours are re-read when the theme changes.
+- **Timeline**: `Scrubber` over the whole demo (`cached` = imported range) + `Timeline` for a 10 s window around the playhead (events of that window as keys per kind, the selected entity's PVS intervals as clips).
+- **Settings** is a `ToolWindow` over the main window (not a separate OS window yet); changes apply immediately.
+- A cached demo starts the content check right after opening (no `import.done` event).
 
 ## API v1 as implemented
 Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error": {code, message, details?}}`. Events `{"type", ...}`: `import.indexed`, `import.progress`, `import.done`, `import.failed`, `settings.changed`, `log`.

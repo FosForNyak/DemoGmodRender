@@ -5,7 +5,8 @@
 /app/src-tauri/target/
 /app/src-tauri/binaries/
 /app/ui/dist/
-/app/ui/node_modules/
+/app/node_modules/
+/app/src-tauri/gen/
 /app/ui/src/vendor/anvil/tokens.css
 
 # vcpkg
@@ -16,6 +17,9 @@
 /corpus/
 *.gmstate
 *.gmstate.part
+
+# local tooling
+/.claude/
 
 # editors / OS
 .vs/

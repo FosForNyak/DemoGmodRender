@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: engine calls, window buttons and the open-file dialog. No shell, no fs, no network.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "dialog:allow-open"
+  ]
+}

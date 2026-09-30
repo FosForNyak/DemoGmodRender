@@ -39,6 +39,11 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -675,6 +680,33 @@ int cmdRun(int argc, char** argv) {
     return rc;
 }
 
+// serve: the command bus over stdin/stdout for the UI's browser dev bridge (app/ui/scripts/dev-bridge.mjs).
+// In: {"id": n, "request": {"cmd", "args"}} per line. Out: {"id": n, "response": ...} or {"event": ...}.
+int cmdServe() {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    gmdr::api::Engine engine(cliConfig());
+    std::mutex outMutex;
+    auto writeLine = [&](const std::string& s) {
+        std::lock_guard lock(outMutex);
+        std::fwrite(s.data(), 1, s.size(), stdout);
+        std::fputc('\n', stdout);
+        std::fflush(stdout);
+    };
+    engine.setEventSink([&](const std::string& json) { writeLine("{\"event\":" + json + "}"); });
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        auto j = gmdr::Json::parse(line, nullptr, false);
+        if (j.is_discarded() || !j.is_object() || !j.contains("id") || !j.contains("request"))
+            continue;
+        const std::string response = engine.callJson(j["request"].dump());
+        writeLine("{\"id\":" + j["id"].dump() + ",\"response\":" + response + "}");
+    }
+    return 0;
+}
+
 // Prints the string tables and entity counts of a state file at its last tick.
 int cmdInspect(const std::string& statePath) {
     auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(statePath), true);
@@ -772,6 +804,8 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    if (cmd == "serve")
+        return cmdServe();
     if (cmd == "call" && argc >= 3)
         return cmdCall(argv[2], argc >= 4 ? argv[3] : nullptr);
     if (cmd == "run" && argc >= 3)

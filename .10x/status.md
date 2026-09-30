@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 4 — Implementation (T1–T17 done; next T18 Tauri app); phases 0–3 complete
+**Phase:** 4 — Implementation (T1–T22 done; next T23 hardening + T24 CI); phases 0–3 complete
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -37,8 +37,10 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 - T16–T17: `engine/api` — Engine + command table (19 commands), sessions supervising `gmdr-import` (events, 60 s idle watchdog, cancel, `.part` → `state.gmstate`, cache reuse, LRU cache limit), settings.json, GMod/VFS cache, pakfile via `gmdr-import --list-pakfile`, C ABI `gmdr.h`; `gmdr-cli call|run|info`. On the 109 MB demo: import 3.6 s, `state.entities` 18 ms, `state.positions` 1.8 ms, `state.entity` 2.4 ms, `content.check` 0.35 s; partial queries during import and cancel verified. Milestone M5 met.
 - Tests: 40 cases / 29 370 assertions (debug + release), incl. a real import of a synthetic demo through the child process and the C ABI.
 
+- T18–T22: Tauri 2 app + Anvil UI (see `decisions/sde/app-shell-demo-import.md` → UI notes). Checked in a browser against the real engine on both demos (open, outliner, inspector, playback at 33 tick/s, scrubbing, timeline, content check, settings, palette, both themes) and in the real window with `app/ui/scripts/smoke-app.mjs`.
+
 ## Next
-- T18–T22 Tauri app + Anvil UI → T23–T24 hardening + CI.
+- T23 fuzz targets, limit tests, AppContainer for the importer → T24 GitHub Actions (Windows + Linux) → Phase 5 QA + security review → Phase 6 devops/sre.
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)

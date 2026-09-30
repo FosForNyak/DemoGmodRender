@@ -1,0 +1,245 @@
+/* App-level layout glue. Colours, sizes and type come from Anvil tokens only. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--chrome);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 18px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.selectable {
+  user-select: text;
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Panels whose content fills the body. */
+.panel-fill {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.panel-scroll {
+  overflow: auto;
+}
+
+.center-stack {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: var(--space-4);
+}
+
+.center-stack > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Main toolbar readouts: numbers in mono, right-aligned so digits do not jump. */
+.toolbar-readout {
+  display: inline-block;
+  padding: 0 var(--space-8);
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+/* Start screen. */
+.start-screen {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: var(--surface-panel);
+  border-radius: var(--radius-md);
+}
+
+.start-column {
+  width: min(640px, 100% - 2 * var(--space-32));
+  padding: var(--space-32) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-24);
+}
+
+.start-title {
+  margin: var(--space-16) 0 0;
+}
+
+.start-recent h2 {
+  margin: 0 0 var(--space-8);
+  color: var(--text-secondary);
+}
+
+.start-recent p {
+  margin: 0;
+}
+
+/* Top-down view inside the Anvil viewport. */
+.viewport-fill {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+/* The view draws its own world-aligned grid; the viewport's decorative one would suggest a false origin. */
+.viewport-fill .av-viewport-grid {
+  display: none;
+}
+
+.viewport-fill .av-viewport-hud {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.topdown {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.topdown canvas {
+  display: block;
+}
+
+/* Inspector. */
+.inspector-toolbar {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+  width: 100%;
+}
+
+.inspector-toolbar > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.prop-value {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* Bottom panel. */
+.timeline-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: var(--space-4);
+}
+
+.timeline-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.content-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  padding: var(--space-4) var(--space-8);
+}
+
+.content-tab > :last-child {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Settings tool window over the main window. */
+.tool-window-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-dialog, 50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.tool-window-layer > * {
+  pointer-events: auto;
+  width: min(960px, 100vw - 96px);
+  height: min(680px, 100vh - 96px);
+  box-shadow: var(--shadow-dialog);
+}
+
+.tool-window-layer.maximized > * {
+  width: 100vw;
+  height: 100vh;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.settings-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+/* Command palette. */
+.palette-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-popover, 30);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+/* Drop target over the whole window while a file is dragged in. */
+.drop-overlay {
+  position: fixed;
+  inset: 48px;
+  z-index: var(--layer-drag, 80);
+  display: flex;
+}
+
+.drop-overlay > * {
+  flex: 1;
+}
