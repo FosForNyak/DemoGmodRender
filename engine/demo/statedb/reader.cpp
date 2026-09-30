@@ -205,6 +205,12 @@ Result<StateReader::Blob> StateReader::loadChunk(const ChunkRef& ref) const {
         ch.rawSize != ref.rawSize || ch.storedSize != ref.storedSize || ch.rawSize > limits::kMaxChunkBytes ||
         ch.storedSize > limits::kMaxChunkBytes)
         return corrupt(std::string("chunk header for ") + chunkKindName(ref.kind));
+    // The payload must lie inside the file before any memory is reserved for it.
+    auto fileSize = file_.size();
+    if (!fileSize)
+        return fileSize.error();
+    if (ref.offset > *fileSize || *fileSize - ref.offset < sizeof ch + ch.storedSize)
+        return corrupt(std::string("chunk extends past the end of the file: ") + chunkKindName(ref.kind));
     std::vector<std::uint8_t> stored(ch.storedSize);
     GMDR_TRY(file_.readExactAt(ref.offset + sizeof ch, stored));
     if (xxh3_64(stored) != ch.checksum)

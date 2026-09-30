@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 4 — Implementation (T1–T22 done; next T23 hardening + T24 CI); phases 0–3 complete
+**Phase:** 4 — Implementation (T1–T24 done except AppContainer, which waits for the user's decision); phases 0–3 complete
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -39,8 +39,11 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 
 - T18–T22: Tauri 2 app + Anvil UI (see `decisions/sde/app-shell-demo-import.md` → UI notes). Checked in a browser against the real engine on both demos (open, outliner, inspector, playback at 33 tick/s, scrubbing, timeline, content check, settings, palette, both themes) and in the real window with `app/ui/scripts/smoke-app.mjs`.
 
+- T23: fuzz targets + limit tests; three allocation-before-check weaknesses fixed (LZSS, zstd, state chunks). T24: CI workflow, Linux Docker environment, README. Linux GCC build and tests pass locally in Docker.
+
 ## Next
-- T23 fuzz targets, limit tests, AppContainer for the importer → T24 GitHub Actions (Windows + Linux) → Phase 5 QA + security review → Phase 6 devops/sre.
+- Phase 5: QA + security review (`reviews/`) → Phase 6: devops/sre docs.
+- AppContainer for the importer: ask the user (touches Windows security configuration).
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)

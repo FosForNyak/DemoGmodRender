@@ -13,6 +13,10 @@ Result<std::vector<std::uint8_t>> lzssDecompress(std::span<const std::uint8_t> i
     std::memcpy(&size, in.data() + 4, 4);
     if (size > limits::kMaxDecompressedBytes)
         return makeError("demo.lzss_too_large", "LZSS output exceeds limit");
+    // A command byte plus eight 2-byte back-references (16 bytes each) is the densest group: output is at
+    // most ~7.5x the stream. Reject impossible sizes before reserving memory for them.
+    if (size > (in.size() - 8) * 8)
+        return makeError("demo.lzss_corrupt", "LZSS declared size is impossible for its input");
 
     std::vector<std::uint8_t> out;
     out.reserve(size);

@@ -17,6 +17,18 @@
 #include <unistd.h>
 #endif
 
+// Built with AddressSanitizer (GCC defines __SANITIZE_ADDRESS__, Clang reports it through __has_feature).
+#if defined(__SANITIZE_ADDRESS__)
+#define GMDR_UNDER_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define GMDR_UNDER_ASAN 1
+#endif
+#endif
+#ifndef GMDR_UNDER_ASAN
+#define GMDR_UNDER_ASAN 0
+#endif
+
 namespace gmdr {
 
 #ifdef _WIN32
@@ -126,10 +138,9 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
     }
 
     PROCESS_INFORMATION pi{};
-    const BOOL created =
-        CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE,
-                       CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr,
-                       &si.StartupInfo, &pi);
+    const BOOL created = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE,
+                                        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+                                        nullptr, nullptr, &si.StartupInfo, &pi);
     DeleteProcThreadAttributeList(attrs);
     CloseHandle(writeEnd);
     for (auto h : options.inheritHandles)
@@ -141,7 +152,8 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
 
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+                                              JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
                                               JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
     if (options.memoryLimitBytes) {
@@ -281,11 +293,15 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
             const int flags = ::fcntl(fd, F_GETFD);
             ::fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
         }
+#if !GMDR_UNDER_ASAN
+        // ASan reserves terabytes of address space for its shadow memory and cannot start under an
+        // RLIMIT_AS; sanitizer builds (CI only) run the child without the cap.
         if (options.memoryLimitBytes) {
-            struct rlimit rl {};
+            struct rlimit rl{};
             rl.rlim_cur = rl.rlim_max = static_cast<rlim_t>(options.memoryLimitBytes);
             ::setrlimit(RLIMIT_AS, &rl);
         }
+#endif
         ::execv(exe.c_str(), argv.data());
         ::_exit(127);
     }

@@ -8,9 +8,11 @@ namespace gmdr {
 
 static_assert(std::endian::native == std::endian::little, "BitReader assumes a little-endian host");
 
-BitReader::BitReader(std::span<const std::uint8_t> bytes) : data_(bytes), begin_(0), pos_(0), end_(bytes.size() * 8) {}
+BitReader::BitReader(std::span<const std::uint8_t> bytes)
+    : data_(bytes), begin_(0), pos_(0), end_(bytes.size() * 8) {}
 
-BitReader::BitReader(std::span<const std::uint8_t> bytes, std::size_t bitBegin, std::size_t bitEnd) : data_(bytes) {
+BitReader::BitReader(std::span<const std::uint8_t> bytes, std::size_t bitBegin, std::size_t bitEnd)
+    : data_(bytes) {
     const std::size_t total = bytes.size() * 8;
     end_ = std::min(bitEnd, total);
     begin_ = std::min(bitBegin, end_);
@@ -123,7 +125,9 @@ std::string BitReader::string(std::size_t maxLen, bool* truncated) {
 }
 
 void BitReader::bytes(std::uint8_t* out, std::size_t n) {
-    if (n * 8 > end_ - pos_) {
+    if (n == 0)
+        return;                  // `out` may be null (an empty vector's data())
+    if (n > (end_ - pos_) / 8) { // not n * 8: that can overflow
         overflow_ = true;
         pos_ = end_;
         std::memset(out, 0, n);

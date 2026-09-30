@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [beta, release]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-cache,readwrite
+
+jobs:
+  engine-windows:
+    name: Engine · Windows MSVC
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: vcpkg
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
+      - uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-windows-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
+      - name: Configure
+        working-directory: engine
+        run: cmake --preset windows-msvc-debug
+      - name: Build
+        working-directory: engine
+        run: cmake --build --preset windows-msvc-debug
+      - name: Test (unit + fuzz smoke)
+        working-directory: engine
+        run: ctest --preset windows-msvc-debug
+
+  engine-linux:
+    name: Engine · Linux ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-gcc, linux-clang-asan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build clang llvm libclang-rt-18-dev
+      - name: vcpkg
+        run: |
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          mkdir -p .vcpkg-cache
+      - uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-linux-${{ matrix.preset }}-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
+      - name: Configure
+        working-directory: engine
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        working-directory: engine
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        working-directory: engine
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Fuzz (60 s per target)
+        if: matrix.preset == 'linux-clang-asan'
+        working-directory: engine
+        run: |
+          for f in build/linux-clang-asan/fuzz/fuzz_*; do
+            [ -x "$f" ] || continue
+            name=$(basename "$f")
+            mkdir -p "corpus/$name"
+            echo "::group::$name"
+            "$f" -max_total_time=60 -rss_limit_mb=2048 -timeout=10 "corpus/$name"
+            echo "::endgroup::"
+          done
+      - name: Keep fuzz findings
+        if: failure() && matrix.preset == 'linux-clang-asan'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: |
+            engine/crash-*
+            engine/timeout-*
+            engine/oom-*
+          if-no-files-found: ignore
+
+  app-windows:
+    name: App · Windows (Tauri)
+    runs-on: windows-2025
+    needs: engine-windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: vcpkg
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
+      - uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-windows-release-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
+      - name: Install
+        working-directory: app
+        run: npm ci
+      - name: Typecheck and unit tests
+        working-directory: app
+        run: |
+          npm run tokens
+          npm run typecheck
+          npm test
+      - name: Build app and installer (not published)
+        working-directory: app
+        run: npx tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemoGmodRender-windows
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 14

@@ -126,3 +126,18 @@ TEST_CASE("ByteReader is sticky on failure") {
     std::uint8_t b = 0;
     CHECK_FALSE(r.u8(b));
 }
+
+TEST_CASE("bytes: zero length into a null buffer, exact fit, one byte too many") {
+    const std::uint8_t data[4] = {1, 2, 3, 4};
+    BitReader r(data);
+    r.bytes(nullptr, 0); // found by fuzz_tables under UBSan: memcpy(nullptr, ..., 0)
+    CHECK_FALSE(r.overflowed());
+    std::uint8_t out[5] = {};
+    r.bytes(out, 4);
+    CHECK(out[3] == 4);
+    CHECK_FALSE(r.overflowed());
+    BitReader over(data);
+    over.bytes(out, 5);
+    CHECK(over.overflowed());
+    CHECK(out[4] == 0);
+}

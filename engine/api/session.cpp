@@ -140,8 +140,9 @@ void Session::handleLine(const std::string& line, const Emit& emit) {
         logWarn("import", "unreadable line from the importer");
         return;
     }
-    const std::string type = j.begin().key();
-    const Json& body = j.begin().value();
+    const auto entry = j.begin();
+    const std::string type = entry.key();
+    const Json& body = *entry;
     if (!body.is_object())
         return;
     if (type == "indexed") {

@@ -13,6 +13,8 @@
 | T17 | `gmdr-cli call / run [--no-wait] / info` over the same command table | corpus runs, cancel during import |
 | T18 | Tauri 2 shell (`app/src-tauri`): `build.rs` builds the engine via `scripts/build-engine.cmd`, links the static libs, ships `gmdr-import` as a sidecar; FFI over `gmdr.h`; `engine_call` command + `engine` event; frameless window, CSP, minimal capabilities | `cargo build`, `tauri build --no-bundle`, `ui/scripts/smoke-app.mjs` |
 | T19–T22 | UI (`app/ui`): Vite + React 18 + TS, vendored Anvil + `tokens.css` generator, Workspace with TitleBar/menus, toolbar with transport, Outliner, top-down view, Inspector, Scrubber + Timeline, Content table, Log, StatusBar, Settings, command palette, toasts, drag & drop, shortcuts, Ukrainian text | typecheck, vitest, browser run on both demos through the dev bridge (screenshots in both themes) |
+| T23 | Fuzz targets (`engine/fuzz`: demo pipeline, table decoders, archives/VDF, state reader) — libFuzzer with Clang, a mutation driver as ctest elsewhere; limit tests (`demo_limits_test.cpp`); sizes checked before allocating (LZSS ratio bound, zstd frame size, chunk inside the file) | ctest on MSVC Debug and Linux GCC; Clang ASan/UBSan + libFuzzer in Docker (`engine/docker`) |
+| T24 | GitHub Actions (`.github/workflows/ci.yml`): MSVC Debug, Linux GCC, Linux Clang ASan/UBSan + 60 s fuzzing per target, Tauri app + NSIS installer as an artifact (not published); `README.md`; `scripts/build-engine.cmd` picks one VS instance (full edition over Build Tools) and always configures | local runs of the same presets |
 | T15 | `assets`: VPK v1/v2, GMA v1–3 (header read in growing chunks), ZIP central directory, BSP lump 40, VFS (folder → addons → Workshop GMAs → VPKs → mounts → download → pakfile), content check | unit tests + corruption runs; `gmdr-cli content` on both demos |
 
 ## Deviations from the plan
@@ -60,5 +62,6 @@ Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error"
 - VFS rejects paths with `..` or `:`.
 
 ## Open
+- **AppContainer for gmdr-import (T23, needs the user's decision):** it requires a per-user AppContainer profile (registry) and read/execute for ALL APPLICATION PACKAGES on the importer's folder. Not done without explicit consent; the importer runs in the Job Object with mitigation policies meanwhile.
 - Property-history queries (graphs) will need a derived index; not in this sub-project.
 - XOR-with-previous encoding for float updates could shrink DELTAS further; not needed for the 0.4 target.

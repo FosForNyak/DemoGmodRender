@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <cstdio>
 
 namespace gmdr::assets {
 
@@ -241,9 +240,11 @@ std::optional<FileSlice> Vfs::locate(std::string_view rawPath) const {
             if (e.archiveIndex == 0x7FFF)
                 return FileSlice{s.root, static_cast<std::uint64_t>(s.vpk.treeEnd) + e.offset, e.length};
             std::string name = pathToUtf8(s.root.filename());
-            char num[8];
-            std::snprintf(num, sizeof num, "_%03u.vpk", static_cast<unsigned>(e.archiveIndex));
-            name.replace(name.size() - 8, 8, num); // "_dir.vpk" -> "_NNN.vpk"
+            // "_dir.vpk" -> "_NNN.vpk" (at least three digits; the index can have up to five).
+            std::string num = std::to_string(e.archiveIndex);
+            if (num.size() < 3)
+                num.insert(0, 3 - num.size(), '0');
+            name.replace(name.size() - 8, 8, "_" + num + ".vpk");
             return FileSlice{s.root.parent_path() / pathFromUtf8(name), e.offset, e.length};
         }
         case SourceKind::Pakfile:
