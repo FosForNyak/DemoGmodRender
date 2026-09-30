@@ -4,6 +4,8 @@
 #include "core/json.h"
 
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace gmdr::assets {
@@ -36,7 +38,15 @@ struct ContentReport {
     Json toJson() const;
 };
 
+// Files that exist only for one demo: the map's pakfile (listed by the importer from the untrusted BSP).
+// Searched after the shared VFS.
+struct ContentOverlay {
+    std::string name; // "maps/gm_x.bsp"
+    std::unordered_set<std::string> files;
+    void add(std::string_view path);
+};
+
 // Checks every resource the demo's MANIFEST chunk lists against the search path.
-ContentReport checkContent(const Json& manifest, const Vfs& vfs);
+ContentReport checkContent(const Json& manifest, const Vfs& vfs, const ContentOverlay* pakfile = nullptr);
 
 } // namespace gmdr::assets

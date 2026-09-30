@@ -67,6 +67,7 @@ struct Model {
     };
     std::map<int, Ent> ents;
     std::map<int, std::pair<std::string, std::map<int, std::string>>> tables;
+    std::map<int, std::set<int>> changed; // at this tick
 };
 
 void checkState(const WorldState& s, const Model& m) {
@@ -85,6 +86,10 @@ void checkState(const WorldState& s, const Model& m) {
         CHECK(e.props == it->second.props);
     }
     CHECK(present == m.ents.size());
+    std::map<int, std::vector<int>> wantChanged;
+    for (const auto& [idx, set] : m.changed)
+        wantChanged[idx] = std::vector<int>(set.begin(), set.end());
+    CHECK(s.changed == wantChanged);
     for (const auto& [id, t] : m.tables) {
         auto it = s.tables.find(id);
         REQUIRE(it != s.tables.end());
@@ -141,7 +146,13 @@ std::vector<Model> writeHistory(File& out, std::vector<ChunkRef>* announced, int
         rec.tick = tick;
         rec.info.viewOrigin = {static_cast<float>(tick), 0, 0};
         w.onPacket(rec);
+        model.changed.clear();
         for (int op = 0; op < 4; ++op) {
+            if (op == 2) {
+                // Real demos often have several packets with the same tick; a keyframe may fall due in between.
+                w.onTickEnd(tick);
+                w.onPacket(rec);
+            }
             const int index = static_cast<int>(rng() % 12);
             auto it = model.ents.find(index);
             const unsigned choice = rng() % 10;
@@ -161,12 +172,16 @@ std::vector<Model> writeHistory(File& out, std::vector<ChunkRef>* announced, int
                 e.props[3].v = std::string("models/e") + std::to_string(index) + ".mdl";
                 w.onEntityEnter(tick, {index, 0, e.serial, e.life}, newLife, e.props);
                 model.ents[index] = e;
+                for (int p = 0; p < 4; ++p)
+                    if (e.props[static_cast<std::size_t>(p)].isSet())
+                        model.changed[index].insert(p);
             } else if (!it->second.inPvs) {
                 // A dormant entity can still receive delta updates.
                 auto& e = it->second;
                 e.props[0].v = static_cast<std::int64_t>(rng() % 100);
                 const int ch[] = {0};
                 w.onEntityUpdate(tick, {index, 0, e.serial, e.life}, ch, e.props);
+                model.changed[index].insert(0);
             } else if (choice < 6) {
                 auto& e = it->second;
                 std::vector<int> ch;
@@ -177,6 +192,7 @@ std::vector<Model> writeHistory(File& out, std::vector<ChunkRef>* announced, int
                 e.props[2].v = Vec3{static_cast<float>(tick), static_cast<float>(index), 1.5f};
                 ch.push_back(2);
                 w.onEntityUpdate(tick, {index, 0, e.serial, e.life}, ch, e.props);
+                model.changed[index].insert(ch.begin(), ch.end());
             } else if (choice < 8) {
                 w.onEntityLeave(tick, {index, 0, it->second.serial, it->second.life}, false);
                 it->second.inPvs = false;
@@ -234,9 +250,10 @@ TEST_CASE("state file round trip: random access and sequential playback match th
 
     auto cam = r.camera(10, 12);
     REQUIRE(cam);
-    REQUIRE(cam->size() == 3);
+    REQUIRE(cam->size() == 6); // two packets per tick
     CHECK((*cam)[0].tick == 10);
-    CHECK((*cam)[2].origin.x == 12.0f);
+    CHECK((*cam)[5].tick == 12);
+    CHECK((*cam)[5].origin.x == 12.0f);
 
     auto manifest = r.manifest();
     REQUIRE(manifest);

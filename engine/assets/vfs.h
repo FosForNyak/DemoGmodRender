@@ -59,8 +59,6 @@ public:
     std::optional<VfsHit> find(std::string_view path) const;
     std::optional<FileSlice> locate(std::string_view path) const;
     WorkshopItem workshopItem(std::uint64_t id) const;
-    // The map's own pakfile (listed by the importer from the untrusted BSP).
-    void setPakfile(const std::string& mapName, const std::vector<std::string>& files);
 
     const Stats& stats() const { return stats_; }
     const std::vector<std::string>& warnings() const { return warnings_; }
@@ -74,7 +72,6 @@ private:
         std::string title;
         VpkIndex vpk;
         GmaIndex gma;
-        std::unordered_set<std::string> pak;
     };
     bool contains(const Source& s, const std::string& path) const;
 

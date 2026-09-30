@@ -9,6 +9,8 @@
 | T11–T12 | `demo/statedb`: codec, writer, reader (checksums, LRU, keyframe cache, forward cursor, composed string tables) | round-trip, streaming and corruption tests; `gmdr-cli verify` on both demos |
 | T13 | `demo/import` (pass 1 index + pass 2 decode), `tools/gmdr-import` | `gmdr-cli spawn-import` on both demos; bad-handle and usage errors produce an `error` line |
 | T14 | `assets`: VDF (escapes only for Steam-written files), locator (registry → libraryfolders → appmanifest_4000 → GarrysMod; manual path; mount.cfg + mountdepots.txt with dedupe) | unit tests on a fake install; `gmdr-cli gmod` on this PC |
+| T16 | `api`: Engine, command table, sessions (importer supervision, events, watchdog, cancel), settings, GMod/VFS cache, demo cache with LRU limit, C ABI `gmdr.h` | `api_engine_test.cpp` (synthetic demo through gmdr-import, cached reopen, C ABI); `gmdr-cli run` on both demos |
+| T17 | `gmdr-cli call / run [--no-wait] / info` over the same command table | corpus runs, cancel during import |
 | T15 | `assets`: VPK v1/v2, GMA v1–3 (header read in growing chunks), ZIP central directory, BSP lump 40, VFS (folder → addons → Workshop GMAs → VPKs → mounts → download → pakfile), content check | unit tests + corruption runs; `gmdr-cli content` on both demos |
 
 ## Deviations from the plan
@@ -16,6 +18,29 @@
 - `TimelineClock`: signon → tick 0, monotonic timeline (found by `verify`).
 - STRINGTABLES snapshots are incremental per table; `instancebaseline` userdata not stored (ADR-005 notes).
 - `gmdr-import` sets process mitigation policies (no dynamic code, no remote/low-IL images, no extension points, strict handle checks after validating the inherited handles). AppContainer remains T23.
+
+## API v1 as implemented
+Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error": {code, message, details?}}`. Events `{"type", ...}`: `import.indexed`, `import.progress`, `import.done`, `import.failed`, `settings.changed`, `log`.
+
+| Command | Args | Notes |
+| --- | --- | --- |
+| `app.info` | — | version, format/parser versions, dirs, importer found |
+| `settings.get` / `settings.set` | `key?` / `key, value` | known keys `gmod.path`, `cache.limitBytes`, `recent`; any `ui.*`; null removes |
+| `gmod.locate` | `refresh?` | install, mounts, counts; VFS cached until `gmod.path` changes |
+| `cache.info` / `cache.clear` | — | open demos are never removed |
+| `demo.open` | `path` (absolute) | same file → same session; cached state reused |
+| `demo.close` / `demo.list` / `demo.info` | `demo` | info adds header, server, tick rate, duration |
+| `import.cancel` | `demo` | partial state stays readable |
+| `state.entities` | `demo, tick, filter?{text, group, inPvs}` | uid (string), index, class, group, life, inPvs, name/bot (players), model |
+| `state.entity` | `demo, tick, uid|index` | props grouped by SendTable, `changed` flags |
+| `state.positions` | `demo, tick` | unparented entities with origin + yaw; players with pitch/name; recorder camera |
+| `entity.lifetime` | `demo, uid` | after the import |
+| `timeline.summary` | `demo, bins` | per-kind histograms; cached once complete |
+| `timeline.events` | `demo, from, to, kinds?, limit?` | ≤ 20 000, `truncated` flag |
+| `camera.track` | `demo, from, to, step` | compact rows `[tick, x, y, z, pitch, yaw, roll]` |
+| `content.check` | `demo` | after the import; pakfile listed in gmdr-import |
+
+`tick` is clamped to the imported range; before the first delta chunk state queries return `import.not_ready`. Player names come from `userinfo` (GMod `player_info_t`, 324 bytes, name[128]).
 
 ## Content check rules
 - `*N` models = map brush models (builtin); `.vmt`/`.spr` in modelprecache → `materials/`.

@@ -34,6 +34,8 @@ Inside a `DELTAS` chunk, changes are stored as a sequence of records in demo ord
 - **INDEX chunk** (pass 1, before decoding): tick → command offset, written first so the timeline has its full length within ~0.1 s.
 - **zstd level 7 for DELTAS**, 3 elsewhere: −11 % size for +45 % import time.
 - **Chunk order at a keyframe:** DELTAS (previous segment) → KEYFRAME → STRINGTABLES. The reader uses a keyframe only once its STRINGTABLES chunk is known.
+- **Keyframes are cut lazily** (T16): a keyframe falls due at the end of a packet, but it is written at the first record of a *later* tick, so segment `(k, next]` holds every record with tick ≤ next (many packets share a tick, e.g. all signon at tick 0). The reader takes the keyframe strictly *before* T and replays the records at T, which also yields the "changed in this tick" set for the inspector.
+- **Entity life uid** = `stableId64(demo BLAKE3 ‖ life ordinal ‖ index ‖ serial)`: computable from any state, before the LIVES chunk exists.
 
 | Demo | .dem | state | ratio | import (in-process / child) | seek avg / max | frame step max | states verified |
 | --- | --- | --- | --- | --- | --- | --- | --- |

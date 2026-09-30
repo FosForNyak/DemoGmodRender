@@ -300,7 +300,10 @@ TEST_CASE("locator, VFS order and content check on a fake install") {
     REQUIRE(mapFile);
     auto pak = listBspPakfile(*mapFile, slice->offset, slice->size);
     REQUIRE(pak);
-    vfs->setPakfile("gm_test", *pak);
+    ContentOverlay overlay;
+    overlay.name = "maps/gm_test.bsp";
+    for (const auto& n : *pak)
+        overlay.add(n);
 
     Json manifest = {
         {"map", "gm_test"},
@@ -312,7 +315,7 @@ TEST_CASE("locator, VFS order and content check on a fake install") {
          {"3001397905.gma", "129739986.gma", "42.gma", "resource/fonts/f.ttf", "materials/nook/wall.vmt"}},
         {"particles", {"blood_impact_red_01"}},
     };
-    auto report = checkContent(manifest, *vfs);
+    auto report = checkContent(manifest, *vfs, &overlay);
     auto status = [&](const std::string& name) {
         for (const auto& i : report.items)
             if (i.name == name)

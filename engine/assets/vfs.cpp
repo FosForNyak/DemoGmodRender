@@ -195,7 +195,7 @@ bool Vfs::contains(const Source& s, const std::string& path) const {
     case SourceKind::MountVpk:
         return s.vpk.files.count(path) != 0;
     case SourceKind::Pakfile:
-        return s.pak.count(path) != 0;
+        return false; // per-demo overlay, see ContentOverlay
     }
     return false;
 }
@@ -256,16 +256,6 @@ std::optional<FileSlice> Vfs::locate(std::string_view rawPath) const {
 WorkshopItem Vfs::workshopItem(std::uint64_t id) const {
     auto it = workshop_.find(id);
     return it == workshop_.end() ? WorkshopItem{} : it->second;
-}
-
-void Vfs::setPakfile(const std::string& mapName, const std::vector<std::string>& files) {
-    sources_.erase(std::remove_if(sources_.begin(), sources_.end(),
-                                  [](const Source& s) { return s.kind == SourceKind::Pakfile; }),
-                   sources_.end());
-    Source s{SourceKind::Pakfile, "maps/" + mapName + ".bsp", {}};
-    for (const auto& f : files)
-        s.pak.insert(normalizeGamePath(f));
-    sources_.push_back(std::move(s));
 }
 
 } // namespace gmdr::assets

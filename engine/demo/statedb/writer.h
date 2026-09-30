@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -76,6 +77,7 @@ private:
     Result<void> writeChunk(ChunkKind kind, Tick from, Tick to, const std::vector<std::uint8_t>& raw);
     void writeOrRemember(ChunkKind kind, Tick from, Tick to, const std::vector<std::uint8_t>& raw);
     void flushSegment(Tick tick);
+    void cutBefore(Tick tick);
     void writeKeyframe(Tick tick);
     void writeInfo(const ParseStats* stats);
     void deltaHeader(DeltaOp op, Tick tick);
@@ -101,6 +103,7 @@ private:
     Tick segmentStart_ = -1; // tick of the last keyframe; -1 before the first
     Tick lastTick_ = 0;
     bool keyframeWritten_ = false;
+    std::optional<Tick> pendingCut_; // keyframe due at this tick, written when a later tick starts
 
     std::vector<EntityMirror> entities_;
     std::map<int, TableMirror> tables_;

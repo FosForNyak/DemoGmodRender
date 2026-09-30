@@ -53,7 +53,8 @@ std::optional<std::uint64_t> workshopIdOf(std::string_view name) {
 
 class Checker {
 public:
-    Checker(const Vfs& vfs, ContentReport& report) : vfs_(vfs), report_(report) {}
+    Checker(const Vfs& vfs, const ContentOverlay* pak, ContentReport& report)
+        : vfs_(vfs), pak_(pak), report_(report) {}
 
     void file(const std::string& kind, const std::string& name, const std::string& path) {
         const std::string key = kind + "\n" + normalizeGamePath(path);
@@ -66,6 +67,11 @@ public:
             item.source = hit->source;
             item.workshopId = hit->workshopId;
             item.title = hit->addonTitle;
+            ++report_.found;
+        } else if (pak_ && pak_->files.count(item.path)) {
+            item.status = ContentStatus::Found;
+            item.where = sourceKindName(SourceKind::Pakfile);
+            item.source = pak_->name;
             ++report_.found;
         } else {
             item.status = ContentStatus::Missing;
@@ -114,6 +120,7 @@ public:
 
 private:
     const Vfs& vfs_;
+    const ContentOverlay* pak_;
     ContentReport& report_;
     std::set<std::string> seen_;
 };
@@ -151,9 +158,13 @@ const char* contentStatusName(ContentStatus s) {
     return "unknown";
 }
 
-ContentReport checkContent(const Json& manifest, const Vfs& vfs) {
+void ContentOverlay::add(std::string_view path) {
+    files.insert(normalizeGamePath(path));
+}
+
+ContentReport checkContent(const Json& manifest, const Vfs& vfs, const ContentOverlay* pakfile) {
     ContentReport report;
-    Checker c(vfs, report);
+    Checker c(vfs, pakfile, report);
 
     if (auto map = manifest.find("map");
         map != manifest.end() && map->is_string() && !map->get<std::string>().empty())

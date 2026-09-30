@@ -16,5 +16,10 @@ foreach(module demo assets api)
     endif()
 endforeach()
 target_compile_definitions(gmdr_tests PRIVATE GMDR_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+if(TARGET gmdr-import)
+    # api tests run real imports through the child process.
+    target_compile_definitions(gmdr_tests PRIVATE GMDR_TEST_IMPORTER="$<TARGET_FILE:gmdr-import>")
+    add_dependencies(gmdr_tests gmdr-import)
+endif()
 
 add_test(NAME gmdr_tests COMMAND gmdr_tests)

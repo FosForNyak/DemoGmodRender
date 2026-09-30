@@ -38,6 +38,39 @@ bool decodeProps(Decoder& d, std::vector<PropValue>& props) {
 
 } // namespace
 
+std::uint64_t lifeUid(const std::array<std::uint8_t, 32>& demoHash, std::uint32_t life, int index,
+                      int serial) {
+    std::uint8_t bytes[32 + 12];
+    std::memcpy(bytes, demoHash.data(), 32);
+    const std::uint32_t fields[3] = {life, static_cast<std::uint32_t>(index),
+                                     static_cast<std::uint32_t>(serial)};
+    std::memcpy(bytes + 32, fields, sizeof fields);
+    return stableId64(bytes);
+}
+
+namespace {
+
+// Records the props a record at the target tick touched.
+void noteChanged(WorldState& state, Tick tick, int index, const std::vector<PropValue>* all,
+                 std::span<const int> some) {
+    if (state.changedTick != tick) {
+        state.changed.clear();
+        state.changedTick = tick;
+    }
+    auto& list = state.changed[index];
+    if (all) {
+        for (std::size_t i = 0; i < all->size(); ++i)
+            if ((*all)[i].isSet())
+                list.push_back(static_cast<int>(i));
+    } else {
+        list.insert(list.end(), some.begin(), some.end());
+    }
+    std::sort(list.begin(), list.end());
+    list.erase(std::unique(list.begin(), list.end()), list.end());
+}
+
+} // namespace
+
 const TableState* WorldState::table(const std::string& name) const {
     for (const auto& [id, t] : tables)
         if (t.name == name)
@@ -305,11 +338,7 @@ Result<std::shared_ptr<const std::vector<LifeInfo>>> StateReader::lives() const 
             const Tick b = d.svarint();
             l.pvs.emplace_back(a, b);
         }
-        std::uint8_t idBytes[32 + 16];
-        std::memcpy(idBytes, demoHash_.data(), 32);
-        std::int32_t fields[4] = {l.index, l.serial, static_cast<std::int32_t>(l.firstTick), l.classId};
-        std::memcpy(idBytes + 32, fields, 16);
-        l.uid = stableId64(idBytes);
+        l.uid = lifeUid(demoHash_, l.life, l.index, l.serial);
         out->push_back(std::move(l));
     }
     if (!d.ok())
@@ -468,6 +497,8 @@ Result<void> StateReader::applyDeltas(WorldState& state, const Blob& deltas, std
                 return corrupt("enter props");
             const auto idx = static_cast<std::size_t>(e.index);
             state.entities[idx] = std::move(e);
+            if (tick == upTo)
+                noteChanged(state, tick, static_cast<int>(idx), &state.entities[idx]->props, {});
             break;
         }
         case DeltaOp::Update: {
@@ -479,13 +510,19 @@ Result<void> StateReader::applyDeltas(WorldState& state, const Blob& deltas, std
             if (n > props.size())
                 return corrupt("update count");
             std::int64_t index = -1;
+            thread_local std::vector<int> touched;
+            touched.clear();
             for (std::uint64_t i = 0; i < n; ++i) {
                 index += 1 + static_cast<std::int64_t>(d.varint());
                 if (!d.ok() || index < 0 || static_cast<std::size_t>(index) >= props.size())
                     return corrupt("update prop index");
                 if (!d.value(props[static_cast<std::size_t>(index)]))
                     return corrupt("update value");
+                if (tick == upTo)
+                    touched.push_back(static_cast<int>(index));
             }
+            if (tick == upTo)
+                noteChanged(state, tick, static_cast<int>(idx), nullptr, touched);
             break;
         }
         case DeltaOp::Leave: {
@@ -532,11 +569,12 @@ Result<void> StateReader::withStateAt(Tick tick, const std::function<void(const 
     std::lock_guard lock(mutex_);
     if (auto sch = schemaLocked(); !sch)
         return sch.error();
-    // Segment = the latest keyframe at or before `tick` whose string tables are also known (the writer
-    // announces KEYFRAME before STRINGTABLES), or the initial segment starting at -1.
+    // Segment = the latest keyframe strictly before `tick` whose string tables are also known (the writer
+    // announces KEYFRAME before STRINGTABLES), or the initial segment starting at -1. Strictly before, so the
+    // records at `tick` itself are replayed and the changed-props set is known.
     Tick segment = -1;
     std::optional<ChunkRef> key;
-    for (auto it = keyframes_.upper_bound(tick); it != keyframes_.begin();) {
+    for (auto it = keyframes_.lower_bound(tick); it != keyframes_.begin();) {
         --it;
         if (keyTables_.count(it->first)) {
             segment = it->first;
@@ -578,6 +616,10 @@ Result<void> StateReader::withStateAt(Tick tick, const std::function<void(const 
     }
     cursor_.upTo = tick;
     cursor_.state->tick = tick;
+    if (cursor_.state->changedTick != tick) {
+        cursor_.state->changed.clear();
+        cursor_.state->changedTick = tick;
+    }
     fn(*cursor_.state);
     return {};
 }

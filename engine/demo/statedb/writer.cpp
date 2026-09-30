@@ -222,6 +222,7 @@ void StateWriter::encodeProps(Encoder& e, std::span<const PropValue> state) {
 
 void StateWriter::onStringTableChanged(Tick tick, int tableId, const StringTable& table,
                                        std::span<const int> changed, bool created) {
+    cutBefore(tick);
     auto& mirror = tables_[tableId];
     dirtyTables_.insert(tableId);
     // Instance baselines are already applied by the parser; their binary userdata would only bloat every
@@ -250,6 +251,7 @@ void StateWriter::onStringTableChanged(Tick tick, int tableId, const StringTable
 }
 
 void StateWriter::onPacket(const CommandRecord& rec) {
+    cutBefore(rec.tick);
     lastTick_ = std::max<Tick>(lastTick_, rec.tick);
     camera_.svarint(rec.tick - cameraLastTick_);
     cameraLastTick_ = rec.tick;
@@ -263,6 +265,7 @@ void StateWriter::onPacket(const CommandRecord& rec) {
 
 void StateWriter::onEntityEnter(Tick tick, const EntityRef& ref, bool newLife,
                                 std::span<const PropValue> state) {
+    cutBefore(tick);
     deltaHeader(DeltaOp::Enter, tick);
     deltas_.varint(static_cast<std::uint64_t>(ref.index));
     deltas_.varint(static_cast<std::uint64_t>(ref.classId));
@@ -292,6 +295,7 @@ void StateWriter::onEntityEnter(Tick tick, const EntityRef& ref, bool newLife,
 
 void StateWriter::onEntityUpdate(Tick tick, const EntityRef& ref, std::span<const int> changed,
                                  std::span<const PropValue> state) {
+    cutBefore(tick);
     deltaHeader(DeltaOp::Update, tick);
     deltas_.varint(static_cast<std::uint64_t>(ref.index));
     deltas_.varint(changed.size());
@@ -308,6 +312,7 @@ void StateWriter::onEntityUpdate(Tick tick, const EntityRef& ref, std::span<cons
 }
 
 void StateWriter::onEntityLeave(Tick tick, const EntityRef& ref, bool deleted) {
+    cutBefore(tick);
     deltaHeader(DeltaOp::Leave, tick);
     deltas_.varint(static_cast<std::uint64_t>(ref.index));
     deltas_.u8(deleted ? 1 : 0);
@@ -325,6 +330,7 @@ void StateWriter::onEntityLeave(Tick tick, const EntityRef& ref, bool deleted) {
 }
 
 void StateWriter::onEvent(const DemoEvent& e) {
+    cutBefore(e.tick);
     events_.svarint(e.tick - eventsLastTick_);
     eventsLastTick_ = e.tick;
     events_.u8(static_cast<std::uint8_t>(e.kind));
@@ -392,14 +398,23 @@ void StateWriter::flushSegment(Tick tick) {
     deltaLastTick_ = eventsLastTick_ = cameraLastTick_ = tick;
 }
 
+// A keyframe falls due at the end of a packet, but more packets may share its tick. The cut happens at the
+// first record of a later tick, so a segment (k, next] always holds every record with tick <= next.
+void StateWriter::cutBefore(Tick tick) {
+    if (!pendingCut_ || tick <= *pendingCut_)
+        return;
+    const Tick k = *pendingCut_;
+    pendingCut_.reset();
+    flushSegment(k);
+    writeKeyframe(k);
+    segmentStart_ = k;
+    keyframeWritten_ = true;
+}
+
 void StateWriter::onTickEnd(Tick tick) {
     lastTick_ = std::max(lastTick_, tick);
-    if (haveTables_ && (!keyframeWritten_ || tick - segmentStart_ >= ticksPerKeyframe_)) {
-        flushSegment(tick);
-        writeKeyframe(tick);
-        segmentStart_ = tick;
-        keyframeWritten_ = true;
-    }
+    if (haveTables_ && !pendingCut_ && (!keyframeWritten_ || tick - segmentStart_ >= ticksPerKeyframe_))
+        pendingCut_ = tick;
     if (cb_.onProgress)
         cb_.onProgress(tick);
 }
@@ -429,7 +444,10 @@ std::string StateWriter::manifestJson() const {
 }
 
 Result<void> StateWriter::finish(const ParseStats& stats) {
+    if (pendingCut_)
+        cutBefore(*pendingCut_ + 1);
     if (!keyframeWritten_ && haveTables_) {
+        flushSegment(lastTick_);
         writeKeyframe(lastTick_);
         segmentStart_ = lastTick_;
         keyframeWritten_ = true;

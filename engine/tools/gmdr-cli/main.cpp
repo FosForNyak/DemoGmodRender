@@ -1,10 +1,15 @@
-// gmdr-cli: headless client of the engine.
+// gmdr-cli: headless client of the engine (ADR-003: the same command bus as the app).
+//   call <cmd> [json]            run one engine command
+//   run [--no-wait] <demo> ...   open a demo through the engine and run commands on it; info <demo> =
+//   demo.info
+// Developer tools that bypass the engine:
 //   parse <demo>                 run the demo parser and print statistics as JSON
 //   import <demo> <out.gmstate>  full import in-process (same pipeline as gmdr-import)
 //   spawn-import <demo> <out>    import through the gmdr-import child process (inherited handles, Job Object)
 //   verify <demo>                import to a temp file and compare the state file with the parser's own state
 //                                at sampled ticks; also measures seek and step times
 
+#include "api/engine.h"
 #include "assets/archives.h"
 #include "assets/content.h"
 #include "assets/locator.h"
@@ -22,13 +27,17 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -515,12 +524,15 @@ int cmdContent(const std::string& statePath, const char* manual) {
     }
     // The map's pakfile. The engine lists it in gmdr-import; the CLI does it in-process.
     const std::string map = manifest->value("map", "");
+    gmdr::assets::ContentOverlay pakfile;
+    pakfile.name = "maps/" + map + ".bsp";
     if (auto slice = vfs->locate("maps/" + map + ".bsp")) {
         auto file = gmdr::File::open(slice->path, gmdr::File::Mode::Read);
         if (file) {
             auto names = gmdr::assets::listBspPakfile(*file, slice->offset, slice->size);
             if (names) {
-                vfs->setPakfile(map, *names);
+                for (const auto& n : *names)
+                    pakfile.add(n);
                 std::cerr << "pakfile of " << map << ": " << names->size() << " files\n";
             } else {
                 printError(names.error());
@@ -528,7 +540,7 @@ int cmdContent(const std::string& statePath, const char* manual) {
         }
     }
     const auto t0 = Clock::now();
-    auto report = gmdr::assets::checkContent(*manifest, *vfs);
+    auto report = gmdr::assets::checkContent(*manifest, *vfs, &pakfile);
     auto j = report.toJson();
     j["seconds"] = secondsSince(t0);
     gmdr::Json missing = gmdr::Json::array();
@@ -545,6 +557,122 @@ int cmdContent(const std::string& statePath, const char* manual) {
     j.erase("items");
     std::cout << j.dump(2) << "\n";
     return 0;
+}
+
+// ---- command bus ------------------------------------------------------------------------------------------
+
+gmdr::api::EngineConfig cliConfig() {
+    auto config = gmdr::api::makeConfig(gmdr::Json());
+    // In the build tree gmdr-import lives in a sibling folder.
+    const auto exeDir = gmdr::currentExecutablePath().parent_path();
+    for (const auto& candidate :
+         {exeDir / "gmdr-import.exe", exeDir.parent_path() / "gmdr-import" / "gmdr-import.exe",
+          exeDir / "gmdr-import", exeDir.parent_path() / "gmdr-import" / "gmdr-import"}) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(candidate, ec)) {
+            config->importer = candidate;
+            break;
+        }
+    }
+    if (const char* cache = std::getenv("GMDR_CACHE_DIR"))
+        config->cacheDir = gmdr::pathFromUtf8(cache);
+    return *config;
+}
+
+gmdr::Json parseArgs(const char* text) {
+    if (!text)
+        return gmdr::Json::object();
+    auto j = gmdr::Json::parse(text, nullptr, false);
+    return j.is_discarded() ? gmdr::Json() : j;
+}
+
+int printResult(const gmdr::Result<gmdr::Json>& r) {
+    if (r) {
+        std::cout << r->dump(2, ' ', false, gmdr::Json::error_handler_t::replace) << "\n";
+        return 0;
+    }
+    std::cout << gmdr::Json{{"error",
+                             {{"code", r.error().code},
+                              {"message", r.error().message},
+                              {"details", r.error().details}}}}
+                     .dump(2)
+              << "\n";
+    return 1;
+}
+
+// call <cmd> [json]
+int cmdCall(const char* name, const char* args) {
+    gmdr::api::Engine engine(cliConfig());
+    const auto a = parseArgs(args);
+    if (a.is_null()) {
+        std::cerr << "arguments are not valid JSON\n";
+        return 64;
+    }
+    return printResult(engine.call(name, a));
+}
+
+// run [--no-wait] <demo> <cmd> [json] [<cmd> [json] ...]: opens the demo, waits for the import (unless
+// --no-wait: then the commands run while it imports, e.g. "wait 500" pauses 500 ms), runs the commands.
+int cmdRun(int argc, char** argv) {
+    bool wait = true;
+    if (argc >= 3 && std::string(argv[2]) == "--no-wait") {
+        wait = false;
+        ++argv;
+        --argc;
+    }
+    if (argc < 3) {
+        std::cerr << "usage: gmdr-cli run [--no-wait] <demo> <cmd> [json] ...\n";
+        return 64;
+    }
+    gmdr::api::Engine engine(cliConfig());
+    std::mutex m;
+    std::condition_variable cv;
+    bool finished = false;
+    engine.setEventSink([&](const std::string& json) {
+        auto e = gmdr::Json::parse(json, nullptr, false);
+        const std::string type = e.is_object() ? e.value("type", "") : "";
+        if (type == "import.progress")
+            return;
+        std::cerr << "event " << json << "\n";
+        if (type == "import.done" || type == "import.failed") {
+            std::lock_guard lock(m);
+            finished = true;
+            cv.notify_all();
+        }
+    });
+    const auto demoPath = std::filesystem::absolute(gmdr::pathFromUtf8(argv[2]));
+    const auto t0 = Clock::now();
+    auto open = engine.call("demo.open", {{"path", gmdr::pathToUtf8(demoPath)}});
+    if (!open)
+        return printResult(open);
+    const std::string demo = (*open)["demo"];
+    if (wait && (*open)["import"]["state"] != "ready") {
+        std::unique_lock lock(m);
+        cv.wait(lock, [&] { return finished; });
+        std::cerr << "ready after " << secondsSince(t0) << " s\n";
+    }
+    int rc = 0;
+    for (int i = 3; i < argc;) {
+        const char* name = argv[i++];
+        if (std::string(name) == "wait" && i < argc) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(argv[i++])));
+            continue;
+        }
+        gmdr::Json a = gmdr::Json::object();
+        if (i < argc && argv[i][0] == '{')
+            a = parseArgs(argv[i++]);
+        if (!a.is_object()) {
+            std::cerr << "arguments are not valid JSON\n";
+            return 64;
+        }
+        a["demo"] = demo;
+        std::cout << "== " << name << " " << a.dump() << "\n";
+        const auto c0 = Clock::now();
+        rc |= printResult(engine.call(name, a));
+        std::cerr << name << ": " << 1000 * secondsSince(c0) << " ms\n";
+    }
+    (void)engine.call("demo.close", {{"demo", demo}});
+    return rc;
 }
 
 // Prints the string tables and entity counts of a state file at its last tick.
@@ -599,6 +727,60 @@ int main(int argc, char** argv) {
         return cmdVerify(argv[2]);
     if (cmd == "inspect" && argc >= 3)
         return cmdInspect(argv[2]);
+    if (cmd == "table" && argc >= 4) {
+        // table <state> <name>: entries at the last tick, userdata as hex (first 160 bytes)
+        auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(argv[2]), true);
+        if (!reader) {
+            printError(reader.error());
+            return 1;
+        }
+        auto res =
+            (*reader)->withStateAt((*reader)->lastTick(), [&](const gmdr::demo::statedb::WorldState& s) {
+                const auto* t = s.table(argv[3]);
+                if (!t)
+                    return;
+                for (const auto& [idx, e] : t->entries) {
+                    std::cout << idx << " '" << e.first << "' " << e.second.size() << "b:";
+                    for (std::size_t i = 0; i < e.second.size() && i < 160; ++i) {
+                        char hex[4];
+                        std::snprintf(hex, sizeof hex, " %02x", e.second[i]);
+                        std::cout << hex;
+                    }
+                    std::cout << "\n";
+                }
+            });
+        return res ? 0 : 1;
+    }
+    if (cmd == "schema" && argc >= 4) {
+        // schema <state> <class substring>: flattened props of matching classes
+        auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(argv[2]), true);
+        auto sch = reader ? (*reader)->schema() : decltype((*reader)->schema())(reader.error());
+        if (!sch) {
+            printError(sch.error());
+            return 1;
+        }
+        for (const auto& c : **sch) {
+            if (c.name.find(argv[3]) == std::string::npos)
+                continue;
+            std::cout << c.id << " " << c.name << " (" << c.table << ") " << c.props.size() << " props\n";
+            for (std::size_t i = 0; i < c.props.size(); ++i) {
+                const auto& p = c.props[i];
+                std::cout << "  " << i << " " << p.table << "." << p.name
+                          << " type=" << static_cast<int>(p.type) << " bits=" << p.bits << " flags=0x"
+                          << std::hex << p.flags << std::dec << "\n";
+            }
+        }
+        return 0;
+    }
+    if (cmd == "call" && argc >= 3)
+        return cmdCall(argv[2], argc >= 4 ? argv[3] : nullptr);
+    if (cmd == "run" && argc >= 3)
+        return cmdRun(argc, argv);
+    if (cmd == "info" && argc >= 3) {
+        char name[] = "demo.info";
+        char* args[] = {argv[0], argv[1], argv[2], name};
+        return cmdRun(4, args);
+    }
     if (cmd == "gmod")
         return cmdGmod(argc >= 3 ? argv[2] : nullptr);
     if (cmd == "content" && argc >= 3)
@@ -613,7 +795,16 @@ int main(int argc, char** argv) {
         std::cout << m->dump(2) << "\n";
         return 0;
     }
-    std::cerr << "usage:\n  gmdr-cli parse <demo.dem>\n  gmdr-cli import <demo.dem> <out.gmstate>\n"
-                 "  gmdr-cli spawn-import <demo.dem> <out.gmstate>\n  gmdr-cli verify <demo.dem>\n";
+    std::cerr
+        << "usage (command bus):\n"
+           "  gmdr-cli call <cmd> [json]                      one engine command, e.g. call gmod.locate\n"
+           "  gmdr-cli run [--no-wait] <demo> <cmd> [json]... open a demo and run commands on it\n"
+           "  gmdr-cli info <demo>                            demo.info after the import\n"
+           "developer tools:\n"
+           "  gmdr-cli parse | verify <demo.dem>\n"
+           "  gmdr-cli import | spawn-import <demo.dem> <out.gmstate>\n"
+           "  gmdr-cli inspect | manifest <state.gmstate>, schema <state> <class>, table <state> <name>\n"
+           "  gmdr-cli gmod [path], content <state.gmstate> [gmod path]\n"
+           "GMDR_CACHE_DIR overrides the cache folder.\n";
     return 64;
 }

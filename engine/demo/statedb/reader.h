@@ -65,6 +65,10 @@ struct WorldState {
     Tick tick = -1;
     std::vector<std::optional<EntityState>> entities; // by entity index
     std::map<int, TableState> tables;                 // by string table id
+    // Props changed by records at exactly `tick` (entity index -> prop indices, sorted); an entity that
+    // entered at `tick` lists all of its set props.
+    Tick changedTick = -2;
+    std::map<int, std::vector<int>> changed;
     const TableState* table(const std::string& name) const;
 };
 
@@ -93,6 +97,10 @@ struct EventRecord {
     std::uint64_t bitOffset = 0;
     std::uint32_t bitLength = 0;
 };
+
+// Stable 64-bit id of one entity life: the demo hash plus the life ordinal, entity index and serial.
+std::uint64_t lifeUid(const std::array<std::uint8_t, 32>& demoHash, std::uint32_t life, int index,
+                      int serial);
 
 // Reads a state.gmstate file, complete or still being written by the importer. It trusts nothing: every
 // chunk is checked (magic, sizes, XXH3, exact zstd size) and every record is bounds-checked. Thread-safe.
