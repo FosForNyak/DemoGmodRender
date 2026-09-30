@@ -5,6 +5,10 @@
 //   verify <demo>                import to a temp file and compare the state file with the parser's own state
 //                                at sampled ticks; also measures seek and step times
 
+#include "assets/archives.h"
+#include "assets/content.h"
+#include "assets/locator.h"
+#include "assets/vfs.h"
 #include "core/file.h"
 #include "core/hash.h"
 #include "core/json.h"
@@ -439,6 +443,110 @@ int cmdVerify(const std::string& demoPath) {
     }
 }
 
+// ---- content ----------------------------------------------------------------------------------------------
+
+std::optional<gmdr::assets::GmodInstall> locate(const char* manual) {
+    std::optional<std::filesystem::path> root;
+    if (manual)
+        root = gmdr::pathFromUtf8(manual);
+    auto g = gmdr::assets::locateGmod(root);
+    if (!g) {
+        printError(g.error());
+        return std::nullopt;
+    }
+    return std::move(*g);
+}
+
+int cmdGmod(const char* manual) {
+    auto g = locate(manual);
+    if (!g)
+        return 1;
+    auto vfs = gmdr::assets::Vfs::build(*g);
+    if (!vfs) {
+        printError(vfs.error());
+        return 1;
+    }
+    gmdr::Json mounts = gmdr::Json::array();
+    for (const auto& m : g->mounts)
+        mounts.push_back(
+            {{"name", m.name}, {"path", gmdr::pathToUtf8(m.path)}, {"origin", m.origin}, {"found", m.found}});
+    const auto& s = vfs->stats();
+    gmdr::Json j = {
+        {"origin", g->origin},
+        {"steam", gmdr::pathToUtf8(g->steamRoot)},
+        {"gmod", gmdr::pathToUtf8(g->gmodRoot)},
+        {"libraries", g->libraries.size()},
+        {"mounts", mounts},
+        {"vfs",
+         {{"seconds", s.seconds},
+          {"vpks", s.vpks},
+          {"vpkFiles", s.vpkFiles},
+          {"gmas", s.gmas},
+          {"gmaFiles", s.gmaFiles},
+          {"badGmas", s.badGmas},
+          {"addonFolders", s.addonFolders},
+          {"workshopLegacy", s.workshopLegacy},
+          {"workshopCaches", s.workshopCaches}}},
+        {"warnings", g->warnings},
+        {"vfsWarnings", vfs->warnings()},
+    };
+    std::cout << j.dump(2) << "\n";
+    return 0;
+}
+
+int cmdContent(const std::string& statePath, const char* manual) {
+    auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(statePath), true);
+    if (!reader) {
+        printError(reader.error());
+        return 1;
+    }
+    auto manifest = (*reader)->manifest();
+    if (!manifest) {
+        printError(manifest.error());
+        return 1;
+    }
+    auto g = locate(manual);
+    if (!g)
+        return 1;
+    auto vfs = gmdr::assets::Vfs::build(*g);
+    if (!vfs) {
+        printError(vfs.error());
+        return 1;
+    }
+    // The map's pakfile. The engine lists it in gmdr-import; the CLI does it in-process.
+    const std::string map = manifest->value("map", "");
+    if (auto slice = vfs->locate("maps/" + map + ".bsp")) {
+        auto file = gmdr::File::open(slice->path, gmdr::File::Mode::Read);
+        if (file) {
+            auto names = gmdr::assets::listBspPakfile(*file, slice->offset, slice->size);
+            if (names) {
+                vfs->setPakfile(map, *names);
+                std::cerr << "pakfile of " << map << ": " << names->size() << " files\n";
+            } else {
+                printError(names.error());
+            }
+        }
+    }
+    const auto t0 = Clock::now();
+    auto report = gmdr::assets::checkContent(*manifest, *vfs);
+    auto j = report.toJson();
+    j["seconds"] = secondsSince(t0);
+    gmdr::Json missing = gmdr::Json::array();
+    std::map<std::string, std::uint64_t> where;
+    for (const auto& item : j["items"]) {
+        const std::string status = item["status"];
+        if (status == "missing" || status == "workshop-missing" || status == "workshop-legacy")
+            missing.push_back(item);
+        if (item.contains("where"))
+            ++where[item["where"].get<std::string>()];
+    }
+    j["missing"] = missing;
+    j["foundIn"] = where;
+    j.erase("items");
+    std::cout << j.dump(2) << "\n";
+    return 0;
+}
+
 // Prints the string tables and entity counts of a state file at its last tick.
 int cmdInspect(const std::string& statePath) {
     auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(statePath), true);
@@ -491,6 +599,20 @@ int main(int argc, char** argv) {
         return cmdVerify(argv[2]);
     if (cmd == "inspect" && argc >= 3)
         return cmdInspect(argv[2]);
+    if (cmd == "gmod")
+        return cmdGmod(argc >= 3 ? argv[2] : nullptr);
+    if (cmd == "content" && argc >= 3)
+        return cmdContent(argv[2], argc >= 4 ? argv[3] : nullptr);
+    if (cmd == "manifest" && argc >= 3) {
+        auto reader = gmdr::demo::statedb::StateReader::open(gmdr::pathFromUtf8(argv[2]), true);
+        auto m = reader ? (*reader)->manifest() : gmdr::Result<gmdr::Json>(reader.error());
+        if (!m) {
+            printError(m.error());
+            return 1;
+        }
+        std::cout << m->dump(2) << "\n";
+        return 0;
+    }
     std::cerr << "usage:\n  gmdr-cli parse <demo.dem>\n  gmdr-cli import <demo.dem> <out.gmstate>\n"
                  "  gmdr-cli spawn-import <demo.dem> <out.gmstate>\n  gmdr-cli verify <demo.dem>\n";
     return 64;

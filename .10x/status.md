@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 4 — Implementation (T1–T13 done; next T14 assets); phases 0–3 complete
+**Phase:** 4 — Implementation (T1–T15 done; next T16 api); phases 0–3 complete
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -33,10 +33,11 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 ## Phase 4 progress
 - T1–T10 (commit ec89876): repo scaffolding, `core`, `demo` parser. C++ output equals `ref.py` on both demos.
 - T11–T13: state file writer/reader (`engine/demo/statedb/`), `demo/import` pipeline, `gmdr-import` child (inherited handles, Job Object 4 GB, mitigation policies, JSON lines), `gmdr-cli import|spawn-import|verify|inspect`. Verified on both demos: 0 mismatches, ratio 0.28/0.34, import 6.5 s for 183 MB, seek ≤ 26 ms. See ADR-005 implementation notes.
-- Tests: 30 cases / 28 808 assertions (debug + release).
+- T14–T15: `engine/assets` — VDF, Steam/GMod locator (registry, libraryfolders.vdf, appmanifest, mount.cfg, mountdepots.txt), VPK, GMA, ZIP, BSP pakfile (listed inside `gmdr-import --list-pakfile`), VFS in GMod order, content check. On this PC: 118 GMAs + 15 VPKs (263k files) indexed in 0.38 s; both demos: map found in a Workshop GMA, 11/12 Workshop addons installed, missing = ~70 custom footstep sounds + addon 129739986 (legacy `_legacy.bin` only). Milestone M4 met.
+- Tests: 36 cases / 28 906 assertions (debug + release), incl. random-corruption runs over all archive parsers.
 
 ## Next
-- T14–T15 assets (VDF, Steam/GMod locator, VPK, GMA, ZIP, VFS, content check) → T16–T17 api/cli → T18–T22 app → T23–T24 hardening + CI.
+- T16–T17 api (Engine, sessions, v1 commands, C ABI) + CLI → T18–T22 app → T23–T24 hardening + CI.
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -28,6 +29,7 @@ public:
     }
 
     bool u8(std::uint8_t& v) { return read(v); }
+    bool u16(std::uint16_t& v) { return read(v); }
     bool i32(std::int32_t& v) { return read(v); }
     bool u32(std::uint32_t& v) { return read(v); }
     bool u64(std::uint64_t& v) { return read(v); }
@@ -43,6 +45,23 @@ public:
             ++len;
         out.assign(reinterpret_cast<const char*>(field.data()), len);
         return true;
+    }
+
+    // A null-terminated string of at most `maxLen` bytes (the terminator is consumed).
+    bool cstring(std::size_t maxLen, std::string& out) {
+        if (!ok_)
+            return false;
+        const std::size_t limit = std::min(maxLen + 1, data_.size() - pos_);
+        for (std::size_t i = 0; i < limit; ++i) {
+            if (data_[pos_ + i] == 0) {
+                out.assign(reinterpret_cast<const char*>(data_.data() + pos_), i);
+                pos_ += i + 1;
+                return true;
+            }
+        }
+        ok_ = false;
+        out.clear();
+        return false;
     }
 
     bool bytes(std::size_t n, std::span<const std::uint8_t>& out) {

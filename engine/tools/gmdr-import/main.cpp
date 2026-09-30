@@ -10,10 +10,13 @@
 //   {"error":{"code":"..","message":"..","details":".."}}                            (last line on failure)
 //
 // Usage: gmdr-import --in-handle N --out-handle M [--hash <64 hex chars>]
+//        gmdr-import --list-pakfile --in-handle N --offset O --size S  ->  {"pakfile":{"files":[...]}}
 
+#include "assets/archives.h"
 #include "core/file.h"
 #include "core/hash.h"
 #include "core/json.h"
+#include "core/text.h"
 #include "demo/import.h"
 #include "demo/statedb/format.h"
 
@@ -107,23 +110,66 @@ bool parseHash(const std::string& hex, gmdr::Blake3Digest& out) {
     return true;
 }
 
+// --list-pakfile: lists the pakfile of a map given as a byte range of the inherited file.
+int listPakfile(std::intptr_t inHandle, std::uint64_t offset, std::uint64_t size) {
+    if (!handlesValid(inHandle, inHandle))
+        return fail(gmdr::makeError("import.bad_handle", "inherited handles are not valid"));
+    gmdr::File in = gmdr::File::adopt(inHandle);
+    auto names = gmdr::assets::listBspPakfile(in, offset, size);
+    if (!names)
+        return fail(names.error());
+    gmdr::Json files = gmdr::Json::array();
+    for (const auto& n : *names)
+        files.push_back(gmdr::sanitizeUtf8(n));
+    emit({{"pakfile", {{"files", std::move(files)}}}});
+    return 0;
+}
+
+bool parseU64(const char* s, std::uint64_t& out) {
+    char* end = nullptr;
+    const unsigned long long v = std::strtoull(s, &end, 10);
+    if (!end || *end != '\0' || s[0] == '-')
+        return false;
+    out = v;
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     harden();
     std::intptr_t inHandle = 0, outHandle = 0;
     std::string hashHex;
-    for (int i = 1; i + 1 < argc; i += 2) {
+    bool pakfileMode = false;
+    std::uint64_t offset = 0, size = 0;
+    for (int i = 1; i < argc; i += 2) {
         const std::string key = argv[i];
+        if (key == "--list-pakfile") {
+            pakfileMode = true;
+            --i;
+            continue;
+        }
+        if (i + 1 >= argc)
+            return fail(gmdr::makeError("import.usage", "missing value", key));
         if (key == "--in-handle" && parseHandle(argv[i + 1], inHandle))
             continue;
         if (key == "--out-handle" && parseHandle(argv[i + 1], outHandle))
+            continue;
+        if (key == "--offset" && parseU64(argv[i + 1], offset))
+            continue;
+        if (key == "--size" && parseU64(argv[i + 1], size))
             continue;
         if (key == "--hash") {
             hashHex = argv[i + 1];
             continue;
         }
         return fail(gmdr::makeError("import.usage", "bad arguments", key));
+    }
+    if (pakfileMode) {
+        if (!inHandle || !size)
+            return fail(gmdr::makeError(
+                "import.usage", "usage: gmdr-import --list-pakfile --in-handle N --offset O --size S"));
+        return listPakfile(inHandle, offset, size);
     }
     if (!inHandle || !outHandle)
         return fail(
