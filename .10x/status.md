@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 4 — Implementation (starting T1); phases 0–3 complete
+**Phase:** 4 — Implementation (T1–T13 done; next T14 assets); phases 0–3 complete
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -30,8 +30,13 @@ Both local demos decode fully to entity state with `.10x/spikes/demo-format/ref.
 - 25_07_2025.dem: 148 767 packets, 9 145 enters, 6.28 M deltas, 1 error (known odd signon packet 3).
 All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-bit userdata length, varint ints, type 3 = double, type 7 = NW2 table, truncated dem_stringtables).
 
+## Phase 4 progress
+- T1–T10 (commit ec89876): repo scaffolding, `core`, `demo` parser. C++ output equals `ref.py` on both demos.
+- T11–T13: state file writer/reader (`engine/demo/statedb/`), `demo/import` pipeline, `gmdr-import` child (inherited handles, Job Object 4 GB, mitigation policies, JSON lines), `gmdr-cli import|spawn-import|verify|inspect`. Verified on both demos: 0 mismatches, ratio 0.28/0.34, import 6.5 s for 183 MB, seek ≤ 26 ms. See ADR-005 implementation notes.
+- Tests: 30 cases / 28 808 assertions (debug + release).
+
 ## Next
-- Phase 4: T1 repo scaffolding → T2/T3 core → T4–T10 demo (port ref.py) → T11–T13 state base + importer → T14–T15 assets → T16–T17 api/cli → T18–T22 app → T23–T24 hardening + CI.
+- T14–T15 assets (VDF, Steam/GMod locator, VPK, GMA, ZIP, VFS, content check) → T16–T17 api/cli → T18–T22 app → T23–T24 hardening + CI.
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)

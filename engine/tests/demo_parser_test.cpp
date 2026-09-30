@@ -285,3 +285,22 @@ TEST_CASE("coordinate decoders") {
     CHECK(readBitNormal(r) == doctest::Approx(-1.0));
     CHECK_FALSE(r.overflowed());
 }
+
+TEST_CASE("timeline clock: signon belongs to tick 0 and the timeline never goes back") {
+    TimelineClock clock;
+    auto rec = [](DemoCommand cmd, std::int32_t tick) {
+        CommandRecord r;
+        r.cmd = cmd;
+        r.tick = tick;
+        return r;
+    };
+    CHECK(clock.next(rec(DemoCommand::Signon, 96)) == 0);
+    CHECK(clock.next(rec(DemoCommand::DataTables, 289)) == 0);
+    CHECK(clock.next(rec(DemoCommand::Signon, 304)) == 0);
+    CHECK(clock.next(rec(DemoCommand::SyncTick, 0)) == 0);
+    CHECK(clock.next(rec(DemoCommand::Packet, 0)) == 0);
+    CHECK(clock.next(rec(DemoCommand::Packet, 5)) == 5);
+    CHECK(clock.next(rec(DemoCommand::ConsoleCmd, 5)) == 5);
+    CHECK(clock.next(rec(DemoCommand::Packet, 4)) == 5);
+    CHECK(clock.next(rec(DemoCommand::Packet, 7)) == 7);
+}

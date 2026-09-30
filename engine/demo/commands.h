@@ -35,6 +35,25 @@ struct CommandRecord {
     CmdInfo info; // packets and signon only
 };
 
+// Maps command ticks onto the demo timeline. Everything before the first dem_packet (signon packets,
+// datatables) carries server ticks unrelated to playback and belongs to tick 0; after that the timeline
+// never goes back (a stray lower tick is clamped), which the state file relies on.
+class TimelineClock {
+public:
+    std::int32_t next(const CommandRecord& rec) {
+        if (!playing_ && rec.cmd != DemoCommand::Packet)
+            return 0;
+        playing_ = true;
+        if (rec.tick > last_)
+            last_ = rec.tick;
+        return last_;
+    }
+
+private:
+    bool playing_ = false;
+    std::int32_t last_ = 0;
+};
+
 // Walks the command stream of a demo held in memory (usually memory-mapped). Validates every length
 // against the file size; never reads outside the buffer.
 class CommandReader {

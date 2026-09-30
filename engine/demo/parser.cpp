@@ -75,6 +75,7 @@ Result<void> DemoParser::run() {
     sink_.onHeader(*header);
 
     CommandReader reader(file_);
+    TimelineClock clock;
     CommandRecord rec;
     while (true) {
         if (options_.cancelled && options_.cancelled())
@@ -88,6 +89,7 @@ Result<void> DemoParser::run() {
         }
         if (!*more)
             break;
+        rec.tick = clock.next(rec);
         switch (rec.cmd) {
         case DemoCommand::Signon:
         case DemoCommand::Packet: {
