@@ -1,0 +1,27 @@
+# build output
+/build/
+/engine/build/
+/engine/out/
+/app/src-tauri/target/
+/app/src-tauri/binaries/
+/app/ui/dist/
+/app/ui/node_modules/
+/app/ui/src/vendor/anvil/tokens.css
+
+# vcpkg
+/engine/vcpkg_installed/
+
+# local corpus and caches (demos contain other players' data, never commit)
+*.dem
+/corpus/
+*.gmstate
+*.gmstate.part
+
+# editors / OS
+.vs/
+.vscode/
+.idea/
+*.user
+Thumbs.db
+.DS_Store
+__pycache__/

@@ -1,0 +1,20 @@
+find_package(doctest CONFIG REQUIRED)
+
+set(GMDR_TEST_SOURCES main.cpp core_bit_reader_test.cpp core_misc_test.cpp)
+foreach(module demo assets api)
+    file(GLOB module_tests CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${module}_*_test.cpp)
+    if(TARGET gmdr_${module})
+        list(APPEND GMDR_TEST_SOURCES ${module_tests})
+    endif()
+endforeach()
+
+add_executable(gmdr_tests ${GMDR_TEST_SOURCES})
+target_link_libraries(gmdr_tests PRIVATE gmdr_warnings gmdr_core doctest::doctest)
+foreach(module demo assets api)
+    if(TARGET gmdr_${module})
+        target_link_libraries(gmdr_tests PRIVATE gmdr_${module})
+    endif()
+endforeach()
+target_compile_definitions(gmdr_tests PRIVATE GMDR_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+
+add_test(NAME gmdr_tests COMMAND gmdr_tests)
