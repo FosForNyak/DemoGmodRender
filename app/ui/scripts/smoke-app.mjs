@@ -2,7 +2,8 @@
 // checks that the UI rendered and that the engine answers through Tauri IPC, saves a screenshot, closes the app.
 // Usage: node ui/scripts/smoke-app.mjs [path/to/demogmodrender.exe] [screenshot.png]
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,8 +12,25 @@ const exe = process.argv[2] ?? join(here, '..', '..', 'src-tauri', 'target', 're
 const shot = process.argv[3] ?? join(process.env.TEMP ?? '.', 'gmdr-smoke.png');
 const port = 9229;
 
+// Own cache and settings, so the run leaves the user's recent list and cache alone; a tiny synthetic demo
+// (header + dem_stop) is imported through the real app to check the importer sandbox.
+const scratch = mkdtempSync(join(tmpdir(), 'gmdr-smoke-'));
+const demoPath = join(scratch, 'smoke.dem');
+const demo = Buffer.alloc(1072 + 5);
+demo.write('HL2DEMO', 0, 'ascii');
+demo.writeInt32LE(3, 8);
+demo.writeInt32LE(24, 12);
+demo.write('gm_smoke', 16 + 520, 'ascii');
+demo[1072] = 7; // dem_stop
+writeFileSync(demoPath, demo);
+
 const app = spawn(exe, [], {
-  env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
+  env: {
+    ...process.env,
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+    GMDR_CACHE_DIR: join(scratch, 'cache'),
+    GMDR_CONFIG_DIR: join(scratch, 'config'),
+  },
   stdio: 'inherit',
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -74,6 +92,23 @@ try {
   const csp = await evaluate(`fetch('https://example.com').then(() => 'allowed', () => 'blocked')`);
   check('CSP blocks remote fetch', csp === 'blocked', csp);
 
+  const engineCall = (cmd, args) =>
+    evaluate(
+      `window.__TAURI_INTERNALS__.invoke('engine_call', { request: ${JSON.stringify(JSON.stringify({ cmd, args }))} }).then(JSON.parse)`,
+    );
+  const opened = await engineCall('demo.open', { path: demoPath });
+  check('demo.open (synthetic demo)', opened?.ok === true, opened?.ok ? opened.result.demo : JSON.stringify(opened?.error));
+  if (opened?.ok) {
+    let info;
+    for (let i = 0; i < 40; i++) {
+      info = await engineCall('demo.info', { demo: opened.result.demo });
+      if (info?.ok && info.result.import.state !== 'indexing' && info.result.import.state !== 'importing') break;
+      await sleep(250);
+    }
+    check('import finished', info?.result?.import?.state === 'ready', info?.result?.import?.state);
+    check('importer ran in its AppContainer', info?.result?.import?.sandbox === 'appcontainer', info?.result?.import?.sandbox);
+  }
+
   await sleep(800);
   const png = await send('Page.captureScreenshot', { format: 'png' });
   if (png.result?.data) {
@@ -85,5 +120,7 @@ try {
   check('smoke test', false, String(e));
 } finally {
   app.kill();
+  await sleep(500);
+  rmSync(scratch, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

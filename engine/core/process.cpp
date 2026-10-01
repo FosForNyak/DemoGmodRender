@@ -6,6 +6,7 @@
 #include <utility>
 
 #ifdef _WIN32
+#include <userenv.h>
 #include <windows.h>
 #else
 #include <cerrno>
@@ -84,6 +85,8 @@ struct ChildProcess::Impl {
     HANDLE stdoutRead = nullptr;
     std::string buffer;
     bool eof = false;
+    bool appContainer = false;
+    std::string sandboxNote;
 
     ~Impl() {
         if (stdoutRead)
@@ -109,26 +112,6 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
         inherit.push_back(hh);
     }
 
-    SIZE_T attrSize = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
-    std::vector<unsigned char> attrBuf(attrSize);
-    auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
-    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize) ||
-        !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit.data(),
-                                   inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
-        CloseHandle(readEnd);
-        CloseHandle(writeEnd);
-        return winError("core.process_attrs", "cannot set up the inherited handle list");
-    }
-
-    STARTUPINFOEXW si{};
-    si.StartupInfo.cb = sizeof(si);
-    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    si.StartupInfo.hStdInput = nullptr;
-    si.StartupInfo.hStdOutput = writeEnd;
-    si.StartupInfo.hStdError = nullptr;
-    si.lpAttributeList = attrs;
-
     const std::wstring exe = options.executable.wstring();
     std::wstring cmd;
     appendQuoted(cmd, exe);
@@ -136,18 +119,90 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
         cmd.push_back(L' ');
         appendQuoted(cmd, widen(a));
     }
+    // The child starts in its own folder: an AppContainer cannot use the parent's working directory.
+    const std::wstring cwd = options.executable.parent_path().wstring();
+
+    // One CreateProcess attempt, with or without the AppContainer. Returns the Win32 error (0 = started).
+    auto create = [&](PSID appContainerSid, PROCESS_INFORMATION& pi) -> DWORD {
+        const DWORD attrCount = appContainerSid ? 2 : 1;
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, attrCount, 0, &attrSize);
+        std::vector<unsigned char> attrBuf(attrSize);
+        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+        if (!InitializeProcThreadAttributeList(attrs, attrCount, 0, &attrSize))
+            return GetLastError();
+        SECURITY_CAPABILITIES caps{};
+        caps.AppContainerSid = appContainerSid;
+        bool ok = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit.data(),
+                                            inherit.size() * sizeof(HANDLE), nullptr, nullptr) != 0;
+        if (ok && appContainerSid)
+            ok = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &caps,
+                                           sizeof(caps), nullptr, nullptr) != 0;
+        DWORD err = ok ? 0 : GetLastError();
+        if (ok) {
+            STARTUPINFOEXW si{};
+            si.StartupInfo.cb = sizeof(si);
+            si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            si.StartupInfo.hStdInput = nullptr;
+            si.StartupInfo.hStdOutput = writeEnd;
+            si.StartupInfo.hStdError = nullptr;
+            si.lpAttributeList = attrs;
+            std::wstring cmdCopy = cmd;
+            if (!CreateProcessW(exe.c_str(), cmdCopy.data(), nullptr, nullptr, TRUE,
+                                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr,
+                                cwd.empty() ? nullptr : cwd.c_str(), &si.StartupInfo, &pi))
+                err = GetLastError();
+        }
+        DeleteProcThreadAttributeList(attrs);
+        return err;
+    };
 
     PROCESS_INFORMATION pi{};
-    const BOOL created = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE,
-                                        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
-                                        nullptr, nullptr, &si.StartupInfo, &pi);
-    DeleteProcThreadAttributeList(attrs);
+    bool inAppContainer = false;
+    std::string sandboxNote;
+    DWORD err = 0;
+    bool started = false;
+    if (!options.appContainer.empty()) {
+        const std::wstring name = widen(options.appContainer);
+        PSID sid = nullptr;
+        HRESULT hr = CreateAppContainerProfile(name.c_str(), name.c_str(), L"DemoGmodRender demo importer",
+                                               nullptr, 0, &sid);
+        if (hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS))
+            hr = DeriveAppContainerSidFromAppContainerName(name.c_str(), &sid);
+        if (FAILED(hr) || !sid) {
+            sandboxNote =
+                "AppContainer profile unavailable (HRESULT " + std::to_string(static_cast<long>(hr)) + ")";
+        } else {
+            err = create(sid, pi);
+            FreeSid(sid);
+            if (err == 0) {
+                started = inAppContainer = true;
+            } else {
+                sandboxNote = "AppContainer start failed (win32 error " + std::to_string(err) + ")";
+                if (err == ERROR_ACCESS_DENIED)
+                    sandboxNote += ": the program folder is not readable by AppContainer apps "
+                                   "(scripts/allow-appcontainer.cmd)";
+            }
+        }
+        if (!started && !options.appContainerFallback) {
+            CloseHandle(writeEnd);
+            CloseHandle(readEnd);
+            for (auto h : options.inheritHandles)
+                SetHandleInformation(reinterpret_cast<HANDLE>(h), HANDLE_FLAG_INHERIT, 0);
+            return makeError("core.process_appcontainer", "cannot start the process in its AppContainer",
+                             sandboxNote);
+        }
+    }
+    if (!started) {
+        err = create(nullptr, pi);
+        started = err == 0;
+    }
     CloseHandle(writeEnd);
     for (auto h : options.inheritHandles)
         SetHandleInformation(reinterpret_cast<HANDLE>(h), HANDLE_FLAG_INHERIT, 0);
-    if (!created) {
+    if (!started) {
         CloseHandle(readEnd);
-        return winError("core.process_create", "CreateProcess failed");
+        return makeError("core.process_create", "CreateProcess failed", "win32 error " + std::to_string(err));
     }
 
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
@@ -184,6 +239,8 @@ Result<ChildProcess> ChildProcess::spawn(const ProcessOptions& options) {
     child.impl_->process = pi.hProcess;
     child.impl_->job = job;
     child.impl_->stdoutRead = readEnd;
+    child.impl_->appContainer = inAppContainer;
+    child.impl_->sandboxNote = std::move(sandboxNote);
     return child;
 }
 
@@ -254,6 +311,8 @@ struct ChildProcess::Impl {
     bool eof = false;
     bool reaped = false;
     int exitCode = -1;
+    bool appContainer = false;
+    std::string sandboxNote;
 
     ~Impl() {
         if (stdoutRead >= 0)
@@ -370,6 +429,15 @@ std::filesystem::path currentExecutablePath() {
 #endif
 
 ChildProcess::ChildProcess() : impl_(std::make_unique<Impl>()) {}
+bool ChildProcess::inAppContainer() const {
+    return impl_ && impl_->appContainer;
+}
+
+const std::string& ChildProcess::sandboxNote() const {
+    static const std::string kEmpty;
+    return impl_ ? impl_->sandboxNote : kEmpty;
+}
+
 ChildProcess::~ChildProcess() = default;
 ChildProcess::ChildProcess(ChildProcess&&) noexcept = default;
 ChildProcess& ChildProcess::operator=(ChildProcess&&) noexcept = default;

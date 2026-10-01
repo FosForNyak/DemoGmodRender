@@ -69,6 +69,6 @@ Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error"
 - VFS rejects paths with `..` or `:`.
 
 ## Open
-- **AppContainer for gmdr-import (T23, needs the user's decision):** it requires a per-user AppContainer profile (registry) and read/execute for ALL APPLICATION PACKAGES on the importer's folder. Not done without explicit consent; the importer runs in the Job Object with mitigation policies meanwhile.
+- **AppContainer for gmdr-import (T23): done** with the owner's approval. `ProcessOptions::appContainer` (+ fallback with `sandboxNote()`); the engine starts the importer and the pakfile listing in `DemoGmodRender.Importer`; `demo.info` reports `import.sandbox`. Creating the profile is the only persistent change on the machine (`gmdr-cli sandbox-remove` undoes it); no ACL change was needed (the image is opened with the parent's rights, only System32 DLLs load). `scripts/allow-appcontainer.cmd` exists for folders whose own DLLs the importer would load.
 - Property-history queries (graphs) will need a derived index; not in this sub-project.
 - XOR-with-previous encoding for float updates could shrink DELTAS further; not needed for the 0.4 target.

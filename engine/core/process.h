@@ -12,9 +12,15 @@ namespace gmdr {
 
 struct ProcessOptions {
     std::filesystem::path executable;
-    std::vector<std::string> args;           // UTF-8, without argv[0]
+    std::vector<std::string> args;             // UTF-8, without argv[0]
     std::vector<std::intptr_t> inheritHandles; // the only handles the child may inherit (besides its stdout)
-    std::uint64_t memoryLimitBytes = 0;       // 0 = no limit
+    std::uint64_t memoryLimitBytes = 0;        // 0 = no limit
+    // Windows: run inside this AppContainer (profile created on first use, no capabilities): the child can
+    // use the handles it inherits but cannot open user files by path. Empty = no AppContainer.
+    std::string appContainer;
+    // If the AppContainer cannot be used (no profile API, executable not readable by AppContainer apps),
+    // start without it instead of failing; sandboxNote() then says why.
+    bool appContainerFallback = true;
 };
 
 // A restricted child process whose stdout is a pipe read line by line.
@@ -36,6 +42,10 @@ public:
     void kill();
     // Waits for exit and returns the exit code.
     int wait();
+    // True when the child runs inside the requested AppContainer.
+    bool inAppContainer() const;
+    // Why the AppContainer was not used (empty when it was, or when none was requested).
+    const std::string& sandboxNote() const;
 
 private:
     struct Impl;

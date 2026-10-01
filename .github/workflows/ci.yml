@@ -42,8 +42,10 @@ jobs:
       - name: Build
         working-directory: engine
         run: cmake --build --preset windows-msvc-debug
-      - name: Test (unit + fuzz smoke)
+      - name: Test (unit + fuzz smoke; the importer must run in its AppContainer)
         working-directory: engine
+        env:
+          GMDR_REQUIRE_APPCONTAINER: '1'
         run: ctest --preset windows-msvc-debug
 
   engine-linux:

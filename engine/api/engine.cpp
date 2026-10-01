@@ -20,6 +20,7 @@
 #include <charconv>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <map>
 #include <set>
 
@@ -111,8 +112,13 @@ Result<EngineConfig> makeConfig(const Json& o) {
         }
         return fallback;
     };
-    GMDR_ASSIGN(c.cacheDir, path("cacheDir", userCacheDir()));
-    GMDR_ASSIGN(c.configDir, path("configDir", userConfigDir()));
+    // Environment overrides (tests, smoke runs) sit between the defaults and explicit JSON overrides.
+    auto envPath = [](const char* name, fs::path fallback) {
+        const char* v = std::getenv(name);
+        return v && *v ? pathFromUtf8(v) : fallback;
+    };
+    GMDR_ASSIGN(c.cacheDir, path("cacheDir", envPath("GMDR_CACHE_DIR", userCacheDir())));
+    GMDR_ASSIGN(c.configDir, path("configDir", envPath("GMDR_CONFIG_DIR", userConfigDir())));
 #ifdef _WIN32
     const char* importerName = "gmdr-import.exe";
 #else
@@ -267,7 +273,8 @@ struct Engine::Impl {
                     {"cacheDir", pathToUtf8(config.cacheDir)},
                     {"configDir", pathToUtf8(config.configDir)},
                     {"importer", pathToUtf8(config.importer)},
-                    {"importerFound", fs::is_regular_file(config.importer, ec)}};
+                    {"importerFound", fs::is_regular_file(config.importer, ec)},
+                    {"importerAppContainer", config.importerAppContainer}};
     }
 
     Result<Json> settingsGet(const Json& args) {
@@ -404,6 +411,7 @@ struct Engine::Impl {
                   {"import",
                    {{"state", importStateName(st.state)},
                     {"cached", st.cached},
+                    {"sandbox", st.sandbox},
                     {"firstTick", st.firstTick},
                     {"lastTick", st.lastTick},
                     {"readyTick", st.readyTick}}}};
@@ -884,6 +892,7 @@ struct Engine::Impl {
                      std::to_string(slice->size)};
         opts.inheritHandles = {file->nativeHandle()};
         opts.memoryLimitBytes = 1ull << 30;
+        opts.appContainer = config.importerAppContainer;
         auto child = ChildProcess::spawn(opts);
         if (!child)
             return child.error();

@@ -12,3 +12,7 @@ target_include_directories(gmdr_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(gmdr_core
     PUBLIC nlohmann_json::nlohmann_json
     PRIVATE gmdr_warnings ${GMDR_ZSTD} BLAKE3::blake3 xxHash::xxhash)
+if(WIN32)
+    # userenv: AppContainer profiles for the importer sandbox.
+    target_link_libraries(gmdr_core PUBLIC userenv)
+endif()

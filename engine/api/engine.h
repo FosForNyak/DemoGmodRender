@@ -19,6 +19,13 @@ struct EngineConfig {
     std::filesystem::path importer;  // default: gmdr-import next to the running executable
     std::uint64_t importerMemoryBytes = 4ull << 30;
     std::chrono::seconds importerIdleTimeout{60};
+    // Windows: AppContainer for gmdr-import (empty = none). Falls back to the Job Object alone, with a log
+    // warning, when the importer's folder is not readable by AppContainer apps.
+#ifdef _WIN32
+    std::string importerAppContainer = "DemoGmodRender.Importer";
+#else
+    std::string importerAppContainer; // POSIX: fork/exec with RLIMIT_AS, no AppContainer equivalent
+#endif
 };
 
 // Fills defaults and applies {"cacheDir", "configDir", "importer"} overrides.

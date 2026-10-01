@@ -57,6 +57,8 @@ public:
         Tick firstTick = 0, lastTick = -1, readyTick = -1;
         std::optional<Error> error;
         Json stats;
+        std::string sandbox;     // "appcontainer" or "job"
+        std::string sandboxNote; // why the AppContainer was not used
     };
     Status status() const;
     std::shared_ptr<demo::statedb::StateReader> reader() const;

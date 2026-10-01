@@ -39,6 +39,7 @@ fn main() {
         println!("cargo:rustc-link-lib=static={lib}");
     }
     println!("cargo:rustc-link-lib=dylib=advapi32");
+    println!("cargo:rustc-link-lib=dylib=userenv"); // AppContainer profiles for the importer
 
     // Tauri expects sidecars as binaries/<name>-<target triple>.exe.
     let sidecar_dir = manifest.join("binaries");

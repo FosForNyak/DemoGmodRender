@@ -104,6 +104,7 @@ Result<void> Session::startImport(const EngineConfig& config, Emit emit) {
                  "--hash",       hash.hex()};
     opts.inheritHandles = {in->nativeHandle(), out->nativeHandle()};
     opts.memoryLimitBytes = config.importerMemoryBytes;
+    opts.appContainer = config.importerAppContainer;
     auto child = ChildProcess::spawn(opts);
     if (!child)
         return child.error();
@@ -114,9 +115,14 @@ Result<void> Session::startImport(const EngineConfig& config, Emit emit) {
         childRunning_ = true;
         status_ = Status{};
         status_.state = ImportState::Indexing;
+        status_.sandbox = child_->inAppContainer() ? "appcontainer" : "job";
+        status_.sandboxNote = child_->sandboxNote();
     }
     started_ = std::chrono::steady_clock::now();
     lastActivity_ = nowTicks();
+    if (!config.importerAppContainer.empty() && !child_->inAppContainer())
+        emit("log", {{"level", "warn"},
+                     {"message", "the importer runs without its AppContainer: " + child_->sandboxNote()}});
     supervisor_ = std::thread([this, emit = std::move(emit)] { supervise(emit); });
     return {};
 }

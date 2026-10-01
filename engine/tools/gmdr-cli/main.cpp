@@ -44,6 +44,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <userenv.h>
+#include <windows.h>
 #endif
 
 namespace {
@@ -1064,6 +1066,16 @@ int main(int argc, char** argv) {
         return cmdServe();
     if (cmd == "gate" && argc >= 3)
         return cmdGate(argv[2]);
+#ifdef _WIN32
+    if (cmd == "sandbox-remove") {
+        // Removes the importer's AppContainer profile (per-user registry entry and %LOCALAPPDATA%\Packages
+        // folder) that the first sandboxed import created; it is recreated on the next import.
+        const HRESULT hr = DeleteAppContainerProfile(L"DemoGmodRender.Importer");
+        std::cout << (SUCCEEDED(hr) ? "removed the DemoGmodRender.Importer AppContainer profile\n"
+                                    : "no AppContainer profile to remove\n");
+        return SUCCEEDED(hr) ? 0 : 1;
+    }
+#endif
     if (cmd == "call" && argc >= 3)
         return cmdCall(argv[2], argc >= 4 ? argv[3] : nullptr);
     if (cmd == "run" && argc >= 3)

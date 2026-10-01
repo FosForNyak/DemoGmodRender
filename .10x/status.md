@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 6 done — sub-project complete pending CI and the owner's AppContainer decision
+**Phase:** 6 done — sub-project complete pending CI and the owner's merge
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -47,7 +47,8 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 - Phase 6: `decisions/devops/`, `decisions/sre/`.
 
 ## Next
-- Owner decisions: AppContainer for the importer (S1); merging PR #1 into `beta`.
+- AppContainer for the importer: done (owner approved 2026-10-01); verified by tests, a real import and the release window.
+- Owner decision: merging PR #1 into `beta`.
 - Next sub-project: rendering (3D viewport, models/materials from the VFS).
 - AppContainer for the importer: ask the user (touches Windows security configuration).
 

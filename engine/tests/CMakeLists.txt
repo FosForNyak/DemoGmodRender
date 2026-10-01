@@ -23,3 +23,10 @@ if(TARGET gmdr-import)
 endif()
 
 add_test(NAME gmdr_tests COMMAND gmdr_tests)
+if(WIN32)
+    # Helper the sandbox tests start inside the importer's AppContainer.
+    add_executable(sandbox_probe sandbox_probe.cpp)
+    target_link_libraries(sandbox_probe PRIVATE gmdr_warnings)
+    target_compile_definitions(gmdr_tests PRIVATE GMDR_TEST_PROBE="$<TARGET_FILE:sandbox_probe>")
+    add_dependencies(gmdr_tests sandbox_probe)
+endif()

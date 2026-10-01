@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <doctest/doctest.h>
 #include <filesystem>
@@ -151,6 +152,8 @@ TEST_CASE("demo import through gmdr-import, cached reopen, close") {
         auto info = engine.call("demo.info", {{"demo", demo}});
         REQUIRE(info);
         CHECK((*info)["import"]["state"] == "ready");
+        if (std::getenv("GMDR_REQUIRE_APPCONTAINER"))
+            CHECK((*info)["import"]["sandbox"] == "appcontainer");
         CHECK((*info)["header"]["map"] == "gm_test");
         // Opening the same file again returns the same session.
         auto same = engine.call("demo.open", {{"path", pathToUtf8(demoPath)}});
@@ -216,3 +219,48 @@ TEST_CASE("C ABI: create, call, events, destroy") {
     CHECK(Json::parse(none)["error"]["code"] == "api.no_engine");
     gmdr_free(none);
 }
+
+#if defined(_WIN32) && defined(GMDR_TEST_PROBE)
+#include "core/process.h"
+
+TEST_CASE("importer sandbox: inside the AppContainer user files cannot be opened by path; handles work") {
+    TempDir tmp; // under %TEMP%, i.e. in the user's profile
+    const fs::path secret = tmp.path / "secret.txt";
+    writeFile(secret, {1, 2, 3});
+    auto out = File::open(tmp.path / "out.txt", File::Mode::CreateTruncate);
+    REQUIRE(out);
+    REQUIRE(out->setInheritable(true));
+
+    ProcessOptions opts;
+    opts.executable = pathFromUtf8(GMDR_TEST_PROBE);
+    opts.args = {pathToUtf8(secret), std::to_string(out->nativeHandle())};
+    opts.inheritHandles = {out->nativeHandle()};
+    opts.appContainer = "DemoGmodRender.Importer";
+    opts.appContainerFallback = false;
+    auto child = ChildProcess::spawn(opts);
+    if (!child) {
+        const bool required = std::getenv("GMDR_REQUIRE_APPCONTAINER") != nullptr;
+        if (required)
+            FAIL(child.error().details);
+        MESSAGE("AppContainer not usable here ("
+                << child.error().details << "); run scripts/allow-appcontainer.cmd on the build folder");
+        return;
+    }
+    std::string line;
+    REQUIRE(child->readLine(line));
+    child->wait();
+    CHECK(child->inAppContainer());
+    CHECK(line.find("open=denied") != std::string::npos);
+    CHECK(line.find("inherited=ok") != std::string::npos);
+
+    // The same probe without the AppContainer opens the file: the denial comes from the sandbox.
+    opts.appContainer.clear();
+    REQUIRE(out->setInheritable(true));
+    auto plain = ChildProcess::spawn(opts);
+    REQUIRE(plain);
+    REQUIRE(plain->readLine(line));
+    plain->wait();
+    CHECK_FALSE(plain->inAppContainer());
+    CHECK(line.find("open=allowed") != std::string::npos);
+}
+#endif
