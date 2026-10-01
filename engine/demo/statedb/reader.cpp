@@ -55,8 +55,11 @@ void noteChanged(WorldState& state, Tick tick, int index, const std::vector<Prop
                  std::span<const int> some) {
     if (state.changedTick != tick) {
         state.changed.clear();
+        state.entered.clear();
         state.changedTick = tick;
     }
+    if (all)
+        state.entered.insert(index);
     auto& list = state.changed[index];
     if (all) {
         for (std::size_t i = 0; i < all->size(); ++i)
@@ -624,6 +627,7 @@ Result<void> StateReader::withStateAt(Tick tick, const std::function<void(const 
     cursor_.state->tick = tick;
     if (cursor_.state->changedTick != tick) {
         cursor_.state->changed.clear();
+        cursor_.state->entered.clear();
         cursor_.state->changedTick = tick;
     }
     fn(*cursor_.state);

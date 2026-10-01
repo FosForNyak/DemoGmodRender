@@ -107,6 +107,50 @@ function useShortcuts() {
   }, []);
 }
 
+// Windows menu convention: F10, or Alt pressed and released alone, moves focus to the title-bar menus
+// (Anvil's MenuBar then handles ← → ↓ Enter Esc); pressed again, it returns focus to the content.
+function useMenuKeys() {
+  useEffect(() => {
+    let altAlone = false;
+    let previous: HTMLElement | null = null;
+    const toggle = () => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest('.av-menubar')) {
+        active.blur();
+        previous?.focus();
+        return;
+      }
+      const first = document.querySelector<HTMLElement>('.av-menubar-item');
+      if (!first) return;
+      previous = active;
+      first.focus();
+    };
+    const down = (e: KeyboardEvent) => {
+      altAlone = e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+      if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        toggle();
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 'Alt' && altAlone) {
+        e.preventDefault();
+        toggle();
+      }
+      altAlone = false;
+    };
+    const reset = () => (altAlone = false);
+    window.addEventListener('keydown', down, true);
+    window.addEventListener('keyup', up, true);
+    window.addEventListener('pointerdown', reset, true);
+    return () => {
+      window.removeEventListener('keydown', down, true);
+      window.removeEventListener('keyup', up, true);
+      window.removeEventListener('pointerdown', reset, true);
+    };
+  }, []);
+}
+
 function useWindowState() {
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -199,6 +243,7 @@ export function App() {
   useTheme();
   usePlayback();
   useShortcuts();
+  useMenuKeys();
   useWindowState();
   useEffect(() => actions.init(), []);
   const hasDemo = useApp((s) => !!s.demo);

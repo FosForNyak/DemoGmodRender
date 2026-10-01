@@ -50,6 +50,8 @@ export function Inspector() {
   const focused = useApp((s) => s.ui.focusedPanel === 'inspector');
   const [query, setQuery] = useState('');
   const [changedOnly, setChangedOnly] = useState(false);
+  // Groups the user opened or closed by hand; the others follow the data (open when something changed).
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
 
   const { data, error } = useQuery<EntityDetail>(
     demoId && uid && readyTick >= 0 ? `${demoId}:${uid}:${Math.min(tick, readyTick)}` : null,
@@ -70,7 +72,13 @@ export function Inspector() {
               icon: GROUP_ICON[shown.group],
               title: entityLabel(shown),
               meta: `#${shown.index} · ${shown.class} · ${formatInt(count)} ${uk.inspector.props}`,
-              aside: shown.changedCount ? (
+              aside: shown.entered ? (
+                <span title={uk.inspector.enteredTitle}>
+                  <Anvil.Badge tone="info" icon="add">
+                    {uk.inspector.entered}
+                  </Anvil.Badge>
+                </span>
+              ) : shown.changedCount ? (
                 <Anvil.Badge tone="accent" icon="keyframe-filled">
                   {shown.changedCount}
                 </Anvil.Badge>
@@ -116,16 +124,17 @@ export function Inspector() {
             )}
             <Anvil.PropertyGrid query={query} filter={changedOnly ? 'modified' : 'all'} onClearQuery={() => setQuery('')}>
               {shown.groups.map((g, gi) => {
-                const changed = g.props.filter((p) => p.changed).length;
+                const changed = shown.entered ? 0 : g.props.filter((p) => p.changed).length;
                 return (
                   <Anvil.PropertyGrid.Group
                     key={g.table}
                     title={g.table}
                     aside={changed ? `${changed} / ${g.props.length}` : String(g.props.length)}
-                    defaultOpen={gi < 3 || changed > 0}
+                    open={toggled[`${shown.uid}/${g.table}`] ?? (gi < 3 || changed > 0)}
+                    onToggle={(open) => setToggled((t) => ({ ...t, [`${shown.uid}/${g.table}`]: open }))}
                   >
                     {g.props.map((p) => (
-                      <Rows key={p.i} p={p} />
+                      <Rows key={p.i} p={shown.entered ? { ...p, changed: false } : p} />
                     ))}
                   </Anvil.PropertyGrid.Group>
                 );

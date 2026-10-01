@@ -88,6 +88,8 @@ export const uk = {
     props: 'властивостей',
     changedInTick: 'змінено в цьому тіку',
     entries: 'записів',
+    entered: 'З’явилася',
+    enteredTitle: 'Сутність з’явилася в PVS на цьому тіку: усі властивості щойно отримані.',
   },
   bottom: {
     timeline: 'Таймлайн',

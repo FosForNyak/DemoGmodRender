@@ -74,6 +74,7 @@ export interface EntityDetail extends EntitySummary {
   table: string;
   tick: number;
   changedCount: number;
+  entered: boolean; // entered the PVS (or was created) at this tick: every prop arrived, none is a change
   groups: Array<{ table: string; props: PropRow[] }>;
 }
 

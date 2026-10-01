@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -69,6 +70,7 @@ struct WorldState {
     // entered at `tick` lists all of its set props.
     Tick changedTick = -2;
     std::map<int, std::vector<int>> changed;
+    std::set<int> entered; // entities that entered the PVS (or were created) at `tick`
     const TableState* table(const std::string& name) const;
 };
 

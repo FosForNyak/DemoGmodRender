@@ -68,6 +68,7 @@ struct Model {
     std::map<int, Ent> ents;
     std::map<int, std::pair<std::string, std::map<int, std::string>>> tables;
     std::map<int, std::set<int>> changed; // at this tick
+    std::set<int> entered;                // at this tick
 };
 
 void checkState(const WorldState& s, const Model& m) {
@@ -90,6 +91,7 @@ void checkState(const WorldState& s, const Model& m) {
     for (const auto& [idx, set] : m.changed)
         wantChanged[idx] = std::vector<int>(set.begin(), set.end());
     CHECK(s.changed == wantChanged);
+    CHECK(s.entered == m.entered);
     for (const auto& [id, t] : m.tables) {
         auto it = s.tables.find(id);
         REQUIRE(it != s.tables.end());
@@ -147,6 +149,7 @@ std::vector<Model> writeHistory(File& out, std::vector<ChunkRef>* announced, int
         rec.info.viewOrigin = {static_cast<float>(tick), 0, 0};
         w.onPacket(rec);
         model.changed.clear();
+        model.entered.clear();
         for (int op = 0; op < 4; ++op) {
             if (op == 2) {
                 // Real demos often have several packets with the same tick; a keyframe may fall due in between.
@@ -172,6 +175,7 @@ std::vector<Model> writeHistory(File& out, std::vector<ChunkRef>* announced, int
                 e.props[3].v = std::string("models/e") + std::to_string(index) + ".mdl";
                 w.onEntityEnter(tick, {index, 0, e.serial, e.life}, newLife, e.props);
                 model.ents[index] = e;
+                model.entered.insert(index);
                 for (int p = 0; p < 4; ++p)
                     if (e.props[static_cast<std::size_t>(p)].isSet())
                         model.changed[index].insert(p);

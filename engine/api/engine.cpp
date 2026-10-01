@@ -649,6 +649,7 @@ struct Engine::Impl {
             j["table"] = cls.table;
             j["tick"] = r.tick;
             j["changedCount"] = changed.size();
+            j["entered"] = s.entered.count(e.index) > 0;
             j["groups"] = std::move(groups);
             out = std::move(j);
         }));
