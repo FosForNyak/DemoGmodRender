@@ -2,6 +2,7 @@
 
 #include "core/limits.h"
 
+#include <algorithm>
 #include <deque>
 
 namespace gmdr::demo {
@@ -17,12 +18,37 @@ const StringTableEntry* StringTable::entry(std::size_t index) const {
     return &entries_[index];
 }
 
+Result<void> StringTable::applySnapshot(std::vector<StringTableEntry> snapshot, std::vector<int>& changed) {
+    if (snapshot.size() > maxEntries() || snapshot.size() > limits::kMaxStringTableEntries)
+        return makeError("demo.stringtable_count", "string table snapshot has too many entries", name_);
+    // Entries past the snapshot are gone (DeleteAllStrings); every snapshot entry is present.
+    std::vector<StringTableEntry> next(std::max(snapshot.size(), entries_.size()));
+    for (std::size_t i = 0; i < snapshot.size(); ++i) {
+        next[i] = std::move(snapshot[i]);
+        next[i].present = true;
+    }
+    for (std::size_t i = 0; i < next.size(); ++i) {
+        const StringTableEntry* prev = i < entries_.size() ? &entries_[i] : nullptr;
+        const bool same = prev && prev->present == next[i].present && prev->string == next[i].string &&
+                          prev->userData == next[i].userData;
+        if (!same)
+            changed.push_back(static_cast<int>(i));
+    }
+    entries_ = std::move(next);
+    byString_.clear();
+    for (std::size_t i = 0; i < entries_.size(); ++i)
+        if (entries_[i].present)
+            byString_[entries_[i].string] = static_cast<int>(i);
+    return {};
+}
+
 int StringTable::find(std::string_view s) const {
     auto it = byString_.find(std::string(s));
     return it == byString_.end() ? -1 : it->second;
 }
 
-Result<void> StringTable::parseEntries(BitReader& r, int count, int userDataLengthBits, std::vector<int>& changed) {
+Result<void> StringTable::parseEntries(BitReader& r, int count, int userDataLengthBits,
+                                       std::vector<int>& changed) {
     if (count < 0 || static_cast<std::size_t>(count) > limits::kMaxStringTableEntries)
         return makeError("demo.stringtable_count", "string table entry count out of range", name_);
     int last = -1;
@@ -47,7 +73,8 @@ Result<void> StringTable::parseEntries(BitReader& r, int count, int userDataLeng
                 const std::size_t h = r.ubit(5);
                 const std::size_t take = r.ubit(5);
                 if (h >= history.size())
-                    return makeError("demo.stringtable_history", "string table substring reference is invalid", name_);
+                    return makeError("demo.stringtable_history",
+                                     "string table substring reference is invalid", name_);
                 s = history[h].substr(0, take);
                 s += r.string(limits::kMaxStringBytes);
             } else {
@@ -70,7 +97,8 @@ Result<void> StringTable::parseEntries(BitReader& r, int count, int userDataLeng
             } else {
                 const std::size_t n = r.ubit(userDataLengthBits);
                 if (n > limits::kMaxUserDataBytes || n * 8 > r.remaining())
-                    return makeError("demo.stringtable_userdata", "string table userdata length is invalid", name_);
+                    return makeError("demo.stringtable_userdata", "string table userdata length is invalid",
+                                     name_);
                 e.userData.resize(n);
                 r.bytes(e.userData.data(), n);
             }

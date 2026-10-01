@@ -19,11 +19,16 @@ struct StringTableEntry {
 
 class StringTable {
 public:
-    StringTable(std::string name, int maxEntriesBits, bool fixedUserData, int userDataSize, int userDataSizeBits);
+    StringTable(std::string name, int maxEntriesBits, bool fixedUserData, int userDataSize,
+                int userDataSizeBits);
 
     // Parses `count` entries in the SDK 2013 layout (with GMod's userdata length width) and records the
     // indices that changed.
     Result<void> parseEntries(BitReader& r, int count, int userDataLengthBits, std::vector<int>& changed);
+
+    // dem_stringtables: the table's whole content as the Source client replaces it (DeleteAllStrings, then
+    // AddString for each entry). Indices whose string or userdata differ from before are reported.
+    Result<void> applySnapshot(std::vector<StringTableEntry> entries, std::vector<int>& changed);
 
     const std::string& name() const { return name_; }
     int maxEntriesBits() const { return maxEntriesBits_; }

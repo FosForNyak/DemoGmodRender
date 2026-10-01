@@ -54,6 +54,13 @@ Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error"
 
 `tick` is clamped to the imported range; before the first delta chunk state queries return `import.not_ready`. Player names come from `userinfo` (GMod `player_info_t`, 324 bytes, name[128]).
 
+## Gate checks (spec §13) and what they found
+- `gmdr-cli gate <demo>`: player position continuity on the parser stream and a userinfo/player census.
+- **Seats and vehicles:** ~480 "jumps" of ~4 400 units were players sitting down: their `m_vecOrigin` becomes relative to `moveparent` (exactly 0,0,0). SDK 2013 sends the parent as `moveparent`, not `m_hMoveParent`; the API now resolves the parent EHANDLE and draws a seated player at the seat (other attached objects are skipped).
+- One remaining jump (29_08, player #5, tick 184 668, 1 532 units): reviewed by hand — stood still ~220 s, then appeared elsewhere falling (`FL_ONGROUND` cleared, vz −12), alive throughout: an in-game teleport, not a decode error.
+- **userinfo:** players connected before recording started have empty userinfo in signon; their data is only in the `dem_stringtables` snapshot. The parser now applies the snapshot's complete tables (as the Source client does); the census then matches (18 vs 18 and 13 vs 12 + 1 outside PVS at the start). Entity decoding is unchanged (same counts, `verify` 0 mismatches).
+- **CI fuzzing (first run):** `fuzz_tables` found an Array-typed prop with the Exclude flag indexing `props[-1]` in the element check; fixed with a regression test (fails on the old code with "vector subscript out of range").
+
 ## Content check rules
 - `*N` models = map brush models (builtin); `.vmt`/`.spr` in modelprecache → `materials/`.
 - Sounds: Source prefix chars stripped, `sound/` prepended; `!name` = sentence (builtin); no `.wav/.mp3/.ogg` extension = soundscript entry (not checked).

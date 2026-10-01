@@ -41,6 +41,8 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 
 - T23: fuzz targets + limit tests; three allocation-before-check weaknesses fixed (LZSS, zstd, state chunks). T24: CI workflow, Linux Docker environment, README. Linux GCC build and tests pass locally in Docker.
 
+- Gate (spec §13) checks: `gmdr-cli gate` — position continuity passes on 25_07; 29_08 has one reviewed teleport. Found and fixed: seat/vehicle relative origins (`moveparent`), userinfo from the `dem_stringtables` snapshot, and a CI fuzz finding in the SendTables check.
+
 ## Next
 - Phase 5: QA + security review (`reviews/`) → Phase 6: devops/sre docs.
 - AppContainer for the importer: ask the user (touches Windows security configuration).

@@ -649,6 +649,23 @@ struct Engine::Impl {
         return *out;
     }
 
+    // The entity `e` is attached to (EHANDLE in `moveparent`: 13-bit index + 10-bit serial), if it exists at
+    // this tick with a matching serial and a known class.
+    static const demo::statedb::EntityState*
+    parentOf(const WorldState& s, const demo::statedb::EntityState& e, const ClassInfo& ci) {
+        if (ci.moveParent < 0 || static_cast<std::size_t>(ci.moveParent) >= e.props.size())
+            return nullptr;
+        const auto* h = std::get_if<std::int64_t>(&e.props[static_cast<std::size_t>(ci.moveParent)].v);
+        if (!h || *h == kInvalidEHandle || *h < 0)
+            return nullptr;
+        const auto index = static_cast<std::size_t>(*h & 0x1FFF);
+        const int serial = static_cast<int>((*h >> 13) & 0x3FF);
+        if (index >= s.entities.size() || !s.entities[index] || s.entities[index]->serial != serial ||
+            s.entities[index]->index == e.index)
+            return nullptr;
+        return &*s.entities[index];
+    }
+
     Result<Json> statePositions(const Json& args) {
         GMDR_ASSIGN(auto r, ready(args, true));
         GMDR_ASSIGN(auto classes, r.session->classes());
@@ -665,12 +682,23 @@ struct Engine::Impl {
                 const auto& ci = (*classes)[static_cast<std::size_t>(e.classId)];
                 if (ci.group == "world")
                     continue;
-                if (ci.moveParent >= 0 && static_cast<std::size_t>(ci.moveParent) < e.props.size())
-                    if (auto* h =
-                            std::get_if<std::int64_t>(&e.props[static_cast<std::size_t>(ci.moveParent)].v);
-                        h && *h != kInvalidEHandle)
-                        continue; // attached to another entity: its origin is relative
-                auto p = placement(e, ci, e.index == local);
+                std::optional<Placement> p;
+                if (const auto* parent = parentOf(s, e, ci)) {
+                    // Attached (weapon in hand, player in a seat): the origin is relative to the parent.
+                    // Players are drawn at their seat or vehicle; other attached objects are left out.
+                    if (ci.group != "player")
+                        continue;
+                    const auto& pci = (*classes)[static_cast<std::size_t>(parent->classId)];
+                    p = placement(*parent, pci, false);
+                    if (p) {
+                        if (auto own = placement(e, ci, e.index == local)) {
+                            p->yaw = own->yaw;
+                            p->pitch = own->pitch;
+                        }
+                    }
+                } else {
+                    p = placement(e, ci, e.index == local);
+                }
                 if (!p)
                     continue;
                 Json j = {{"uid", uidString(demo::statedb::lifeUid(hash, e.life, e.index, e.serial))},

@@ -160,7 +160,8 @@ TEST_CASE("LZSS round trip of a literal and a back-reference") {
 
 namespace {
 
-// Two tables: DT_Child {x int 8 CHANGES_OFTEN}, DT_Root {baseline DT_Child (collapsible), a int 4, arr[3] of int 2}
+// Two tables: DT_Child {x int 8 CHANGES_OFTEN}, DT_Root {baseline DT_Child (collapsible), a int 4, arr[3] of
+// int 2}
 std::vector<std::uint8_t> makeDataTables() {
     BitWriter w;
     auto prop = [&](int type, const char* name, std::uint32_t flags) {
@@ -270,7 +271,8 @@ TEST_CASE("coordinate decoders") {
     w.bit(true);
     w.ubit(99, 14);
     w.ubit(16, 5);
-    // BitCoordMP not integral, low precision, in bounds: int flag, sign 0, int 10 (stored 9, 11 bits), fract 4/8
+    // BitCoordMP not integral, low precision, in bounds: int flag, sign 0, int 10 (stored 9, 11 bits), fract
+    // 4/8
     w.bit(true);
     w.bit(true);
     w.bit(false);
@@ -303,4 +305,43 @@ TEST_CASE("timeline clock: signon belongs to tick 0 and the timeline never goes 
     CHECK(clock.next(rec(DemoCommand::ConsoleCmd, 5)) == 5);
     CHECK(clock.next(rec(DemoCommand::Packet, 4)) == 5);
     CHECK(clock.next(rec(DemoCommand::Packet, 7)) == 7);
+}
+
+TEST_CASE("string table snapshot replaces the content and reports changes") {
+    StringTable t("userinfo", 5, false, 0, 0);
+    BitWriter w;
+    for (const char* s : {"0", "1"}) {
+        w.bit(true);
+        w.bit(true);
+        w.bit(false);
+        w.string(s);
+        w.bit(false);
+    }
+    BitReader r(w.data());
+    std::vector<int> changed;
+    REQUIRE(t.parseEntries(r, 2, 19, changed));
+    CHECK(t.entry(1)->userData.empty());
+
+    // The snapshot fills entry 1's userdata (a player that was already connected) and drops nothing else.
+    std::vector<StringTableEntry> snap(2);
+    snap[0].string = "0";
+    snap[1].string = "1";
+    snap[1].userData = {'N', 'a', 'm', 'e', 0};
+    changed.clear();
+    REQUIRE(t.applySnapshot(snap, changed));
+    CHECK(changed == std::vector<int>{1});
+    CHECK(t.entry(1)->userData.size() == 5);
+    CHECK(t.find("1") == 1);
+
+    // A shorter snapshot removes the entries past its end (DeleteAllStrings).
+    changed.clear();
+    REQUIRE(t.applySnapshot({snap[0]}, changed));
+    CHECK(changed == std::vector<int>{1});
+    CHECK(t.entry(1) == nullptr);
+    CHECK(t.find("1") == -1);
+
+    // More entries than the table can hold are rejected.
+    std::vector<StringTableEntry> tooMany(33);
+    changed.clear();
+    CHECK_FALSE(t.applySnapshot(tooMany, changed));
 }

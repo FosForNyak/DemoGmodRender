@@ -143,7 +143,7 @@ ClassInfo describeClass(const demo::statedb::SchemaClass& c) {
                 info.rotation = idx;
             else if (p.name == "m_nModelIndex")
                 info.modelIndex = idx;
-            else if (p.name == "m_hMoveParent")
+            else if (p.name == "moveparent" || p.name == "m_hMoveParent") // SDK 2013 network name: moveparent
                 info.moveParent = idx;
             else if (p.name == "m_iHealth")
                 info.health = idx;

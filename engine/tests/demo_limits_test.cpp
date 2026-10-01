@@ -195,3 +195,35 @@ TEST_CASE("state file: chunk sizes beyond the limit or the file are rejected") {
     std::error_code ec;
     std::filesystem::remove(path, ec);
 }
+
+TEST_CASE("fuzz regression: an excluded prop typed Array has no element (CI fuzz_tables, UBSan)") {
+    // crash-801eafdd78f025bd5cd95e56a2950ec9f8ba4802 without the selector byte: it indexed props[-1].
+    const std::vector<std::uint8_t> input = {0x01, 0x08, 0x00, 0xf4, 0x3b, 0x00, 0xfc, 0x00, 0x00, 0x0a,
+                                             0x00, 0xfc, 0x2c, 0x00, 0x00, 0x00, 0x17, 0x30, 0xe0, 0x2c};
+    auto dt = parseDataTables(input, knownProtocolVariants()[0]);
+    if (dt)
+        for (const auto& c : (*dt)->classes)
+            (void)flattenClass(**dt, c.tableName);
+    CHECK(true); // reaching here without UB is the test (run under UBSan in CI)
+
+    // The same shape, built explicitly: an Array-typed prop with the Exclude flag as the first prop.
+    BitWriter w;
+    w.bit(true);
+    w.bit(false);
+    w.string("DT_X");
+    w.ubit(1, 10);
+    w.ubit(5, 5); // Array
+    w.string("m_excluded");
+    w.ubit(prop_flags::Exclude, 16);
+    w.string("DT_Other");
+    w.bit(false);
+    w.ubit(1, 16);
+    w.ubit(0, 16);
+    w.string("CX");
+    w.string("DT_X");
+    auto parsed = parseDataTables(w.data(), knownProtocolVariants()[0]);
+    REQUIRE(parsed);
+    auto flat = flattenClass(**parsed, "DT_X");
+    REQUIRE(flat);
+    CHECK(flat->empty());
+}

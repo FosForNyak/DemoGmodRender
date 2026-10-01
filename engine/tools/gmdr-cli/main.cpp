@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -564,6 +566,260 @@ int cmdContent(const std::string& statePath, const char* manual) {
     return 0;
 }
 
+// ---- gate: corpus checks from spec §13 --------------------------------------------------------------------
+
+// Player position continuity (no jump > 1000 units per tick for live players, except respawns) and userinfo
+// vs player entities, straight from the parser stream.
+struct GateSink : gmdr::demo::DemoSink {
+    struct PlayerClass {
+        int originLocal = -1, originNonLocal = -1, health = -1, lifeState = -1, observerMode = -1,
+            moveParent = -1, vehicle = -1;
+    };
+    struct Track {
+        bool known = false;
+        gmdr::demo::Vec3 origin;
+        gmdr::Tick tick = 0;
+        gmdr::Tick lastRespawn = -100000; // tick when the player last became alive
+        bool alive = true;
+        bool parented = false; // m_vecOrigin is relative to m_hMoveParent (seat, vehicle)
+    };
+    struct Jump {
+        gmdr::Tick tick;
+        int index;
+        double distance;
+        std::string cause;
+        gmdr::demo::Vec3 from, to;
+        gmdr::Tick fromTick;
+    };
+    std::map<int, PlayerClass> playerClasses;
+    std::map<int, Track> tracks;
+    std::vector<Jump> jumps;
+    std::map<std::string, int> jumpCauses;
+    int localPlayer = -1;
+    double tickInterval = 0;
+    std::map<int, std::vector<std::uint8_t>> userinfo;
+    std::vector<std::string> history; // userinfo changes and player entity lives, for QA
+    std::vector<gmdr::Json> census;
+    std::set<gmdr::Tick> censusTicks;
+    std::map<int, bool> playerInPvs; // entity index -> in PVS
+    std::uint64_t decodeErrors = 0;
+    std::vector<std::string> errorSamples;
+
+    void onServerInfo(const gmdr::demo::ServerInfo& s) override {
+        localPlayer = s.playerSlot + 1;
+        tickInterval = s.tickInterval;
+    }
+    void onDataTables(const gmdr::demo::DataTables& dt) override {
+        for (const auto& c : dt.classes) {
+            auto flat = gmdr::demo::flattenClass(dt, c.tableName);
+            if (!flat)
+                continue;
+            PlayerClass pc;
+            bool player = false;
+            for (std::size_t i = 0; i < flat->size(); ++i) {
+                const auto& fp = (*flat)[i];
+                const std::string& t = fp.table->name;
+                const std::string& n = fp.prop->name;
+                const int idx = static_cast<int>(i);
+                player = player || t == "DT_BasePlayer";
+                if (n == "m_vecOrigin" && t.find("NonLocalPlayerExclusive") != std::string::npos)
+                    pc.originNonLocal = idx;
+                else if (n == "m_vecOrigin" && t.find("LocalPlayerExclusive") != std::string::npos)
+                    pc.originLocal = idx;
+                else if (n == "m_iHealth" && t == "DT_BaseEntity")
+                    pc.health = idx;
+                else if (n == "m_lifeState" && t == "DT_BasePlayer")
+                    pc.lifeState = idx;
+                else if (n == "m_iObserverMode" && t == "DT_BasePlayer")
+                    pc.observerMode = idx;
+                else if (n == "moveparent" && t == "DT_BaseEntity")
+                    pc.moveParent = idx;
+                else if (n == "m_hVehicle" && t == "DT_BasePlayer")
+                    pc.vehicle = idx;
+            }
+            if (player)
+                playerClasses[c.id] = pc;
+        }
+    }
+    void onStringTableChanged(gmdr::Tick, int, const gmdr::demo::StringTable& t, std::span<const int> changed,
+                              bool) override {
+        if (t.name() != "userinfo")
+            return;
+        for (int idx : changed)
+            if (const auto* e = t.entry(static_cast<std::size_t>(idx))) {
+                userinfo[idx] = e->userData;
+                if (history.size() < 400)
+                    history.push_back("tick " + std::to_string(currentTick) + " userinfo[" +
+                                      std::to_string(idx) + "] = " + std::to_string(e->userData.size()) +
+                                      " bytes (entity " + std::to_string(idx + 1) + ")");
+            }
+    }
+    gmdr::Tick currentTick = 0;
+    void onPacket(const gmdr::demo::CommandRecord& rec) override { currentTick = rec.tick; }
+    static std::optional<std::int64_t> intAt(std::span<const gmdr::demo::PropValue> s, int i) {
+        if (i < 0 || static_cast<std::size_t>(i) >= s.size())
+            return std::nullopt;
+        if (auto* v = std::get_if<std::int64_t>(&s[static_cast<std::size_t>(i)].v))
+            return *v;
+        return std::nullopt;
+    }
+    void observe(gmdr::Tick tick, const gmdr::demo::EntityRef& ref, std::span<const gmdr::demo::PropValue> s,
+                 bool entered) {
+        auto pc = playerClasses.find(ref.classId);
+        if (pc == playerClasses.end())
+            return;
+        const auto& c = pc->second;
+        const int originIdx =
+            ref.index == localPlayer && c.originLocal >= 0 ? c.originLocal : c.originNonLocal;
+        if (originIdx < 0 || static_cast<std::size_t>(originIdx) >= s.size())
+            return;
+        const auto* origin = std::get_if<gmdr::demo::Vec3>(&s[static_cast<std::size_t>(originIdx)].v);
+        if (!origin)
+            return;
+        auto& tr = tracks[ref.index];
+        const auto life = intAt(s, c.lifeState);
+        const auto health = intAt(s, c.health);
+        const bool alive = life.value_or(0) == 0 && health.value_or(1) > 0;
+        if (alive && !tr.alive)
+            tr.lastRespawn = tick;
+        tr.alive = alive;
+        const bool parented = intAt(s, c.moveParent).value_or(0x7FFFFF) != 0x7FFFFF ||
+                              intAt(s, c.vehicle).value_or(0x7FFFFF) != 0x7FFFFF;
+        const bool parentChanged = parented != tr.parented;
+        tr.parented = parented;
+        if (tr.known && !entered) {
+            const double dx = origin->x - tr.origin.x, dy = origin->y - tr.origin.y,
+                         dz = origin->z - tr.origin.z;
+            const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const double perTick = dist / static_cast<double>(std::max<gmdr::Tick>(1, tick - tr.tick));
+            if (perTick > 1000) {
+                std::string cause;
+                const double window = tickInterval > 0 ? 10.0 / tickInterval : 660;
+                if (parentChanged || parented)
+                    cause = "parent (seat or vehicle: relative origin)";
+                else if (intAt(s, c.observerMode).value_or(0) != 0)
+                    cause = "observer";
+                else if (!alive)
+                    cause = "dead";
+                else if (static_cast<double>(tick - tr.lastRespawn) <= window)
+                    cause = "respawn";
+                else
+                    cause = "unexplained";
+                ++jumpCauses[cause];
+                if (cause == "unexplained" && jumps.size() < 20)
+                    jumps.push_back({tick, ref.index, dist, cause, tr.origin, *origin, tr.tick});
+            }
+        }
+        tr.known = true;
+        tr.origin = *origin;
+        tr.tick = tick;
+    }
+    void onEntityEnter(gmdr::Tick tick, const gmdr::demo::EntityRef& ref, bool,
+                       std::span<const gmdr::demo::PropValue> s) override {
+        if (playerClasses.count(ref.classId)) {
+            if (!playerInPvs.count(ref.index) && history.size() < 400)
+                history.push_back("tick " + std::to_string(tick) + " player entity " +
+                                  std::to_string(ref.index) + " created (life " + std::to_string(ref.life) +
+                                  ")");
+            playerInPvs[ref.index] = true;
+        }
+        tracks[ref.index].known = false; // a jump across PVS re-entry is not a jump
+        observe(tick, ref, s, true);
+    }
+    void onEntityUpdate(gmdr::Tick tick, const gmdr::demo::EntityRef& ref, std::span<const int>,
+                        std::span<const gmdr::demo::PropValue> s) override {
+        observe(tick, ref, s, false);
+    }
+    void onEntityLeave(gmdr::Tick tick, const gmdr::demo::EntityRef& ref, bool deleted) override {
+        tracks[ref.index].known = false;
+        if (playerInPvs.count(ref.index)) {
+            if (deleted) {
+                playerInPvs.erase(ref.index);
+                if (history.size() < 400)
+                    history.push_back("tick " + std::to_string(tick) + " player entity " +
+                                      std::to_string(ref.index) + " deleted");
+            } else
+                playerInPvs[ref.index] = false;
+        }
+    }
+    void onTickEnd(gmdr::Tick tick) override {
+        // The first packet at or after each census tick.
+        if (census.size() >= censusTicks.size())
+            return;
+        auto next = censusTicks.begin();
+        std::advance(next, static_cast<std::ptrdiff_t>(census.size()));
+        if (tick < *next)
+            return;
+        int infos = 0, bots = 0;
+        for (const auto& [idx, ud] : userinfo)
+            if (ud.size() == 324) {
+                ++infos;
+                bots += ud[300] != 0 ? 1 : 0;
+            }
+        int inPvs = 0;
+        for (const auto& [idx, v] : playerInPvs)
+            inPvs += v ? 1 : 0;
+        census.push_back({{"tick", tick},
+                          {"userinfoPlayers", infos},
+                          {"bots", bots},
+                          {"playerEntities", playerInPvs.size()},
+                          {"inPvs", inPvs}});
+    }
+    void onDecodeError(gmdr::Tick tick, std::uint64_t offset, const gmdr::Error& e) override {
+        ++decodeErrors;
+        if (errorSamples.size() < 5)
+            errorSamples.push_back("tick " + std::to_string(tick) + " @" + std::to_string(offset) + ": " +
+                                   e.code);
+    }
+};
+
+int cmdGate(const std::string& demoPath) {
+    auto demo = mapDemo(demoPath);
+    if (!demo)
+        return 2;
+    GateSink sink;
+    // Census early (after signon), in the middle and near the end.
+    gmdr::Tick lastTick = 0;
+    {
+        gmdr::demo::CommandReader reader(demo->map.data());
+        gmdr::demo::TimelineClock clock;
+        gmdr::demo::CommandRecord rec;
+        while (true) {
+            auto more = reader.next(rec);
+            if (!more || !*more)
+                break;
+            lastTick = std::max<gmdr::Tick>(lastTick, clock.next(rec));
+        }
+    }
+    for (gmdr::Tick t : {gmdr::Tick{200}, lastTick / 2, lastTick - 200})
+        sink.censusTicks.insert(t);
+    gmdr::demo::DemoParser parser(demo->map.data(), sink);
+    const auto t0 = Clock::now();
+    auto r = parser.run();
+    gmdr::Json jumps = gmdr::Json::array();
+    for (const auto& j : sink.jumps)
+        jumps.push_back({{"tick", j.tick},
+                         {"index", j.index},
+                         {"distance", j.distance},
+                         {"fromTick", j.fromTick},
+                         {"from", {j.from.x, j.from.y, j.from.z}},
+                         {"to", {j.to.x, j.to.y, j.to.z}}});
+    const bool continuity = sink.jumpCauses["unexplained"] == 0;
+    gmdr::Json out = {
+        {"parsed", r.ok()},
+        {"seconds", secondsSince(t0)},
+        {"decodeErrors", sink.decodeErrors},
+        {"errorSamples", sink.errorSamples},
+        {"jumpsOver1000PerTick", sink.jumpCauses},
+        {"unexplainedSamples", jumps},
+        {"positionContinuity", continuity ? "pass" : "fail"},
+        {"census", sink.census},
+        {"history", sink.history},
+    };
+    std::cout << out.dump(2) << "\n";
+    return r.ok() && continuity ? 0 : 1;
+}
+
 // ---- command bus ------------------------------------------------------------------------------------------
 
 gmdr::api::EngineConfig cliConfig() {
@@ -806,6 +1062,8 @@ int main(int argc, char** argv) {
     }
     if (cmd == "serve")
         return cmdServe();
+    if (cmd == "gate" && argc >= 3)
+        return cmdGate(argv[2]);
     if (cmd == "call" && argc >= 3)
         return cmdCall(argv[2], argc >= 4 ? argv[3] : nullptr);
     if (cmd == "run" && argc >= 3)

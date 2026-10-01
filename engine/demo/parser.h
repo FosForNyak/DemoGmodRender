@@ -34,10 +34,11 @@ public:
     virtual void onHeader(const DemoHeader&) {}
     virtual void onServerInfo(const ServerInfo&) {}
     virtual void onDataTables(const DataTables&) {}
-    virtual void onStringTableChanged(Tick, int /*tableId*/, const StringTable&, std::span<const int> /*changed*/,
-                                      bool /*created*/) {}
+    virtual void onStringTableChanged(Tick, int /*tableId*/, const StringTable&,
+                                      std::span<const int> /*changed*/, bool /*created*/) {}
     virtual void onPacket(const CommandRecord&) {}
-    virtual void onEntityEnter(Tick, const EntityRef&, bool /*newLife*/, std::span<const PropValue> /*state*/) {}
+    virtual void onEntityEnter(Tick, const EntityRef&, bool /*newLife*/,
+                               std::span<const PropValue> /*state*/) {}
     virtual void onEntityUpdate(Tick, const EntityRef&, std::span<const int> /*changed*/,
                                 std::span<const PropValue> /*state*/) {}
     virtual void onEntityLeave(Tick, const EntityRef&, bool /*deleted*/) {}
@@ -92,6 +93,7 @@ private:
     Result<void> parseServerInfo(BitReader& r);
     Result<void> parseCreateStringTable(BitReader& r, Tick tick);
     Result<void> parseUpdateStringTable(BitReader& r, Tick tick);
+    void applyStringTableSnapshot(const CommandRecord& rec);
     Result<void> parsePacketEntities(BitReader& r, Tick tick);
     Result<void> parseDataTables(const CommandRecord& rec);
     void emitEvent(Tick tick, EventKind kind, std::string name, std::string summary, std::uint64_t bitOffset,

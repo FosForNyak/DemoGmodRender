@@ -28,7 +28,7 @@ struct ClassInfo {
     int rotation = -1;              // DT_BaseEntity.m_angRotation
     int eyePitch = -1, eyeYaw = -1; // players: m_angEyeAngles[0], [1]
     int modelIndex = -1;            // DT_BaseEntity.m_nModelIndex
-    int moveParent = -1;            // DT_BaseEntity.m_hMoveParent
+    int moveParent = -1;            // DT_BaseEntity.moveparent (m_hMoveParent)
     int health = -1;
     int team = -1;
 };

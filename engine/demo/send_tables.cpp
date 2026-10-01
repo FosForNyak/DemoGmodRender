@@ -83,9 +83,12 @@ Result<std::unique_ptr<DataTables>> parseDataTables(std::span<const std::uint8_t
     if (r.overflowed())
         return makeError("demo.datatables_truncated", "dem_datatables ends early");
     // Array element props must be scalar props of the same table.
+    // An excluded prop carries no element (its type may still say Array): it is never flattened.
     for (auto& t : dt->tables)
         for (auto& p : t.props)
-            if (p.type == PropType::Array) {
+            if (p.type == PropType::Array && !(p.flags & prop_flags::Exclude)) {
+                if (p.elementIndex < 0 || static_cast<std::size_t>(p.elementIndex) >= t.props.size())
+                    return makeError("demo.datatables_array", "array prop without an element prop", t.name);
                 const auto& el = t.props[static_cast<std::size_t>(p.elementIndex)];
                 if (el.type == PropType::Array || el.type == PropType::DataTable)
                     return makeError("demo.datatables_array", "array element has an invalid type", t.name);
@@ -116,7 +119,8 @@ public:
             } else if (p.type == PropType::DataTable) {
                 const SendTable* sub = dt_.table(p.dataTable);
                 if (!sub)
-                    return makeError("demo.datatables_missing", "SendTable references an unknown table", p.dataTable);
+                    return makeError("demo.datatables_missing", "SendTable references an unknown table",
+                                     p.dataTable);
                 GMDR_TRY(gatherExcludes(*sub, depth + 1));
             }
         }
@@ -144,7 +148,8 @@ private:
             if (p.type == PropType::DataTable) {
                 const SendTable* sub = dt_.table(p.dataTable);
                 if (!sub)
-                    return makeError("demo.datatables_missing", "SendTable references an unknown table", p.dataTable);
+                    return makeError("demo.datatables_missing", "SendTable references an unknown table",
+                                     p.dataTable);
                 if (p.flags & prop_flags::Collapsible)
                     GMDR_TRY(iterate(*sub, own, depth + 1));
                 else

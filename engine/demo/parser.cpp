@@ -10,20 +10,34 @@ namespace gmdr::demo {
 
 const char* eventKindName(EventKind kind) {
     switch (kind) {
-    case EventKind::GameEvent: return "game_event";
-    case EventKind::Sound: return "sound";
-    case EventKind::TempEntities: return "temp_entities";
-    case EventKind::UserMessage: return "user_message";
-    case EventKind::EntityMessage: return "entity_message";
-    case EventKind::GModNet: return "net_message";
-    case EventKind::Decal: return "decal";
-    case EventKind::SetView: return "set_view";
-    case EventKind::FixAngle: return "fix_angle";
-    case EventKind::Voice: return "voice";
-    case EventKind::ConsoleCmd: return "console";
-    case EventKind::Print: return "print";
-    case EventKind::StringCmd: return "string_cmd";
-    case EventKind::DecodeError: return "decode_error";
+    case EventKind::GameEvent:
+        return "game_event";
+    case EventKind::Sound:
+        return "sound";
+    case EventKind::TempEntities:
+        return "temp_entities";
+    case EventKind::UserMessage:
+        return "user_message";
+    case EventKind::EntityMessage:
+        return "entity_message";
+    case EventKind::GModNet:
+        return "net_message";
+    case EventKind::Decal:
+        return "decal";
+    case EventKind::SetView:
+        return "set_view";
+    case EventKind::FixAngle:
+        return "fix_angle";
+    case EventKind::Voice:
+        return "voice";
+    case EventKind::ConsoleCmd:
+        return "console";
+    case EventKind::Print:
+        return "print";
+    case EventKind::StringCmd:
+        return "string_cmd";
+    case EventKind::DecodeError:
+        return "decode_error";
     }
     return "unknown";
 }
@@ -60,7 +74,8 @@ const std::vector<FlatProp>* DemoParser::flatProps(int classId) {
         return nullptr;
     auto& slot = flat_[static_cast<std::size_t>(classId)];
     if (!slot) {
-        auto f = flattenClass(*dataTables_, dataTables_->classes[static_cast<std::size_t>(classId)].tableName);
+        auto f =
+            flattenClass(*dataTables_, dataTables_->classes[static_cast<std::size_t>(classId)].tableName);
         if (!f)
             return nullptr;
         slot = std::move(f).value();
@@ -99,8 +114,8 @@ Result<void> DemoParser::run() {
             if (!r) {
                 ++stats_.decodeErrors;
                 sink_.onDecodeError(rec.tick, rec.offset, r.error());
-                emitEvent(rec.tick, EventKind::DecodeError, r.error().code, r.error().message, rec.payloadOffset * 8,
-                          rec.payloadSize * 8);
+                emitEvent(rec.tick, EventKind::DecodeError, r.error().code, r.error().message,
+                          rec.payloadOffset * 8, rec.payloadSize * 8);
             }
             sink_.onTickEnd(rec.tick);
             break;
@@ -114,10 +129,13 @@ Result<void> DemoParser::run() {
         case DemoCommand::ConsoleCmd: {
             BitReader r(file_.subspan(static_cast<std::size_t>(rec.payloadOffset), rec.payloadSize));
             std::string cmd = r.string(limits::kMaxStringBytes);
-            emitEvent(rec.tick, EventKind::ConsoleCmd, std::move(cmd), {}, rec.payloadOffset * 8, rec.payloadSize * 8);
+            emitEvent(rec.tick, EventKind::ConsoleCmd, std::move(cmd), {}, rec.payloadOffset * 8,
+                      rec.payloadSize * 8);
             break;
         }
-        case DemoCommand::StringTables: // snapshot is truncated at 512 KB in GMod; tables come from messages
+        case DemoCommand::StringTables:
+            applyStringTableSnapshot(rec);
+            break;
         case DemoCommand::UserCmd:
         case DemoCommand::SyncTick:
         case DemoCommand::Stop:
@@ -128,8 +146,8 @@ Result<void> DemoParser::run() {
 }
 
 Result<void> DemoParser::parseDataTables(const CommandRecord& rec) {
-    auto dt = demo::parseDataTables(file_.subspan(static_cast<std::size_t>(rec.payloadOffset), rec.payloadSize),
-                                    *variant_);
+    auto dt = demo::parseDataTables(
+        file_.subspan(static_cast<std::size_t>(rec.payloadOffset), rec.payloadSize), *variant_);
     if (!dt)
         return dt.error();
     dataTables_ = std::move(dt).value();
@@ -235,7 +253,8 @@ Result<void> DemoParser::parseCreateStringTable(BitReader& r, Tick tick) {
         const std::uint32_t decompressedSize = data.ubit(32);
         const std::uint32_t compressedSize = data.ubit(32);
         if (compressedSize * 8ull > data.remaining() || decompressedSize > limits::kMaxDecompressedBytes)
-            return makeError("demo.stringtable_compressed", "compressed string table header is invalid", name);
+            return makeError("demo.stringtable_compressed", "compressed string table header is invalid",
+                             name);
         std::vector<std::uint8_t> packed(compressedSize);
         data.bytes(packed.data(), packed.size());
         auto raw = lzssDecompress(packed);
@@ -257,6 +276,58 @@ Result<void> DemoParser::parseCreateStringTable(BitReader& r, Tick tick) {
     return {};
 }
 
+// dem_stringtables: a snapshot of every table, which the Source client applies over what signon created
+// (CNetworkStringTableContainer::ReadStringTables). GMod cuts it at 512 KB, so only tables read completely
+// are applied; the cut one keeps its in-band state. It carries data the signon messages may lack, such as
+// userinfo of players already connected when recording started.
+void DemoParser::applyStringTableSnapshot(const CommandRecord& rec) {
+    BitReader r(file_.subspan(static_cast<std::size_t>(rec.payloadOffset), rec.payloadSize));
+    const std::size_t tableCount = r.ubit(8);
+    for (std::size_t t = 0; t < tableCount && !r.overflowed(); ++t) {
+        const std::string name = r.string(limits::kMaxStringBytes);
+        const std::size_t count = r.ubit(16);
+        if (r.overflowed() || count > limits::kMaxStringTableEntries)
+            return;
+        std::vector<StringTableEntry> entries(count);
+        for (auto& e : entries) {
+            e.string = r.string(limits::kMaxStringBytes);
+            if (r.bit()) {
+                const std::size_t size = r.ubit(16);
+                if (size > limits::kMaxUserDataBytes || size * 8 > r.remaining()) {
+                    r.skip(r.remaining() + 1); // mark as cut
+                    break;
+                }
+                e.userData.resize(size);
+                r.bytes(e.userData.data(), size);
+            }
+            if (r.overflowed())
+                break;
+        }
+        if (r.bit()) { // client-side entries: not used
+            const std::size_t clientCount = r.ubit(16);
+            for (std::size_t i = 0; i < clientCount && !r.overflowed(); ++i) {
+                r.string(limits::kMaxStringBytes);
+                if (r.bit())
+                    r.skip(r.ubit(16) * 8);
+            }
+        }
+        if (r.overflowed())
+            return; // this table was cut: keep what the messages built
+        int id = -1;
+        for (std::size_t i = 0; i < tables_.size(); ++i)
+            if (tables_[i]->name() == name)
+                id = static_cast<int>(i);
+        if (id < 0)
+            continue;
+        std::vector<int> changed;
+        if (!tables_[static_cast<std::size_t>(id)]->applySnapshot(std::move(entries), changed) ||
+            changed.empty())
+            continue;
+        onTableChanged(id, changed);
+        sink_.onStringTableChanged(rec.tick, id, *tables_[static_cast<std::size_t>(id)], changed, false);
+    }
+}
+
 Result<void> DemoParser::parseUpdateStringTable(BitReader& r, Tick tick) {
     const int id = static_cast<int>(r.ubit(5));
     const int changedCount = r.bit() ? static_cast<int>(r.ubit(16)) : 1;
@@ -267,8 +338,8 @@ Result<void> DemoParser::parseUpdateStringTable(BitReader& r, Tick tick) {
     if (id < 0 || static_cast<std::size_t>(id) >= tables_.size())
         return makeError("demo.stringtable_unknown", "update for an unknown string table");
     std::vector<int> changed;
-    GMDR_TRY(tables_[static_cast<std::size_t>(id)]->parseEntries(data, changedCount, variant_->userDataLengthBits,
-                                                                 changed));
+    GMDR_TRY(tables_[static_cast<std::size_t>(id)]->parseEntries(data, changedCount,
+                                                                 variant_->userDataLengthBits, changed));
     onTableChanged(id, changed);
     sink_.onStringTableChanged(tick, id, *tables_[static_cast<std::size_t>(id)], changed, false);
     return {};
@@ -329,11 +400,13 @@ Result<void> DemoParser::parsePacketEntities(BitReader& r, Tick tick) {
                 const int classId = static_cast<int>(eb.ubit(classBits));
                 const int serial = static_cast<int>(eb.ubit(variant_->serialBits));
                 if (static_cast<std::size_t>(classId) >= dataTables_->classes.size())
-                    return makeError("demo.entity_class", "entity class id out of range", std::to_string(classId));
+                    return makeError("demo.entity_class", "entity class id out of range",
+                                     std::to_string(classId));
                 const auto* flat = flatProps(classId);
                 if (!flat)
                     return makeError("demo.class_flatten", "cannot flatten the class's SendTable");
-                const Baseline& eb0 = entityBaselines_[static_cast<std::size_t>(baselineSet)][static_cast<std::size_t>(index)];
+                const Baseline& eb0 =
+                    entityBaselines_[static_cast<std::size_t>(baselineSet)][static_cast<std::size_t>(index)];
                 if (eb0.classId == classId) {
                     slot.props = eb0.props;
                 } else {
@@ -356,19 +429,21 @@ Result<void> DemoParser::parsePacketEntities(BitReader& r, Tick tick) {
                 ++stats_.entityEnters;
                 sink_.onEntityEnter(tick, EntityRef{index, classId, serial, slot.life}, newLife, slot.props);
                 if (updateBaseline) {
-                    auto& nb = entityBaselines_[static_cast<std::size_t>(baselineSet ^ 1)][static_cast<std::size_t>(index)];
+                    auto& nb = entityBaselines_[static_cast<std::size_t>(baselineSet ^ 1)]
+                                               [static_cast<std::size_t>(index)];
                     nb.classId = classId;
                     nb.props = slot.props;
                 }
             } else { // delta update (also for dormant entities that left the PVS without deletion)
                 if (!slot.active)
-                    return makeError("demo.entity_unknown", "update for an unknown entity", std::to_string(index));
+                    return makeError("demo.entity_unknown", "update for an unknown entity",
+                                     std::to_string(index));
                 const auto* flat = flatProps(slot.classId);
                 changedScratch_.clear();
                 GMDR_TRY(readPropList(eb, *flat, slot.props, changedScratch_));
                 ++stats_.entityUpdates;
-                sink_.onEntityUpdate(tick, EntityRef{index, slot.classId, slot.serial, slot.life}, changedScratch_,
-                                     slot.props);
+                sink_.onEntityUpdate(tick, EntityRef{index, slot.classId, slot.serial, slot.life},
+                                     changedScratch_, slot.props);
             }
         } else {
             const bool deleted = eb.bit();
@@ -391,7 +466,8 @@ Result<void> DemoParser::parsePacketEntities(BitReader& r, Tick tick) {
             EntitySlot& slot = entities_[idx];
             if (slot.active) {
                 ++stats_.entityLeaves;
-                sink_.onEntityLeave(tick, EntityRef{static_cast<int>(idx), slot.classId, slot.serial, slot.life}, true);
+                sink_.onEntityLeave(
+                    tick, EntityRef{static_cast<int>(idx), slot.classId, slot.serial, slot.life}, true);
             }
             slot.active = false;
             slot.inPvs = false;
@@ -427,7 +503,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
     case NetMsg::StringCmd: {
         const auto start = r.position();
         std::string s = r.string(limits::kMaxStringBytes);
-        emitEvent(tick, EventKind::StringCmd, std::move(s), {}, bitAt(start), static_cast<std::uint32_t>(r.position() - start));
+        emitEvent(tick, EventKind::StringCmd, std::move(s), {}, bitAt(start),
+                  static_cast<std::uint32_t>(r.position() - start));
         return {};
     }
     case NetMsg::SetConVar: {
@@ -445,7 +522,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
     case NetMsg::Print: {
         const auto start = r.position();
         std::string s = r.string(limits::kMaxStringBytes);
-        emitEvent(tick, EventKind::Print, "print", std::move(s), bitAt(start), static_cast<std::uint32_t>(r.position() - start));
+        emitEvent(tick, EventKind::Print, "print", std::move(s), bitAt(start),
+                  static_cast<std::uint32_t>(r.position() - start));
         return {};
     }
     case NetMsg::ServerInfo:
@@ -517,7 +595,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
         const float b = r.ubit(16) * (360.0f / 65536.0f);
         const float c = r.ubit(16) * (360.0f / 65536.0f);
         emitEvent(tick, EventKind::FixAngle, relative ? "fix_angle_relative" : "fix_angle",
-                  std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c), bitAt(r.position()), 0);
+                  std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c), bitAt(r.position()),
+                  0);
         return {};
     }
     case NetMsg::CrosshairAngle:
@@ -543,8 +622,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
         }
         r.bit(); // low priority
         emitEvent(tick, EventKind::Decal, "decal",
-                  "index=" + std::to_string(decal) + " pos=" + std::to_string(pos.x) + "," + std::to_string(pos.y) +
-                      "," + std::to_string(pos.z),
+                  "index=" + std::to_string(decal) + " pos=" + std::to_string(pos.x) + "," +
+                      std::to_string(pos.y) + "," + std::to_string(pos.z),
                   bitAt(start), static_cast<std::uint32_t>(r.position() - start), ent);
         return {};
     }
@@ -562,7 +641,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
         const std::uint32_t len = r.ubit(variant_->entityMessageLengthBits);
         const auto start = r.position();
         r.skip(len);
-        emitEvent(tick, EventKind::EntityMessage, "entity_message", "class=" + std::to_string(cls), bitAt(start), len, ent);
+        emitEvent(tick, EventKind::EntityMessage, "entity_message", "class=" + std::to_string(cls),
+                  bitAt(start), len, ent);
         return {};
     }
     case NetMsg::GameEvent: {
@@ -584,8 +664,8 @@ Result<void> DemoParser::parseMessage(int type, BitReader& r, const CommandRecor
         const std::size_t len = variant_->tempEntitiesVarintLength ? r.varint32() : r.ubit(17);
         const auto start = r.position();
         r.skip(len);
-        emitEvent(tick, EventKind::TempEntities, "temp_entities", "count=" + std::to_string(count), bitAt(start),
-                  static_cast<std::uint32_t>(len));
+        emitEvent(tick, EventKind::TempEntities, "temp_entities", "count=" + std::to_string(count),
+                  bitAt(start), static_cast<std::uint32_t>(len));
         return {};
     }
     case NetMsg::Prefetch:
