@@ -1,0 +1,39 @@
+{
+  "bytes": 182548130,
+  "classes": 250,
+  "decodeErrors": {},
+  "demoBlake3": "31caf3ba3165fcdb98390cb42b3ec95ced6482d67bdc3005830b6da6a2fe9440",
+  "entityEnters": 15530,
+  "entityLeaves": 2749,
+  "entityUpdates": 7573999,
+  "events": 105317,
+  "eventsByKind": {
+    "console": 12225,
+    "decal": 11,
+    "entity_message": 66,
+    "game_event": 32,
+    "net_message": 175,
+    "print": 1,
+    "set_view": 1,
+    "sound": 11449,
+    "temp_entities": 812,
+    "user_message": 16917,
+    "voice": 63628
+  },
+  "lastTick": 216672,
+  "newLives": 355,
+  "packets": 215740,
+  "parsed": true,
+  "stateHashes": {
+    "108336": "e6be1a76938b3f2f",
+    "130003": "6295feaddf2b7be7",
+    "151670": "b0c236751654e8f0",
+    "173337": "817cc9ddda46c555",
+    "195004": "66080cf02193d41e",
+    "21667": "1ab09c156e596973",
+    "216672": "ed91006f43f680b9",
+    "43334": "a366fd618866c8fe",
+    "65001": "b32148dccf634513",
+    "86668": "92a6cd3e1f0ddca8"
+  }
+}

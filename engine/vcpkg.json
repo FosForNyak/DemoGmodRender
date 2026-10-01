@@ -1,0 +1,12 @@
+{
+  "name": "demogmodrender-engine",
+  "version": "0.1.0",
+  "description": "C++20 engine for rendering Garry's Mod demos: core, demo parser, assets, API",
+  "dependencies": [
+    "blake3",
+    "doctest",
+    "nlohmann-json",
+    "xxhash",
+    "zstd"
+  ]
+}

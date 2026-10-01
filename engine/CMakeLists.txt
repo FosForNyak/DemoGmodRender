@@ -1,0 +1,68 @@
+cmake_minimum_required(VERSION 3.25)
+project(DemoGmodRenderEngine VERSION 0.1.0 LANGUAGES C CXX)
+
+option(GMDR_BUILD_TESTS "Build unit tests" ON)
+option(GMDR_BUILD_TOOLS "Build gmdr-import and gmdr-cli" ON)
+option(GMDR_BUILD_FUZZ "Build libFuzzer targets (Clang only)" OFF)
+option(GMDR_SANITIZE "Build with ASan + UBSan (GCC/Clang)" OFF)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "DemoGmodRender is x64 only")
+endif()
+
+find_package(zstd CONFIG REQUIRED)
+find_package(BLAKE3 CONFIG REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+
+add_library(gmdr_warnings INTERFACE)
+if(MSVC)
+    target_compile_options(gmdr_warnings INTERFACE /W4 /WX /permissive- /utf-8 /Zc:__cplusplus /EHsc)
+    target_compile_definitions(gmdr_warnings INTERFACE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+else()
+    target_compile_options(gmdr_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
+    if(GMDR_SANITIZE)
+        target_compile_options(gmdr_warnings INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+        target_link_options(gmdr_warnings INTERFACE -fsanitize=address,undefined)
+    endif()
+endif()
+
+if(TARGET zstd::libzstd_static)
+    set(GMDR_ZSTD zstd::libzstd_static)
+else()
+    set(GMDR_ZSTD zstd::libzstd)
+endif()
+
+# libFuzzer coverage for every library when building the fuzzers with Clang.
+if(GMDR_BUILD_FUZZ AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
+add_subdirectory(core)
+foreach(module demo assets api)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${module}/CMakeLists.txt)
+        add_subdirectory(${module})
+    endif()
+endforeach()
+
+if(GMDR_BUILD_TOOLS)
+    foreach(tool gmdr-import gmdr-cli)
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/${tool}/CMakeLists.txt)
+            add_subdirectory(tools/${tool})
+        endif()
+    endforeach()
+endif()
+
+if(GMDR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+if(GMDR_BUILD_FUZZ OR GMDR_BUILD_TESTS)
+    add_subdirectory(fuzz)
+endif()
