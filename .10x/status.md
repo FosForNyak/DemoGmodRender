@@ -1,6 +1,6 @@
 # Status
 
-**Phase:** 4 — Implementation (T1–T24 done except AppContainer, which waits for the user's decision); phases 0–3 complete
+**Phase:** 6 done — sub-project complete pending CI and the owner's AppContainer decision
 **Updated:** 2026-09-30
 **Feature slug:** `app-shell-demo-import`
 
@@ -43,8 +43,12 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 
 - Gate (spec §13) checks: `gmdr-cli gate` — position continuity passes on 25_07; 29_08 has one reviewed teleport. Found and fixed: seat/vehicle relative origins (`moveparent`), userinfo from the `dem_stringtables` snapshot, and a CI fuzz finding in the SendTables check.
 
+- Phase 5: `reviews/qa-app-shell-demo-import.md` (gate table: all items pass, CI re-run pending), `reviews/security-app-shell-demo-import.md` (no open high; S1 AppContainer waits for the owner). Corpus summaries in `engine/tests/corpus/`.
+- Phase 6: `decisions/devops/`, `decisions/sre/`.
+
 ## Next
-- Phase 5: QA + security review (`reviews/`) → Phase 6: devops/sre docs.
+- Owner decisions: AppContainer for the importer (S1); merging PR #1 into `beta`.
+- Next sub-project: rendering (3D viewport, models/materials from the VFS).
 - AppContainer for the importer: ask the user (touches Windows security configuration).
 
 ## Inputs
