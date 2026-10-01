@@ -61,13 +61,20 @@ Error overflowError(const char* what) {
 
 DemoParser::DemoParser(std::span<const std::uint8_t> file, DemoSink& sink, ParseOptions options)
     : file_(file), sink_(sink), options_(std::move(options)),
-      variant_(options_.variant ? options_.variant : &knownProtocolVariants()[0]) {
-    entities_.resize(limits::kMaxEntities);
-    entityBaselines_[0].resize(limits::kMaxEntities);
-    entityBaselines_[1].resize(limits::kMaxEntities);
-}
+      variant_(options_.variant ? options_.variant : &knownProtocolVariants()[0]) {}
 
 DemoParser::~DemoParser() = default;
+
+// The slot tables grow to the highest index seen: demos use a few hundred of the 8192 edicts, and building
+// all of them up front cost more than parsing a short input (the fuzzer ran at ~70 inputs a second).
+DemoParser::EntitySlot& DemoParser::slotAt(std::size_t index) {
+    if (index >= entities_.size()) {
+        entities_.resize(index + 1);
+        entityBaselines_[0].resize(index + 1);
+        entityBaselines_[1].resize(index + 1);
+    }
+    return entities_[index];
+}
 
 const std::vector<FlatProp>* DemoParser::flatProps(int classId) {
     if (!dataTables_ || classId < 0 || static_cast<std::size_t>(classId) >= dataTables_->classes.size())
@@ -391,9 +398,9 @@ Result<void> DemoParser::parsePacketEntities(BitReader& r, Tick tick) {
         index += 1 + static_cast<int>(eb.ubitVar());
         if (eb.overflowed())
             return overflowError("entity header");
-        if (index < 0 || static_cast<std::size_t>(index) >= entities_.size())
+        if (index < 0 || static_cast<std::size_t>(index) >= limits::kMaxEntities)
             return makeError("demo.entity_index", "entity index out of range", std::to_string(index));
-        EntitySlot& slot = entities_[static_cast<std::size_t>(index)];
+        EntitySlot& slot = slotAt(static_cast<std::size_t>(index));
 
         if (!eb.bit()) {
             if (eb.bit()) { // enter PVS
@@ -461,9 +468,9 @@ Result<void> DemoParser::parsePacketEntities(BitReader& r, Tick tick) {
     if (isDelta) {
         while (eb.bit()) {
             const auto idx = static_cast<std::size_t>(eb.ubit(edictBits));
-            if (idx >= entities_.size())
+            if (idx >= limits::kMaxEntities)
                 return makeError("demo.entity_index", "deleted entity index out of range");
-            EntitySlot& slot = entities_[idx];
+            EntitySlot& slot = slotAt(idx);
             if (slot.active) {
                 ++stats_.entityLeaves;
                 sink_.onEntityLeave(

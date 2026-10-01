@@ -99,6 +99,7 @@ private:
     void emitEvent(Tick tick, EventKind kind, std::string name, std::string summary, std::uint64_t bitOffset,
                    std::uint32_t bitLength, std::int32_t entity = -1);
     Result<const std::vector<PropValue>*> instanceBaseline(int classId);
+    EntitySlot& slotAt(std::size_t index);
     void onTableChanged(int tableId, std::span<const int> changed);
 
     std::span<const std::uint8_t> file_;

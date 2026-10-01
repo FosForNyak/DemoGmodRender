@@ -15,8 +15,9 @@ ctest --preset "$preset"
 if [ "$fuzz_seconds" -gt 0 ]; then
   for f in build/"$preset"/fuzz/fuzz_*; do
     [ -x "$f" ] || continue
-    echo "== $(basename "$f") for ${fuzz_seconds}s"
-    mkdir -p "/tmp/corpus/$(basename "$f")"
-    "$f" -max_total_time="$fuzz_seconds" -rss_limit_mb=2048 -timeout=10 "/tmp/corpus/$(basename "$f")"
+    name=$(basename "$f")
+    echo "== $name for ${fuzz_seconds}s"
+    "build/$preset/fuzz/seeds_${name#fuzz_}" --write-seeds="/tmp/corpus/$name"
+    "$f" -max_total_time="$fuzz_seconds" -rss_limit_mb=2048 -timeout=10 "/tmp/corpus/$name"
   done
 fi

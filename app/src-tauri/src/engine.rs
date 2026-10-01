@@ -77,3 +77,51 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Engine;
+    use serde_json::Value;
+    use std::time::Duration;
+
+    fn parse(s: &str) -> Value {
+        serde_json::from_str(s).expect("engine returns JSON")
+    }
+
+    #[test]
+    fn calls_errors_events_and_threads() {
+        // Own folders, so the test never touches the user's settings or cache.
+        let dir = std::env::temp_dir().join(format!("gmdr-rust-ffi-{}", std::process::id()));
+        std::env::set_var("GMDR_CACHE_DIR", dir.join("cache"));
+        std::env::set_var("GMDR_CONFIG_DIR", dir.join("config"));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let engine = Engine::new(tx).expect("engine starts");
+
+        let info = parse(&engine.call(r#"{"cmd":"app.info"}"#));
+        assert_eq!(info["ok"], true);
+        assert_eq!(info["result"]["formatVersion"], 1);
+
+        assert_eq!(parse(&engine.call("not json"))["error"]["code"], "api.bad_request");
+        assert_eq!(parse(&engine.call("{\"cmd\":\"app.info\u{0}\"}"))["error"]["code"], "api.bad_request");
+        assert_eq!(parse(&engine.call(r#"{"cmd":"nope"}"#))["error"]["code"], "api.unknown_command");
+
+        // Events cross the C callback into the channel.
+        let set = parse(&engine.call(r#"{"cmd":"settings.set","args":{"key":"ui.theme","value":"light"}}"#));
+        assert_eq!(set["ok"], true);
+        let event = parse(&rx.recv_timeout(Duration::from_secs(5)).expect("an event"));
+        assert_eq!(event["type"], "settings.changed");
+
+        // The engine is shared across threads (Tauri runs commands on a pool).
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let e = engine.clone();
+                std::thread::spawn(move || parse(&e.call(r#"{"cmd":"settings.get"}"#))["ok"] == true)
+            })
+            .collect();
+        assert!(handles.into_iter().all(|h| h.join().unwrap()));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

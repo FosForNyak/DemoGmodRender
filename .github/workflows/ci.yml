@@ -6,6 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Third-party actions are pinned to commit SHAs (the tag they had when pinned is in the comment).
 permissions:
   contents: read
 
@@ -21,8 +22,8 @@ jobs:
     name: Engine · Windows MSVC
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
       - name: vcpkg
@@ -32,7 +33,7 @@ jobs:
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" >> $env:GITHUB_ENV
           New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .vcpkg-cache
           key: vcpkg-windows-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
@@ -56,7 +57,7 @@ jobs:
       matrix:
         preset: [linux-gcc, linux-clang-asan]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Toolchain
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build clang llvm libclang-rt-18-dev
       - name: vcpkg
@@ -65,7 +66,7 @@ jobs:
           "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           mkdir -p .vcpkg-cache
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .vcpkg-cache
           key: vcpkg-linux-${{ matrix.preset }}-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
@@ -85,14 +86,14 @@ jobs:
           for f in build/linux-clang-asan/fuzz/fuzz_*; do
             [ -x "$f" ] || continue
             name=$(basename "$f")
-            mkdir -p "corpus/$name"
             echo "::group::$name"
+            "build/linux-clang-asan/fuzz/seeds_${name#fuzz_}" --write-seeds="corpus/$name"
             "$f" -max_total_time=60 -rss_limit_mb=2048 -timeout=10 "corpus/$name"
             echo "::endgroup::"
           done
       - name: Keep fuzz findings
         if: failure() && matrix.preset == 'linux-clang-asan'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-findings
           path: |
@@ -106,14 +107,14 @@ jobs:
     runs-on: windows-2025
     needs: engine-windows
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: app/src-tauri
       - name: vcpkg
@@ -123,7 +124,7 @@ jobs:
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" >> $env:GITHUB_ENV
           New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .vcpkg-cache
           key: vcpkg-windows-release-${{ hashFiles('engine/vcpkg.json', 'engine/vcpkg-configuration.json') }}
@@ -139,7 +140,12 @@ jobs:
       - name: Build app and installer (not published)
         working-directory: app
         run: npx tauri build --bundles nsis
-      - uses: actions/upload-artifact@v4
+      - name: Rust FFI tests
+        working-directory: app/src-tauri
+        env:
+          GMDR_SKIP_ENGINE_BUILD: '1' # built by the step above
+        run: cargo test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DemoGmodRender-windows
           path: |
