@@ -1,0 +1,43 @@
+{
+  "bytes": 108944585,
+  "classes": 250,
+  "decodeErrors": {
+    "demo.message_truncated": 1
+  },
+  "demoBlake3": "7c9855d0c21c93e67ca501ba6a662310729c762c0c75c7a56408dac83ea272fd",
+  "entityEnters": 9145,
+  "entityLeaves": 4795,
+  "entityUpdates": 6280553,
+  "events": 139554,
+  "eventsByKind": {
+    "console": 390,
+    "decal": 4,
+    "decode_error": 1,
+    "entity_message": 308,
+    "fix_angle": 1,
+    "game_event": 429,
+    "net_message": 893,
+    "print": 1,
+    "set_view": 1,
+    "sound": 33719,
+    "temp_entities": 2594,
+    "user_message": 30903,
+    "voice": 70310
+  },
+  "lastTick": 148959,
+  "newLives": 555,
+  "packets": 148767,
+  "parsed": true,
+  "stateHashes": {
+    "104271": "d46f2ed4e6eaefc5",
+    "119167": "1bc5439f34b31ce4",
+    "134063": "09c14bfcc2dc31e8",
+    "14895": "09fd265ae9bf830d",
+    "148959": "c99cb06ddce00b1b",
+    "29791": "304788f47560715a",
+    "44687": "4b5ce99982ef6aac",
+    "59583": "57c7aca036c7eeb9",
+    "74479": "46e47c05cb63c48d",
+    "89375": "134945bc212bb67c"
+  }
+}
