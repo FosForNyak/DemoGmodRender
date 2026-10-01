@@ -30,6 +30,8 @@
 - **Timeline**: `Scrubber` over the whole demo (`cached` = imported range) + `Timeline` for a 10 s window around the playhead (events of that window as keys per kind, the selected entity's PVS intervals as clips).
 - **Settings** is a `ToolWindow` over the main window (not a separate OS window yet); changes apply immediately.
 - A cached demo starts the content check right after opening (no `import.done` event).
+- **Inspector at an enter tick:** the reader keeps `entered` (entities whose Enter record is at that exact tick) next to `changed`; `state.entity` returns it and the Inspector shows «З’явилася» instead of marking every prop as changed. Groups are controlled: those with changes open by themselves (Anvil's `defaultOpen` only applies at mount), and a group the user opened or closed keeps that state for the entity.
+- **Menus by keyboard:** Anvil's title-bar menus have no Alt handling of their own; `useMenuKeys` focuses the first menu on Alt (pressed and released alone) or F10 and returns focus on the second press.
 
 ## API v1 as implemented
 Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error": {code, message, details?}}`. Events `{"type", ...}`: `import.indexed`, `import.progress`, `import.done`, `import.failed`, `settings.changed`, `log`.
@@ -59,6 +61,7 @@ Request `{"cmd", "args"}` → `{"ok": true, "result"}` or `{"ok": false, "error"
 - **Seats and vehicles:** ~480 "jumps" of ~4 400 units were players sitting down: their `m_vecOrigin` becomes relative to `moveparent` (exactly 0,0,0). SDK 2013 sends the parent as `moveparent`, not `m_hMoveParent`; the API now resolves the parent EHANDLE and draws a seated player at the seat (other attached objects are skipped).
 - One remaining jump (29_08, player #5, tick 184 668, 1 532 units): reviewed by hand — stood still ~220 s, then appeared elsewhere falling (`FL_ONGROUND` cleared, vz −12), alive throughout: an in-game teleport, not a decode error.
 - **userinfo:** players connected before recording started have empty userinfo in signon; their data is only in the `dem_stringtables` snapshot. The parser now applies the snapshot's complete tables (as the Source client does); the census then matches (18 vs 18 and 13 vs 12 + 1 outside PVS at the start). Entity decoding is unchanged (same counts, `verify` 0 mismatches).
+- **Fuzzing throughput:** libFuzzer started every target from an empty corpus (the seeds in `fuzzSeeds()` were only used by the standalone driver), and `fuzz_demo` ran at ~70 inputs/s because each `DemoParser` built 3 × 8 192 entity slots up front (two parsers per input, Debug + ASan). `seeds_<target> --write-seeds=<dir>` now writes the seeds before each run, and the slot tables grow to the highest index seen (same 8 192 limit; corpus summaries unchanged).
 - **CI fuzzing (first run):** `fuzz_tables` found an Array-typed prop with the Exclude flag indexing `props[-1]` in the element check; fixed with a regression test (fails on the old code with "vector subscript out of range").
 
 ## Content check rules

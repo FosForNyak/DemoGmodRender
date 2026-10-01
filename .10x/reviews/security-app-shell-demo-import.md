@@ -24,7 +24,7 @@
 | S5 | Low | VPK archive name formatted into an 8-byte buffer (truncation with ≥ 4-digit indices) | **Fixed** |
 | S6 | Info | ASan builds skip `RLIMIT_AS` for the child on Linux (ASan cannot run under it) | Accepted: CI-only builds; release builds keep the cap |
 | S7 | Info | WebView2 honours `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (used by the smoke test to open a debugging port): any process of the same user could set it | Accepted: requires local code execution as the user already |
-| S8 | Low | CI uses third-party actions by tag (`@v4`, `@v1`, `@v2`) | Recommend pinning to commit SHAs before the repository becomes public |
+| S8 | Low | CI used third-party actions by tag (`@v4`, `@v1`, `@v2`) | **Fixed**: every `uses:` is pinned to a commit SHA, the tag kept as a comment |
 | S9 | Info | Dev bridge (`gmdr-cli serve` + `dev-bridge.mjs`) exposes the engine over HTTP | Dev only, bound to 127.0.0.1, not part of any build |
 
 ## Privacy
@@ -36,4 +36,4 @@
 vcpkg baseline pinned; npm dependencies pinned exactly with a lockfile; `Cargo.lock` committed; Anvil vendored with its licences (IBM Plex OFL, Fluent icons MIT).
 
 ## Verdict
-No open high- or medium-severity issue. Remaining: S8 (pin CI actions to SHAs before going public).
+No open issue above Info; S6, S7 and S9 are accepted as described.

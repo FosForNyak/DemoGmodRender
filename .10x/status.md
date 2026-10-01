@@ -43,14 +43,13 @@ All format facts are in spec §4 (UBitVar low-bit encoding, 5-bit log2 max, 19-b
 
 - Gate (spec §13) checks: `gmdr-cli gate` — position continuity passes on 25_07; 29_08 has one reviewed teleport. Found and fixed: seat/vehicle relative origins (`moveparent`), userinfo from the `dem_stringtables` snapshot, and a CI fuzz finding in the SendTables check.
 
-- Phase 5: `reviews/qa-app-shell-demo-import.md` (gate table: all items pass, CI re-run pending), `reviews/security-app-shell-demo-import.md` (no open high; S1 AppContainer waits for the owner). Corpus summaries in `engine/tests/corpus/`.
+- Phase 5: `reviews/qa-app-shell-demo-import.md` (gate table: all items pass; CI green), `reviews/security-app-shell-demo-import.md` (S1 AppContainer and S8 action pins fixed; nothing open above Info). Review follow-ups done: title-bar menus by keyboard, `cargo test` for the FFI wrapper, Inspector «З’явилася» instead of all-changed at an enter tick (groups with changes open by themselves), libFuzzer seeded with each target's seeds and `fuzz_demo` no longer building 8 192 entity slots per input. Corpus summaries in `engine/tests/corpus/`.
 - Phase 6: `decisions/devops/`, `decisions/sre/`.
 
 ## Next
 - AppContainer for the importer: done (owner approved 2026-10-01); verified by tests, a real import and the release window.
 - Owner decision: merging PR #1 into `beta`.
 - Next sub-project: rendering (3D viewport, models/materials from the VFS).
-- AppContainer for the importer: ask the user (touches Windows security configuration).
 
 ## Inputs
 - Engine architecture: `C:\Users\ilomi\Downloads\Архітектура рушія.md` (also Claude Doc "Рушій рендеру демок Garry's Mod: архітектура", tabs: Архітектура, Слабкі місця, NW / NW2, Стрес-тест, Оптимізація)
